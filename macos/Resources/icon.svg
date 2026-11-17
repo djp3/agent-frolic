@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The agent-frolic app icon. A frolic is an Amish barn raising: agent-farm's rooster stands in
+  front of a barn that is half raised (its right half finished, its left still bare frame),
+  with a weathervane on the ridge, on the dark rounded square agent-farm's icon also sits on.
+
+  The square is a little larger than Apple's template for a Mac icon (840 px of the 1024,
+  against 824) and its corners are plain arcs. macOS 26 and later cut every icon to their own
+  size and corner shape. Checked on macOS 27.2 (what the system draws for the built app,
+  beside one of its own icons): that trims a few pixels of the square's plain edge and nothing
+  of the picture, and the icon is not shrunk onto a grey backing tile. So it is left as drawn.
+
+  The rooster is rooster.png beside this file; everything else is drawn here. Where the
+  rooster came from, and the licenses, are in one place: credits/README.txt.
+
+  The build uses icon.png, which is this drawing at 1024 px. After a change, render it
+  again with scripts/render_icon.sh, the one place that says how.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0604f"/>
+      <stop offset="1" stop-color="#b82b24"/>
+    </linearGradient>
+    <linearGradient id="door" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b93027"/>
+      <stop offset="1" stop-color="#8e1f1b"/>
+    </linearGradient>
+    <linearGradient id="trim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dfe4ea"/>
+    </linearGradient>
+    <linearGradient id="roof" gradientUnits="userSpaceOnUse" x1="0" y1="60" x2="0" y2="275">
+      <stop offset="0" stop-color="#dfe6ee"/>
+      <stop offset="1" stop-color="#8d99a8"/>
+    </linearGradient>
+    <linearGradient id="roofunder" gradientUnits="userSpaceOnUse" x1="0" y1="60" x2="0" y2="285">
+      <stop offset="0" stop-color="#8794a3"/>
+      <stop offset="1" stop-color="#586474"/>
+    </linearGradient>
+    <linearGradient id="woodflat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eebb82"/>
+      <stop offset="0.55" stop-color="#d0935a"/>
+      <stop offset="1" stop-color="#a9662f"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/>
+      <stop offset=".6" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="drop" x="-30%" y="-30%" width="160%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10"/>
+      <feOffset dy="12" result="b"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope=".45"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- The barn's wall, whole: its outline is written here once. It is the wall's fill, and
+         it clips the boards and the shine drawn on the wall. -->
+    <path id="wallshape" d="M100 440 V252 L152 152 L256 86 L360 152 L412 252 V440 Z"/>
+    <clipPath id="wallclip">
+      <use href="#wallshape"/>
+    </clipPath>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c3cad3"/>
+      <stop offset="1" stop-color="#7c8794"/>
+    </linearGradient>
+    <clipPath id="builtright">
+      <path d="M452 40 H256 V250 H230 V470 H452 Z"/>
+    </clipPath>
+  </defs>
+  <rect x="92.16" y="92.16" width="839.68" height="839.68" rx="187.8" fill="#15171c"/>
+  <g transform="translate(176.13 176.13) scale(1.3120)">
+    <g transform="translate(36 70) scale(.94)">
+      <ellipse cx="256" cy="446" rx="186" ry="15" fill="#000" opacity=".45" filter="url(#soft)"/>
+      <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M108 436 V256 M256 436 V96 M404 436 V256 M100 436 H412 M100 256 H412 M152 156 H360 M404 316 L344 256 M256 316 L316 256 M108 316 L168 256 M256 316 L196 256 M100 256 L152 156 L256 90 L360 156 L412 256" stroke="#7a4a1f" stroke-width="22" transform="translate(0 5)"/>
+        <!-- Two paths with one stroke, and not one path: the wood's shading runs over each
+             path's own height, so the posts and the rafters are each shaded top to bottom. -->
+        <path d="M108 436 V256 M256 436 V96 M404 436 V256 M100 436 H412 M100 256 H412 M152 156 H360 M404 316 L344 256 M256 316 L316 256 M108 316 L168 256 M256 316 L196 256" stroke="url(#woodflat)" stroke-width="20"/>
+        <path d="M100 256 L152 156 L256 90 L360 156 L412 256" stroke="url(#woodflat)" stroke-width="20"/>
+      </g>
+      <g clip-path="url(#builtright)">
+        <use href="#wallshape" fill="url(#wall)" stroke="url(#wall)" stroke-width="10" stroke-linejoin="round"/>
+        <!-- the boards: a line every 26 across the wall -->
+        <path clip-path="url(#wallclip)" stroke="#7d1915" stroke-opacity=".22" stroke-width="3"
+              d="M126 80 V440 M152 80 V440 M178 80 V440 M204 80 V440 M230 80 V440 M256 80 V440 M282 80 V440 M308 80 V440 M334 80 V440 M360 80 V440 M386 80 V440"/>
+        <rect x="230" y="80" width="150" height="365" fill="url(#shine)" clip-path="url(#wallclip)"/>
+        <rect x="95" y="252" width="322" height="14" rx="3" fill="url(#trim)"/>
+        <rect x="401" y="252" width="16" height="193" rx="3" fill="url(#trim)"/>
+        <rect x="256" y="300" width="78" height="140" fill="url(#door)"/>
+        <g fill="none" stroke="url(#trim)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M261 305 L329 435 M329 305 L261 435"/>
+          <rect x="256" y="300" width="78" height="140"/>
+        </g>
+        <rect x="88" y="436" width="336" height="16" rx="6" fill="url(#stone)"/>
+      </g>
+      <path d="M220 90 L256 66 L366 140 L440 268" transform="translate(0 9)" fill="none" stroke="url(#roofunder)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M220 90 L256 66 L366 140 L440 268" fill="none" stroke="url(#roof)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="232" y="14" width="48" height="46" rx="4" fill="url(#trim)"/>
+      <g stroke="#8d99a8" stroke-width="4" stroke-linecap="round">
+        <path d="M241 27 H271 M241 37 H271 M241 47 H271"/>
+      </g>
+      <path d="M219 22 L256 -6 L293 22" transform="translate(0 5)" fill="none" stroke="#6b7786" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M219 22 L256 -6 L293 22" fill="none" stroke="#dfe6ee" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+      <g stroke="#c9d1db" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="#c9d1db">
+        <path d="M256 -8 V-66"/>
+        <path d="M232 -26 H280" stroke-width="5"/>
+        <circle cx="230" cy="-26" r="4"/>
+        <circle cx="282" cy="-26" r="4"/>
+        <path d="M190 -50 H320"/>
+        <path d="M184 -50 L210 -64 V-36 Z"/>
+        <path d="M320 -50 L342 -66 L332 -50 L342 -34 Z"/>
+        <circle cx="256" cy="-70" r="7"/>
+      </g>
+    </g>
+    <g filter="url(#drop)">
+      <image x="42" y="246" width="270" height="270" href="rooster.png"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,9 @@
+# Runtime dependencies, pinned exactly. Upgrade deliberately: bump here, then
+#   .venv/bin/pip-compile --generate-hashes --strip-extras --allow-unsafe \
+#       -o requirements.lock requirements.txt requirements-build.txt
+# so release builds move with it: scripts/release.sh builds the app from a new venv made from
+# requirements.lock with hash checking (scripts/locked_venv.sh), never from .venv.
+textual==8.2.8
+keyring==25.7.0         # the macOS Keychain, through the Security framework (keychain.py)
+ngrok==1.7.0            # the tunnel GitHub's webhooks arrive through, run inside the app (tunnel.py)
+truststore==0.10.5      # HTTPS certificates judged by macOS, not by a file in the Python it was built with

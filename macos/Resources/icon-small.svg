@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The agent-frolic app icon at its smallest sizes, 16 and 32 px: the barn alone, on the same
+  dark rounded square as icon.svg. At those sizes the whole scene (the half-raised barn, its
+  frame, the weathervane and the rooster) runs together into a smudge; one bold shape reads.
+  So this is the barn whole, without the frame, the cupola, the weathervane or the rooster.
+
+  All of it is drawn for agent-frolic (credits/README.txt lists it with the rest).
+
+  The build uses icon-small.png, which is this drawing at 1024 px. After a change, render
+  it again with scripts/render_icon.sh, the one place that says how.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0604f"/>
+      <stop offset="1" stop-color="#b82b24"/>
+    </linearGradient>
+  </defs>
+  <rect x="92.16" y="92.16" width="839.68" height="839.68" rx="187.8" fill="#15171c"/>
+  <g transform="translate(51.2 62) scale(1.8)">
+    <path d="M100 440 V252 L152 152 L256 86 L360 152 L412 252 V440 Z" fill="url(#wall)"/>
+    <rect x="196" y="300" width="120" height="140" fill="#8e1f1b"/>
+    <g fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="196" y="300" width="120" height="140"/>
+      <path d="M196 300 L316 440 M316 300 L196 440"/>
+    </g>
+    <rect x="100" y="244" width="312" height="18" fill="#ffffff"/>
+    <path d="M86 262 L146 146 L256 74 L366 146 L426 262" fill="none" stroke="#dfe6ee" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

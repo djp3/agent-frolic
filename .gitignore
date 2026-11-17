@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+
+# What the app writes next to the code when run from a checkout. repos.json holds repository
+# names, which for a private repository are private; none of these belong in a public repo.
+settings.json
+repos.json
+*.tmp
+logs/
+
+# packaging output (scripts/build_app.sh, scripts/release.sh)
+build/
+dist/
+macos/.build/
+macos/Resources/AppIcon.icns
+.sparkle-tools/
+
+# scratch work
+mockup/
+
+# worktrees Claude Code makes for a session; each is a checkout of this same repository
+.claude/worktrees/
