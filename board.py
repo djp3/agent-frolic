@@ -812,9 +812,11 @@ class Board(Screen):
 
     def over_list(self, event: events.MouseEvent) -> bool:
         """Whether the pointer is over the list or its scroll bar: the wheel scrolls the list
-        there and nowhere else, not over the cards, the needs-effort pane or the drawer."""
-        widget, row = event.widget, self.query_one("#maprow")
-        return widget is not None and (widget is row or row in widget.ancestors)
+        there and nowhere else, not over the cards, the needs-effort pane or the drawer.
+        Told by where on the screen the pointer is. Not by `event.widget`: Textual names the
+        widget under the pointer on a click only, and a turn of the wheel, as the terminal
+        reports it, names none."""
+        return self.query_one("#maprow").region.contains(event.screen_x, event.screen_y)
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if self.over_list(event):

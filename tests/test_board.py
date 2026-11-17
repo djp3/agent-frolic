@@ -23,7 +23,8 @@ from githubapi import Team
 from picture import Agent
 from standins import AUTHTOKEN, TOKEN, FakeBrowser, FakeGitHub, FakePulls, drive, screen, settle
 from test_pulls import node, review
-from textual.events import MouseScrollDown, MouseScrollUp
+from textual._xterm_parser import XTermParser
+from textual.events import MouseEvent, MouseScrollDown, MouseScrollUp
 from webhook import sign
 
 TIP, OLD = "a1b2c3d" + "0" * 33, "c3d4e5f" + "0" * 33
@@ -510,13 +511,14 @@ def bar(app) -> str:
 
 
 async def wheel(pilot, event, times=1, over="#map", offset=(60, 4)):
-    """Turn the wheel over a widget: the event goes to the widget under the pointer and
-    travels up from it, as a real one does (built with Textual's public constructor)."""
+    """Turn the wheel with the pointer over a widget, as the terminal reports it: the event
+    says where on the screen the pointer is and names no widget (Textual names one on a
+    click only), and it goes to the app, which finds what is under the pointer."""
     widget = pilot.app.screen.query_one(over)
-    x, y = offset
+    x, y = widget.region.x + offset[0], widget.region.y + offset[1]
     for _ in range(times):
-        widget.post_message(event(widget, x, y, 0, 1 if event is MouseScrollDown else -1, 0, False, False, False,
-                                  screen_x=widget.region.x + x, screen_y=widget.region.y + y))
+        pilot.app.post_message(event(None, x, y, 0, 1 if event is MouseScrollDown else -1, 0, False, False, False,
+                                     screen_x=x, screen_y=y))
         await pilot.pause()
 
 
@@ -677,6 +679,36 @@ async def test_scrolling_draws_the_list_again_and_leaves_the_rest_of_the_board(i
         assert drawn["map"] - drawn["drawer"] >= 5 and drawn["scroll_bar"] == drawn["map"]
         assert drawn["drawer"] == drawn["effort"] == drawn["strip"]
         assert deck.top > 0 and f"rows {deck.top + 1}–" in screen(app)         # and it did scroll
+
+
+@drive
+async def test_the_bytes_a_terminal_sends_for_a_turn_of_the_wheel_scroll_the_list(isolated):
+    """What the Mac app's terminal writes when two fingers move on the trackpad: an SGR
+    mouse report, button 65 for down and 64 for up, at the pointer's cell (counted from 1).
+    Textual makes of it an event that names no widget: the board has to tell from the
+    cell alone that the pointer is over the list."""
+    def turned(report):
+        found = [event for event in XTermParser().feed(report) if isinstance(event, MouseEvent)]
+        assert len(found) == 1 and found[0].widget is None
+        app.post_message(found[0])
+
+    a_long_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 34)) as pilot:
+        await settle(app, pilot)
+        deck, step = app.board, round(app.scroll_sensitivity_y)
+        box = deck.query_one("#map").region
+        x, y = box.x + 60 + 1, box.y + 4 + 1
+        turned(f"\x1b[<65;{x};{y}M")
+        await pilot.pause()
+        assert deck.top == step and deck.roam
+        turned(f"\x1b[<65;{x};{y}M")
+        turned(f"\x1b[<64;{x};{y}M")
+        await pilot.pause()
+        assert deck.top == step
+        turned(f"\x1b[<65;{x};2M")                                       # over the cards: not the list's
+        await pilot.pause()
+        assert deck.top == step
 
 
 @drive
