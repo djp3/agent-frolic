@@ -9,6 +9,10 @@ puts the open pull requests of the repositories you choose on one board, with wh
 get moving marked in yellow, so the work keeps moving and nothing waits on you without your
 knowing. (A frolic is an Amish barn raising: everyone turns up, and the barn goes up in a day.)
 
+It is designed to work with [agent-farm](https://github.com/djp3/agent-farm) and
+[agent-grange](https://github.com/djp3/agent-grange), which bring your team's agents onto the
+board: see [below](#made-to-work-with-agent-farm-and-agent-grange).
+
 **[Download for Mac](https://github.com/djp3/agent-frolic/releases/latest)** · macOS 27+ on
 Apple silicon · free and open source
 
@@ -198,13 +202,36 @@ The rule, checked top to bottom. The first line that fits decides.
 Someone whose pull request comes from a fork can neither merge nor ask for a review, so those
 two moves pass to the repository's maintainer.
 
-## Agents
+## Made to work with agent-farm and agent-grange
 
-agent-frolic is made for teams where coding agents do much of the work, alongside
-[agent-farm](https://github.com/djp3/agent-farm). The board has a place for them: beneath the
-person who runs each one, on the pull request it is working on, with a pull request an agent
-is at work on taken off your list. Nothing reports agents to it yet, so in this release the
-board shows people and teams.
+agent-frolic is one of three programs for teams where coding agents do much of the work.
+agent-farm and agent-frolic each work without the others. Together with agent-grange they are
+designed to show a whole team's agents on the team's pull requests:
+
+- **[agent-farm](https://github.com/djp3/agent-farm)** watches the agents on your Mac: which
+  are at work, which are idle, and which are waiting for you.
+- **[agent-grange](https://github.com/djp3/agent-grange)** carries that between Macs. Each
+  person runs one. Their agent-farm reports to it, and the granges of a team pass what they
+  know on to each other over a private network.
+- **agent-frolic** puts it on the pull requests: whose agents are on which one, beside who
+  each pull request waits on.
+
+```
+   your Mac                                       a teammate's Mac
+
+   agent-farm ──▶ agent-grange ◀──────────────▶ agent-grange ◀── agent-farm
+                       │                              │
+                       ▼                              ▼
+                  agent-frolic                   agent-frolic
+```
+
+On the board an agent sits beneath the person who runs it, on the pull request it is working
+on, and a pull request that an agent is at work on comes off your list: it is moving. An agent
+is tied to its pull request by its name, which carries the ticket and the pull request's
+number (`proj-86-pr-98` somewhere in it, in upper or lower case).
+
+That connection is not in this release. agent-frolic does not read from agent-grange yet, so
+today the board shows people and teams, from GitHub's records alone.
 
 ## Files and logs
 
