@@ -797,17 +797,22 @@ async def test_the_page_keys_and_end_reach_a_repository_with_nothing_open(isolat
 
 @drive
 async def test_the_last_pull_request_brings_what_follows_it_into_view(isolated):
+    """Two repositories with nothing open follow it here, so two lines. One line is kept
+    below whatever is selected anyway: the second shows only by the rule for the last one."""
     a_long_board()
+    RepoStore().add("djp3/still-one", admin=True)
+    FakePulls.open_["djp3/still-one"] = []
     app = main.Frolic()
     async with app.run_test(size=(150, 34)) as pilot:
         await settle(app, pilot)
         deck = app.board
+        assert [drawn.row.pull for drawn in deck.lines()[-2:]] == [None, None] and deck.where[2] == LONG + 1
         await pilot.press(*["down"] * (len(deck.keys()) - 1))
         await pilot.pause()
         assert deck.sel == deck.keys()[-1] and not deck.roam
         above = screen(app).split("needs effort")[0]
         assert f"#{deck.sel[1]} Second change" in above                           # the selected one shows,
-        assert "djp3/quiet-one  0 open" in above                                  # and so does the repository after it
+        assert "djp3/quiet-one  0 open" in above and "djp3/still-one  0 open" in above    # and so do both after it
         assert deck.where[1] == deck.where[2]
 
 
