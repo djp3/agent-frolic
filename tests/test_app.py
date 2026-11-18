@@ -1737,6 +1737,28 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
 
 
 @drive
+async def test_what_counts_as_covered_is_a_record_of_confirmed_hooks_not_the_words_about_them(isolated):
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        ours, theirs_ = app.store.get("djp3/agent-frolic"), app.store.get("Acme/ledger-api")
+        assert sorted(app.hooked) == ["djp3/agent-frolic"] and app.covered(ours) and not app.covered(theirs_)
+        app.hook_state["djp3/agent-frolic"] = "said some other way"       # the words may change:
+        assert app.covered(ours)                                          # they decide nothing
+        app.hook_done("Acme/ledger-api", 0, "webhook failed: it could not be registered")
+        assert not app.covered(theirs_)                                   # nor does a failure that ends alike
+        app.hook_done("djp3/agent-frolic", 0, "webhook failed: GitHub could not be reached")
+        assert not app.covered(ours) and app.period(ours) == 5 * 60       # a hook that failed is not coverage
+        app.hook_done("djp3/agent-frolic", 7, "webhook #7 registered", True)
+        assert app.covered(ours)
+        app.hook_gone("djp3/agent-frolic")
+        assert not app.covered(ours) and "djp3/agent-frolic" not in app.hooked
+
+
+@drive
 async def test_a_read_that_failed_is_tried_again_on_the_short_timer_webhook_or_not(isolated):
     """Silence from GitHub means nothing changed only if the last read of it worked."""
     three_repos()

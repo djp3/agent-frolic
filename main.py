@@ -349,7 +349,11 @@ class Frolic(App):
         self.closing = threading.Event()          # set as the app closes: workers stop at their next chance
         self.authtoken_mask = ""                  # what was last read of the ngrok authtoken: its mask,
                                                   # "stored", "missing" or "unreadable"; "" until then
-        self.hook_state: dict[str, str] = {}      # repository (lower case) -> what happened to its hook
+        self.hook_state: dict[str, str] = {}      # repository (lower case) -> what happened to its hook,
+                                                  # in words, for the setup to show
+        self.hooked: dict[str, float] = {}        # repository (lower case) -> when its webhook was confirmed:
+                                                  # GitHub sends deliveries about it from then. What decides
+                                                  # things is this record, never the words above
         self.hook_read_at: dict[str, float] = {}  # repository (lower case) -> when a delivery last had it read
         self.hook_read_due: dict[str, float] = {}  # repository (lower case) -> when its waiting read may start
         self.repo_note: dict[str, str] = {}       # repository (lower case) -> trouble seeing it
@@ -428,9 +432,8 @@ class Frolic(App):
     # ---- each repository's timer -----------------------------------------------------------
     def covered(self, repo: Repo) -> bool:
         """Whether GitHub tells the app when this repository changes: webhooks are on, the
-        tunnel is open, and the repository has the app's webhook."""
-        return (self.settings.webhooks and self.tunnel_state == "open" and bool(repo.hook_id)
-                and self.hook_state.get(repo.name.lower(), "").endswith("registered"))
+        tunnel is open, and the repository's webhook has been confirmed (hook_done)."""
+        return self.settings.webhooks and self.tunnel_state == "open" and repo.name.lower() in self.hooked
 
     def period(self, repo: Repo) -> float:
         """How long a repository goes between two reads on its timer, in seconds. The poll's
@@ -766,7 +769,7 @@ class Frolic(App):
         """With the token gone, what it read goes too, and the tunnel closes: nothing on
         screen is left to go stale, and no delivery arrives that could not be acted on. The
         webhooks setting stays, so a new token opens the tunnel again."""
-        for held in (self.pulls, self.pull_trouble, self.flashes, self.hook_state):
+        for held in (self.pulls, self.pull_trouble, self.flashes, self.hook_state, self.hooked):
             held.clear()
         self.forget_teams()
         self.stale.clear()
@@ -832,7 +835,8 @@ class Frolic(App):
         old, new = asked.lower(), name.lower()
         if not asked or old == new:
             return repo, False
-        for held in (self.pulls, self.pull_trouble, self.hook_state, self.repo_note, self.read_at, self.hook_at):
+        for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
+                     self.hook_at):
             held.pop(old, None)
         self.say(f"{asked} is now {name} on GitHub", INK)
         return repo, True
@@ -907,6 +911,7 @@ class Frolic(App):
                 return
             self.store.remove(repo.name)
             self.hook_state.pop(repo.name.lower(), None)
+            self.hooked.pop(repo.name.lower(), None)
             self.pulls.pop(repo.name.lower(), None)
             self.pull_trouble.pop(repo.name.lower(), None)
             self.say(f"removed {repo.name}", INK)
@@ -1125,14 +1130,21 @@ class Frolic(App):
             except GitHubError as e:
                 self.later(self.hook_done, name, repo.hook_id, f"webhook failed: {e}")
             else:
-                self.later(self.hook_done, name, hook.id, f"webhook #{hook.id} registered")
+                self.later(self.hook_done, name, hook.id, f"webhook #{hook.id} registered", True)
 
-    def hook_done(self, name: str, hook_id: int, note: str) -> None:
+    def hook_done(self, name: str, hook_id: int, note: str, confirmed: bool = False) -> None:
+        """What became of a repository's webhook: `note` says it in words, for the setup, and
+        `confirmed` says whether GitHub now has the hook pointing at the tunnel. Only that
+        makes the repository one GitHub sends deliveries about (covered)."""
         if not self.settings.webhooks:                       # turned off while this one was being made
             if hook_id:
                 self.delete_hooks([(name, hook_id)])
             return
         self.hook_state[name.lower()] = note
+        if confirmed:
+            self.hooked[name.lower()] = time.time()
+        else:
+            self.hooked.pop(name.lower(), None)
         if hook_id:
             self.store.set_hook(name, hook_id)
         self.say(f"{name}: {note}")
@@ -1156,6 +1168,7 @@ class Frolic(App):
     def hook_gone(self, name: str) -> None:
         self.store.set_hook(name, 0)
         self.hook_state.pop(name.lower(), None)
+        self.hooked.pop(name.lower(), None)
         self.say(f"{name}: webhook deleted on GitHub")
         self.draw()
 
