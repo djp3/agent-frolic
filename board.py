@@ -36,7 +36,8 @@ Top to bottom:
     the user just did (o is opening a page) takes its line for a few seconds, then gives
     it back.
 
-Keys: up/down pick a pull request, o (or O) opens its page on GitHub in the browser, page
+Keys: up/down pick a pull request, and so does a click on one, on any of its lines in the
+list or on its line where it needs effort; o (or O) opens its page on GitHub in the browser, page
 up/down and home/end scroll the list (as the wheel does), n the next thing needing effort,
 tab / shift+tab step the focus (everyone, a human with their agents, the human alone, each
 agent; not f, which on the setup screen asks to forget the token),
@@ -363,6 +364,8 @@ class Board(Screen):
         self.grab: tuple[int, int] | None = None  # the scroll bar is held: (the row it was taken at, top then)
         self.page = 1                             # lines of the list its box holds
         self.where = (0, 0, 0)                    # (first line shown, last line shown, lines in all)
+        self.effort_rows: list[Key] = []          # the pull request on each line of what needs effort,
+                                                  # as last drawn, top to bottom: a click finds it there
         self.unseen: tuple[list[str], list[str]] = ([], [])
         self.menu_open = False
         self.menu_at = 0
@@ -951,12 +954,14 @@ class Board(Screen):
             canvas.put(width - len(key_text), 0, "●", WAITING)
             canvas.put(width - len(key_text) + 2, 0, "yours to fix", MUTED)
             canvas.put(width - 23, 0, "○ waits on someone else", MUTED)
+        self.effort_rows = []
         if not self.efforts:
             canvas.put(0, 1, "Nothing waits on anyone." if self.pic.all() else "Nothing is open.", MUTED)
             return canvas.text()
 
         room = height - 1
         shown = room if len(self.efforts) <= room else room - 1
+        self.effort_rows = [key_of(e.pull) for e in self.efforts[:shown]]
         chosen = self.pic.find(self.sel)
         cause = None
         if chosen is not None:
@@ -1159,13 +1164,39 @@ class Board(Screen):
         at = stops.index(self.sel) if self.sel in stops else -1
         self.pick(stops[(at + 1) % len(stops)])
 
-    def pick(self, key: Key) -> None:
+    def pick(self, key: Key, stay: bool = False) -> None:
         """The user picks a pull request: it is selected, and a list scrolled by hand follows
         the selection again. Every way of picking one goes through here; the board's own
-        change of selection, when the selected one is gone, is not a pick (keep_in_bounds)."""
+        change of selection, when the selected one is gone, is not a pick (keep_in_bounds).
+
+        `stay` is for one picked where it is drawn, with a click on it in the list: it is in
+        view already, and the list is left as it is, as when it is scrolled by hand, so
+        that nothing moves under the pointer."""
         self.sel = key
-        self.roam = False
+        self.roam = stay
         self.draw()
+
+    def on_click(self, event: events.Click) -> None:
+        """A click with the main button on a pull request picks it: on any of its lines in
+        the list, or on its line where it needs effort. Which one is told by where on the
+        screen the pointer is, as for the wheel (over_list)."""
+        if self.menu_open or event.button != 1:
+            return
+        x, y = event.screen_x, event.screen_y
+        box = self.query_one("#map").region
+        if box.contains(x, y):
+            lines = self.lines()
+            at = self.top + y - box.y
+            pull = lines[at].row.pull if 0 <= at < len(lines) else None
+            if pull is not None:                               # not on a rule, a note or the space below
+                self.pick(key_of(pull), stay=True)
+                event.stop()
+            return
+        pane = self.query_one("#effort").content_region
+        at = y - pane.y - 1                                    # its first line is the heading
+        if pane.contains(x, y) and 0 <= at < len(self.effort_rows):
+            self.pick(self.effort_rows[at])                    # the list goes to it, as it does for n
+            event.stop()
 
     def action_open_pull(self) -> None:
         """Show the selected pull request's page on GitHub in the browser."""
