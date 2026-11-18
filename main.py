@@ -321,6 +321,11 @@ class Frolic(App):
         self.token_kept: tuple = ("none", "", None, "")   # how things stood before a token was pasted
         self.token_run = 0                        # bumped by every check and by forgetting: an answer
                                                   # whose number is no longer this one is dropped
+        self.token_used = 0                       # the token run whose check accepted the token in use:
+                                                  # each read of the pull requests is made with that token,
+                                                  # and one made with another is not used (pulls_known)
+        self.pulls_for = ""                       # the login what is read of the pull requests is for,
+                                                  # lower case: another account's sign-in forgets it
         self.token_lock = threading.Lock()        # storing a checked token and forgetting take turns
         self.identity: Identity | None = None
         # the teams the viewer is on: a review asked of one of them is theirs to give. The list
@@ -662,6 +667,7 @@ class Frolic(App):
         self.token_state, self.token_mask, self.identity, self.token_note = state, mask, me, note
         if state == "ok":
             self.say(f"GitHub token accepted: signed in as {me.login}", INK)
+            self.take_token(me.login)
             if me.login.lower() != self.teams_for:         # another account: the teams of the one before
                 self.forget_teams()                        # are not this one's
                 self.teams_for = me.login.lower()
@@ -673,6 +679,34 @@ class Frolic(App):
         elif state == "bad":
             self.say(f"GitHub token problem: {note}", INK)
         self.draw()
+
+    def take_token(self, login: str) -> None:
+        """The token just accepted, `login`'s, is the one in use from now on. Reads still
+        under way with the one before are not used when they end.
+
+        Another account's: what the account before read goes. It may hold repositories this
+        one cannot see, and one this account cannot read at all would keep it on the board
+        for good. Each shown repository is read again at once, and says "reading…" till then.
+
+        The same account's: what was read stays on the board until each repository is read
+        again, but not what the token before could do there: its rights are not this
+        token's to lend."""
+        self.token_used = self.token_run
+        if login.lower() != self.pulls_for:
+            self.forget_readings()
+            self.pulls_for = login.lower()
+        else:
+            self.pulls = {key: replace(got, access="") for key, got in self.pulls.items()}
+
+    def forget_readings(self) -> None:
+        """What was read of the pull requests, and all that was made of it on screen: the
+        readings, why some could not be read, the wash on what changed, the ticker's line.
+        Not the timers, nor which reads are under way: their answers go to `pulls_known`,
+        which tells the ones made with a token no longer in use."""
+        for held in (self.pulls, self.pull_trouble, self.flashes):
+            held.clear()
+        self.news = None
+        self.pulls_for = ""
 
     # ---- the teams the viewer is on --------------------------------------------------------
     @property
@@ -802,11 +836,11 @@ class Frolic(App):
         """With the token gone, what it read goes too, and the tunnel closes: nothing on
         screen is left to go stale, and no delivery arrives that could not be acted on. The
         webhooks setting stays, so a new token opens the tunnel again."""
-        for held in (self.pulls, self.pull_trouble, self.flashes, self.hook_state, self.hooked):
+        self.forget_readings()
+        for held in (self.hook_state, self.hooked):
             held.clear()
         self.forget_teams()
         self.stale.clear()
-        self.news = None
         self.read_at.clear()
         self.read_began.clear()
         self.hook_at.clear()
@@ -1304,16 +1338,18 @@ class Frolic(App):
                 wanted.append((name, None if repo is None or repo.long_lived is None else list(repo.long_lived)))
         if wanted:
             log.info("reading (%s): %s", why, ", ".join(name for name, _ in wanted))
-            self.fetch(wanted)
+            self.fetch(wanted, self.token_used)
         self.draw()
 
     @work(thread=True, group="pulls")
-    def fetch(self, wanted: list[tuple[str, list[str] | None]]) -> None:
+    def fetch(self, wanted: list[tuple[str, list[str] | None]], token_used: int) -> None:
+        """Read these repositories with the token in use; `token_used` says which that is
+        (`self.token_used` when the read was asked for). Each answer carries it."""
         try:
             github = GitHub(keychain.get(keychain.GITHUB_TOKEN) or "")
         except keychain.KeychainError as e:
             for name, _ in wanted:
-                self.later(self.pulls_failed, name, f"The Keychain could not be read: {e}")
+                self.later(self.pulls_failed, name, f"The Keychain could not be read: {e}", token_used)
             return
         for name, long_lived in wanted:
             if self.closing.is_set():
@@ -1321,17 +1357,29 @@ class Frolic(App):
             try:
                 got = fetch_pulls(github, name, long_lived=long_lived)
             except GitHubError as e:
-                self.later(self.pulls_failed, name, str(e))
+                self.later(self.pulls_failed, name, str(e), token_used)
             except Exception as e:                           # a reply shaped in a way nobody expected
                 log.exception("reading the pull requests of %s failed", name)
-                self.later(self.pulls_failed, name, f"could not read GitHub's reply: {type(e).__name__}")
+                self.later(self.pulls_failed, name, f"could not read GitHub's reply: {type(e).__name__}", token_used)
             else:
-                self.later(self.pulls_known, name, got)
+                self.later(self.pulls_known, name, got, token_used)
 
-    def pulls_known(self, name: str, got: RepoPulls) -> None:
+    def read_before(self, name: str, token_used: int) -> bool:
+        """A read that ends now was made with a token no longer in use. What it found is not
+        used: the new token's account may not see the same, nor have the same rights. Taking
+        the new token asked for every shown repository to be read again, and a read under
+        way then is made again once it ends (`fetch_ended`), so nothing is left unread."""
+        if token_used == self.token_used:
+            return False
+        log.info("%s: a reading made with the token before is not used", name)
+        return True
+
+    def pulls_known(self, name: str, got: RepoPulls, token_used: int) -> None:
         repo = self.store.get(name)
         if repo is None or self.token_state == "none":     # renamed or removed while it was read,
             return self.fetch_ended(name)                   # or the token forgotten
+        if self.read_before(name, token_used):
+            return self.fetch_ended(name)
         if got.repo and got.repo != repo.name:              # GitHub spells it otherwise: the list takes that
             repo, _ = self.take_name(repo.name, got.repo, repo.private, repo.admin, got.default_branch)
         key = repo.name.lower()
@@ -1384,7 +1432,9 @@ class Frolic(App):
             self.notice = None
         return self.notice[1] if self.notice is not None else ""
 
-    def pulls_failed(self, name: str, note: str) -> None:
+    def pulls_failed(self, name: str, note: str, token_used: int) -> None:
+        if self.read_before(name, token_used):              # what the token before could not do says
+            return self.fetch_ended(name)                   # nothing about this one
         self.pull_trouble[name.lower()] = note
         self.say(f"{name}: pull requests not read: {note}", INK)
         self.fetch_ended(name)

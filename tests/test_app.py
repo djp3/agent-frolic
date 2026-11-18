@@ -263,7 +263,7 @@ async def test_forgetting_the_token_forgets_what_it_read_and_closes_the_tunnel(i
         assert app.pulls == {} and app.news is None
         assert (app.tunnel, app.receiver, app.tunnel_state) == (None, None, "off") and not tunnel.running
         assert Settings.load().webhooks                           # the setting stays
-        app.pulls_known("djp3/agent-frolic", late)
+        app.pulls_known("djp3/agent-frolic", late, app.token_used)
         assert app.pulls == {}                                     # dropped: there is no token
         await pilot.press("s")
         await settle(app, pilot)
@@ -1629,6 +1629,119 @@ async def test_another_account_signing_in_does_not_keep_the_teams_of_the_one_bef
         await settle(app, pilot)
 
 
+# ---- the token a reading was made with -----------------------------------------------------
+
+ORG_MOVE = ("acme/web-console", 301)
+
+
+def an_org_move():
+    """Acme owns acme/web-console, where a bot's pull request nobody has looked at waits on
+    the maintainer, Acme. The stored token (djp3's) is an admin's there."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add("acme/web-console", private=True, admin=False)
+    FakePulls.orgs, FakePulls.access = {"acme/web-console"}, {TOKEN: "admin"}
+    FakePulls.open_ = {"acme/web-console": [node(301, "deps", author={"login": "dependabot"},
+                                                 authorAssociation="NONE", title="Bump b")]}
+
+
+def org_move_mine(app) -> bool:
+    """Whether the board has Acme's move as the viewer's, from what the app now holds."""
+    app.board.look()
+    pull = app.board.pic.find(ORG_MOVE)
+    return pull is not None and app.board.pic.mine(pull)
+
+
+@drive
+async def test_a_reading_made_with_the_token_before_is_not_used(isolated):
+    """A read is under way with an admin's token when a read-only account's token is
+    pasted. What that read finds is not used when it ends: Acme's move would be taken for
+    the new account's. The repository is read again with the new token, and that is used."""
+    second = TOKEN[:-4] + "4321"
+    FakeGitHub.logins = {second: "mira"}
+    an_org_move()
+    FakePulls.access[second] = "read"
+    FakeGitHub.gates[("pulls", TOKEN)] = threading.Event()
+    FakeGitHub.gates[("pulls", second)] = threading.Event()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await until(pilot, lambda: ("pulls", TOKEN) in FakeGitHub.waiting)
+        await to_setup(app, pilot)
+        await paste(app, pilot, second)
+        await until(pilot, lambda: app.token_state == "ok" and app.identity.login == "mira")
+        FakeGitHub.gates[("pulls", TOKEN)].set()                          # the read with the token before ends,
+        await until(pilot, lambda: ("pulls", second) in FakeGitHub.waiting)   # and one with this token begins
+        assert "acme/web-console" not in app.pulls and not org_move_mine(app)
+        FakeGitHub.gates[("pulls", second)].set()
+        await settle(app, pilot)
+        assert app.pulls["acme/web-console"].access == "read" and not org_move_mine(app)
+        assert counts(app.board.pic, "acme/web-console") == (0, 1)       # Acme is someone else
+
+
+@drive
+async def test_a_new_token_does_not_lend_the_rights_read_with_the_one_before(isolated):
+    """Once another token is in use, what the token before read stays on the board until
+    it is read again, but not what its account could do there: until then Acme's move is
+    not the viewer's. Read again, the rights are the new token's."""
+    second = TOKEN[:-4] + "4321"                                          # the same account, djp3
+    an_org_move()
+    FakePulls.access[second] = "admin"
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        assert org_move_mine(app)
+        FakeGitHub.gates[("pulls", second)] = threading.Event()
+        await to_setup(app, pilot)
+        await paste(app, pilot, second)
+        await until(pilot, lambda: ("pulls", second) in FakeGitHub.waiting)
+        held = app.pulls["acme/web-console"]
+        assert held.pulls and held.access == "" and not org_move_mine(app)   # still shown, not lent
+        FakeGitHub.gates[("pulls", second)].set()
+        await settle(app, pilot)
+        assert org_move_mine(app)
+        assert app.news is None and not app.flashes                       # not taken for a change on GitHub
+
+
+@drive
+async def test_another_account_signing_in_does_not_keep_what_the_one_before_read(isolated):
+    """What one account read is not shown once another signs in, not even until the new
+    account's reads come: it may hold a private repository the new account cannot see, and
+    one it cannot read at all would keep it for good. Another token of the same account
+    keeps it all until read again."""
+    second, third = TOKEN[:-4] + "4321", TOKEN[:-4] + "8765"
+    FakeGitHub.logins = {second: "mira", third: "mira"}
+    an_org_move()
+    FakePulls.access.update({second: "read", third: "read"})
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        FakePulls.open_["acme/web-console"].append(node(302, "more", author={"login": "dependabot"},
+                                                        authorAssociation="NONE", title="Bump c"))
+        await pilot.press("u")                                            # djp3 sees one open: said and washed
+        await settle(app, pilot)
+        assert app.news is not None and app.flashes and app.pulls_for == "djp3"
+
+        FakePulls.broken["acme/web-console"] = "No such repository, or the token cannot see it."
+        await to_setup(app, pilot)
+        await paste(app, pilot, second)                                   # mira cannot read it at all
+        await settle(app, pilot)
+        assert app.identity.login == "mira" and app.pulls_for == "mira"
+        assert app.pulls == {} and app.news is None and not app.flashes   # nothing of djp3's is left
+        app.board.look()
+        assert app.board.pic.all() == []
+        assert app.board.pic.notes["acme/web-console"].startswith("could not be read")
+
+        del FakePulls.broken["acme/web-console"]
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert sorted(p.number for p in app.pulls["acme/web-console"].pulls) == [301, 302]
+        FakeGitHub.gates[("pulls", third)] = threading.Event()
+        await paste(app, pilot, third)                                    # mira again, another token
+        await until(pilot, lambda: ("pulls", third) in FakeGitHub.waiting)
+        assert sorted(p.number for p in app.pulls["acme/web-console"].pulls) == [301, 302]    # kept meanwhile
+        FakeGitHub.gates[("pulls", third)].set()
+        await settle(app, pilot)
+
+
 # ---- each repository's timer ---------------------------------------------------------------
 
 async def read_since_hooked(app, pilot):
@@ -2052,7 +2165,8 @@ async def test_repositories_whose_timers_run_out_moments_apart_are_read_by_one_w
         app.read_at["djp3/quiet-one"] = now[0] - span + 60            # and the last one's in a minute
         workers = []
         fetch = app.fetch
-        monkeypatch.setattr(app, "fetch", lambda wanted: workers.append([name for name, _ in wanted]) or fetch(wanted))
+        monkeypatch.setattr(app, "fetch", lambda wanted, token_used: workers.append([name for name, _ in wanted])
+                            or fetch(wanted, token_used))
         app.tick()
         await settle(app, pilot)
         assert workers == [["djp3/agent-frolic", "Acme/ledger-api"]]  # one worker, in the list's order

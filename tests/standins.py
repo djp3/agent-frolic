@@ -128,24 +128,29 @@ class FakeTunnel:
 
 
 class FakePulls:
-    """What is open on GitHub, per repository (lower case), and which repositories were asked for."""
+    """What is open on GitHub, per repository (lower case), and which repositories were asked
+    for. A read made with a token waits while FakeGitHub.gates holds ("pulls", that token)."""
     open_: dict = {}
     asked: list = []
     broken: dict = {}
     tips: dict = {}               # repository (lower case) -> the commit its default branch points at
     spelled: dict = {}            # repository (lower case) -> how GitHub spells it, when not as asked
     costs: dict = {}              # repository (lower case) -> (what a reading costs, the hourly allowance)
+    access: dict = {}             # a token -> what its account may do in every repository ("" unsaid)
+    orgs: set = set()             # the repositories (lower case) an organization owns
 
     @staticmethod
     def fetch(github, name, now=None, long_lived=None):
         FakePulls.asked.append(name)
+        FakeGitHub._hold(("pulls", github.token))
         if name.lower() in FakePulls.broken:
             raise GitHubError(200, "x", FakePulls.broken[name.lower()])
         theirs = FakePulls.spelled.get(name.lower(), name)
         pulls = stack([parse_pull(theirs, n) for n in FakePulls.open_.get(name.lower(), [])], "main", long_lived)
         cost, limit = FakePulls.costs.get(name.lower(), (0, 0))
         return RepoPulls(theirs, "main", pulls, len(pulls), datetime.now(timezone.utc),
-                         FakePulls.tips.get(name.lower(), ""), cost=cost, limit=limit)
+                         FakePulls.tips.get(name.lower(), ""), access=FakePulls.access.get(github.token, ""),
+                         cost=cost, limit=limit, org=name.lower() in FakePulls.orgs)
 
 
 class FakeBrowser:
