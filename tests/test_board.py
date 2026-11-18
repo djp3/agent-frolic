@@ -102,8 +102,9 @@ async def test_the_board_is_the_first_screen_once_there_is_a_token_and_draws_wha
         order = [shown.index(text) for text in (
             "djp3/agent-frolic", "└ main", "┬ a1b2c3d tip", "#12 GraphQL client", "└ ▲ #13 Review state",
             "┼ c3d4e5f", "#9 Jira client", "#16 Transcript reader", "acme/web-console", "#143 Dark theme tokens",
-            "djp3/quiet-one", "nothing is open")]
+            "djp3/quiet-one  0 open")]
         assert order == sorted(order)
+        assert "nothing is open" not in shown             # that line says it: there is no other under it
         # column 1: owner | state | waits on
         assert line(app, "#12 GraphQL").split("│")[0].split() == ["you", "waiting", "bob"]
         assert line(app, "#13 Review").split("│")[0].split() == ["you", "waiting", "#12", "→"]
@@ -166,6 +167,51 @@ async def test_in_a_narrow_window_every_row_keeps_its_number_and_the_headings_ke
             assert any(number in row for row in shown.splitlines()), number
         head = next(row for row in shown.splitlines() if "pull request" in row and "quiet" in row)
         assert "review" not in head and head.index("pull request") < head.index("quiet")
+
+
+@drive
+async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_open(isolated):
+    """For a repository with nothing open that count is the only place the board says so:
+    there is no line beneath it. So the count stays, and what gives way is the rest."""
+    a_board()
+    long = "acme-platform/regional-ledger-reconciliation"
+    RepoStore().add(long, admin=True)
+    FakePulls.open_[long] = []
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        assert f"{long}  0 open" in screen(app)                                    # room for all of it
+        assert "djp3/agent-frolic  ●1  ○2  4 open" in screen(app)
+
+        await pilot.resize_terminal(100, 46)
+        await pilot.pause()
+        row = line(app, "acme-platform/")
+        assert "…  0 open" in row and long not in row                              # the name is cut, the count kept
+        assert "acme-platform/regional-ledger" in row
+        assert "djp3/agent-frolic  ●1  ○2  4 open" in screen(app)                  # where there is room, as it was
+
+        await pilot.resize_terminal(82, 46)
+        await pilot.pause()
+        assert "djp3/agent-frolic  4 open" in screen(app)                          # ●n ○n go before the name is cut:
+        assert "agent-frolic ●1 ○2" in screen(app).splitlines()[0]                 # the top line has them too
+        assert "djp3/quiet-one  0 open" in screen(app)
+
+        await pilot.resize_terminal(75, 46)                                        # the narrowest the Mac's window goes
+        await pilot.pause()
+        assert "djp3/quie…  0 open" in screen(app) and "djp3/agen…  4 open" in screen(app)
+        assert "acme-plat…  0 open" in screen(app)
+        assert "nothing is open" not in screen(app)
+
+        # more open than were read: the line says both, and "most recent shown" is the first to go
+        key = "djp3/agent-frolic"
+        app.pulls[key] = replace(app.pulls[key], total=240)
+        await pilot.resize_terminal(150, 46)
+        app.draw()
+        await pilot.pause()
+        assert "djp3/agent-frolic  ●1  ○2  240 open, the 4 most recent shown" in screen(app)
+        await pilot.resize_terminal(100, 46)
+        await pilot.pause()
+        assert "djp3/agent-frolic  ●1  ○2  240 open ═" in screen(app)
 
 
 @drive
@@ -382,7 +428,7 @@ async def test_the_other_empty_states_say_what_to_do(isolated):
         await pilot.press("u")
         await settle(app, pilot)
         shown = screen(app)
-        assert "nothing is open" in shown                                     # read, and empty
+        assert "djp3/agent-frolic  0 open" in shown and "nothing is open" not in shown    # read, and empty
         assert "✗ could not be read: GitHub's rate limit is used up for now." in shown
         assert "Nothing is open." in shown                                    # the needs-effort pane
         app.store.show("djp3/agent-frolic", False)
@@ -502,6 +548,11 @@ def a_long_board():
     }
 
 
+# How many lines the list of a_long_board() has: for each of the two repositories its own line,
+# its base branch, the commit and its pull requests; then the line of the one with nothing open.
+LONG = (3 + 24) + (3 + 20) + 1
+
+
 def bar(app) -> str:
     """The scroll bar, top to bottom: the window's last column beside the list, read by
     screen cell (a wide character to its left takes two cells but is one in a string)."""
@@ -615,8 +666,8 @@ async def test_the_wheel_scrolls_the_list_and_the_selection_stays_where_it_was(i
         await settle(app, pilot)
         deck = app.board
         first, last, total = deck.where
-        assert (first, total) == (1, 52) and last < total and "djp3/quiet-one  " not in screen(app)
-        assert f"rows 1–{last} of 52" in screen(app)
+        assert (first, total) == (1, LONG) and last < total and "djp3/quiet-one  " not in screen(app)
+        assert f"rows 1–{last} of {LONG}" in screen(app)
         assert bar(app)[0] == board.THUMB and bar(app)[-1] == board.TRACK_LINE     # at the top, more below
         chosen = deck.sel
         await wheel(pilot, MouseScrollDown, 3)
@@ -741,12 +792,12 @@ async def test_the_page_keys_and_end_reach_a_repository_with_nothing_open(isolat
         await pilot.press("end")
         await pilot.pause()
         shown = screen(app)
-        assert deck.where == (52 - rows + 1, 52, 52) and "rows" in shown
-        assert "djp3/quiet-one" in shown.split("needs effort")[0] and "nothing is open" in shown
+        assert deck.where == (LONG - rows + 1, LONG, LONG) and "rows" in shown
+        assert "djp3/quiet-one  0 open" in shown.split("needs effort")[0] and "nothing is open" not in shown
         assert bar(app)[-1] == board.THUMB and bar(app)[0] == board.TRACK_LINE     # at the bottom, more above
         await pilot.press("pageup")
         await pilot.pause()
-        assert deck.top == 52 - rows - (rows - 2)
+        assert deck.top == LONG - rows - (rows - 2)
         await pilot.press("home")
         await pilot.pause()
         assert deck.top == 0 and bar(app)[0] == board.THUMB
@@ -757,17 +808,22 @@ async def test_the_page_keys_and_end_reach_a_repository_with_nothing_open(isolat
 
 @drive
 async def test_the_last_pull_request_brings_what_follows_it_into_view(isolated):
+    """Two repositories with nothing open follow it here, so two lines. One line is kept
+    below whatever is selected anyway: the second shows only by the rule for the last one."""
     a_long_board()
+    RepoStore().add("djp3/still-one", admin=True)
+    FakePulls.open_["djp3/still-one"] = []
     app = main.Frolic()
     async with app.run_test(size=(150, 34)) as pilot:
         await settle(app, pilot)
         deck = app.board
+        assert [drawn.row.pull for drawn in deck.lines()[-2:]] == [None, None] and deck.where[2] == LONG + 1
         await pilot.press(*["down"] * (len(deck.keys()) - 1))
         await pilot.pause()
         assert deck.sel == deck.keys()[-1] and not deck.roam
         above = screen(app).split("needs effort")[0]
         assert f"#{deck.sel[1]} Second change" in above                           # the selected one shows,
-        assert "djp3/quiet-one" in above and "nothing is open" in above           # and so does the repository after it
+        assert "djp3/quiet-one  0 open" in above and "djp3/still-one  0 open" in above    # and so do both after it
         assert deck.where[1] == deck.where[2]
 
 
@@ -781,10 +837,10 @@ async def test_dragging_the_scroll_bar_moves_the_list(isolated):
         rows = deck.page
         await pilot.mouse_down("#scroll", offset=(0, rows - 1))                    # a press at the track's foot
         await pilot.pause()
-        assert deck.top == 52 - rows and "djp3/quiet-one" in screen(app).split("needs effort")[0]
+        assert deck.top == LONG - rows and "djp3/quiet-one" in screen(app).split("needs effort")[0]
         await pilot.hover("#scroll", offset=(0, rows // 2))                        # dragged to the middle
         await pilot.pause()
-        assert 0 < deck.top < 52 - rows
+        assert 0 < deck.top < LONG - rows
         await pilot.hover("#scroll", offset=(0, 0))                                # and to the head
         await pilot.pause()
         assert deck.top == 0
@@ -814,7 +870,7 @@ async def test_in_the_smallest_window_the_list_counts_the_rows_it_really_has(iso
             assert f"#{deck.sel[1]} First change {deck.sel[1]}" in listed()
         await pilot.press("end")
         await pilot.pause()
-        assert deck.where == (52, 52, 52) and "nothing is open" in listed()      # the very last line
+        assert deck.where == (LONG, LONG, LONG) and "djp3/quiet-one  0 open" in listed()    # the very last line
         assert bar(app) == board.THUMB                                             # one cell, the thumb in it
 
 
