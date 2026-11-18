@@ -1737,6 +1737,31 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
 
 
 @drive
+async def test_a_read_that_failed_is_tried_again_on_the_short_timer_webhook_or_not(isolated):
+    """Silence from GitHub means nothing changed only if the last read of it worked."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        ours = app.store.get("djp3/agent-frolic")
+        assert app.covered(ours) and app.period(ours) == 30 * 60
+        FakePulls.broken["djp3/agent-frolic"] = "GitHub's rate limit is used up for now. Try again in a few minutes."
+        FakePulls.asked.clear()
+        app.delivered(Delivery("pull_request", "d-1", "djp3/agent-frolic", "opened"))     # GitHub says it changed,
+        await settle(app, pilot)                                                          # and the read fails
+        assert FakePulls.asked == ["djp3/agent-frolic"] and "djp3/agent-frolic" in app.pull_trouble
+        assert app.period(ours) == 5 * 60                             # so it is not left for half an hour
+        age(app, only=["djp3/agent-frolic"])
+        del FakePulls.broken["djp3/agent-frolic"]
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["djp3/agent-frolic"] * 2 and "djp3/agent-frolic" not in app.pull_trouble
+        assert app.period(ours) == 30 * 60                            # read: back on the slow timer
+
+
+@drive
 async def test_after_the_mac_has_slept_a_repository_that_relies_on_its_webhook_is_read_at_once(isolated, monkeypatch):
     """What GitHub sent meanwhile reached nobody, and GitHub does not send it again."""
     three_repos()

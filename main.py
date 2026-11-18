@@ -437,8 +437,13 @@ class Frolic(App):
         minutes for one GitHub sends no webhooks for. SAFETY_POLLS times that for one it
         does: there silence means nothing changed, and the timer is only there to catch a
         delivery that never came (GitHub does not send one again). When the tunnel closes,
-        or webhooks are turned off, such a repository is back on the short timer at once."""
-        minutes = self.settings.poll_minutes * (self.SAFETY_POLLS if self.covered(repo) else 1)
+        or webhooks are turned off, such a repository is back on the short timer at once.
+
+        The slow timer is for a repository whose last read worked. One whose last read
+        failed is on the short one until a read works: what the board shows of it is not
+        known to be right, however quiet GitHub is."""
+        slow = self.covered(repo) and repo.name.lower() not in self.pull_trouble
+        minutes = self.settings.poll_minutes * (self.SAFETY_POLLS if slow else 1)
         return min(minutes, Settings.POLL_MOST) * 60
 
     def due(self, repo: Repo, now: float) -> bool:
