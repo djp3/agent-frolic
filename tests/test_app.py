@@ -1996,6 +1996,26 @@ async def test_after_the_mac_has_slept_a_repository_that_relies_on_its_webhook_i
 
 
 @drive
+async def test_a_timer_is_never_shorter_than_a_minute_whatever_the_setting_holds(isolated):
+    """Settings.load keeps the poll's minutes from 1 up. A setting that reached the app some
+    other way, at 0, would make a timer of no length: every repository read every second,
+    and the bars dividing by nothing."""
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        app.settings.poll_minutes = 0
+        ours = app.store.get("djp3/agent-frolic")
+        assert app.period(ours) == 60
+        assert app.freshness("djp3/agent-frolic")[0] > 0.9            # and the bars still draw
+        FakePulls.asked.clear()
+        app.tick()
+        await settle(app, pilot)
+        app.draw()
+        assert FakePulls.asked == []                                  # not every second
+
+
+@drive
 async def test_u_reads_every_shown_repository_now_and_every_timer_starts_again(isolated):
     three_repos()
     app = main.Frolic()

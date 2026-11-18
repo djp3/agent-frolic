@@ -466,7 +466,9 @@ class Frolic(App):
         slow = (self.covered(repo) and key not in self.pull_trouble
                 and self.read_began.get(key, 0.0) >= self.hooked.get(key, 0.0)
                 and not (got is not None and any(pull.mergeable == "unknown" for pull in got.pulls)))
-        minutes = self.settings.poll_minutes * (self.SAFETY_POLLS if slow else 1)
+        # At least a minute, whatever the setting holds: Settings.load keeps it from 1 up, but
+        # a timer of no length would read every repository every second.
+        minutes = max(1, self.settings.poll_minutes) * (self.SAFETY_POLLS if slow else 1)
         return min(minutes, Settings.POLL_MOST) * 60
 
     def due(self, repo: Repo, now: float) -> bool:
