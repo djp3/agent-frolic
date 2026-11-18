@@ -449,10 +449,16 @@ class Frolic(App):
         And it is for a repository read since its webhook was confirmed. What changed
         between an earlier read and the hook going live was told to nobody: the hook was not
         there, or pointed elsewhere. So until a read has begun after that, the timer stays
-        short, and one ordinary read closes the gap."""
+        short, and one ordinary read closes the gap.
+
+        And not for a repository where GitHub is still working out whether a pull request
+        can merge. It does that a little after it is asked, following a push to the base
+        branch, and sends no delivery when it knows: only another read finds out."""
         key = repo.name.lower()
+        got = self.pulls.get(key)
         slow = (self.covered(repo) and key not in self.pull_trouble
-                and self.read_began.get(key, 0.0) >= self.hooked.get(key, 0.0))
+                and self.read_began.get(key, 0.0) >= self.hooked.get(key, 0.0)
+                and not (got is not None and any(pull.mergeable == "unknown" for pull in got.pulls)))
         minutes = self.settings.poll_minutes * (self.SAFETY_POLLS if slow else 1)
         return min(minutes, Settings.POLL_MOST) * 60
 

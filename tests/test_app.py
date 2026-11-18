@@ -1777,6 +1777,34 @@ async def test_a_repository_is_on_the_slow_timer_only_once_it_has_been_read_sinc
 
 
 @drive
+async def test_while_github_works_out_whether_a_pull_request_can_merge_the_timer_stays_short(isolated):
+    """It works that out a little after a push to the base branch, and sends no webhook
+    when it knows. Left to the slow timer, "ready to merge" would be missing for half an hour."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await read_since_hooked(app, pilot)
+        ours = app.store.get("djp3/agent-frolic")
+        assert app.period(ours) == 30 * 60
+        settled = FakePulls.open_["djp3/agent-frolic"]
+        FakePulls.open_["djp3/agent-frolic"] = [dict(n, mergeable="UNKNOWN") for n in settled]
+        app.delivered(Delivery("push", "d-1", "djp3/agent-frolic", ""))       # something landed on the base
+        await settle(app, pilot)
+        assert {p.mergeable for p in app.pulls["djp3/agent-frolic"].pulls} == {"unknown"}
+        assert app.period(ours) == 5 * 60                             # GitHub will not say when it knows
+        FakePulls.open_["djp3/agent-frolic"] = settled
+        FakePulls.asked.clear()
+        age(app, only=["djp3/agent-frolic"])
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["djp3/agent-frolic"]
+        assert app.period(ours) == 30 * 60                            # known: silence means quiet again
+
+
+@drive
 async def test_what_counts_as_covered_is_a_record_of_confirmed_hooks_not_the_words_about_them(isolated):
     three_repos()
     keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
