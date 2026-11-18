@@ -1145,3 +1145,105 @@ async def test_teams_that_arrive_after_the_board_is_drawn_build_the_picture_agai
         same = app.board.pic
         app.draw()
         assert app.board.pic is same                                                      # and then it stands
+
+
+# ---- a click picks a pull request ---------------------------------------------------------
+
+async def click(pilot, over, offset, button=0):
+    """A click with the pointer over a widget, as the terminal reports it: the button down
+    and up again at one cell, in two SGR mouse reports (0 is the main button, 2 the other
+    one). Textual makes of them a press and a release that name no widget, and of those
+    two, the click."""
+    widget = pilot.app.screen.query_one(over)
+    x, y = widget.region.x + offset[0] + 1, widget.region.y + offset[1] + 1
+    for report in (f"\x1b[<{button};{x};{y}M", f"\x1b[<{button};{x};{y}m"):
+        for event in XTermParser().feed(report):
+            if isinstance(event, MouseEvent):
+                assert event.widget is None
+                pilot.app.post_message(event)
+    await pilot.pause()
+    await pilot.pause()
+
+
+def row_of(deck, number, part=0):
+    """The row of the list's box on which a line of a pull request is drawn."""
+    for i, drawn in enumerate(deck.lines()):
+        if drawn.row.pull is not None and drawn.row.pull.number == number and drawn.part == part:
+            return i - deck.top
+    raise AssertionError(f"#{number} has no line {part}")
+
+
+@drive
+async def test_a_click_on_any_line_of_a_pull_request_picks_it(isolated):
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        deck = app.board
+        assert deck.sel == ("djp3/agent-frolic", 12)
+        await click(pilot, "#map", (70, row_of(deck, 9)))                     # on its title
+        assert deck.sel == ("djp3/agent-frolic", 9)
+        assert "https://github.com/djp3/agent-frolic/pull/9" in screen(app)   # and the drawer follows
+        await click(pilot, "#map", (5, row_of(deck, 13, part=1)))             # on a later line of one, in column 1
+        assert deck.sel == ("djp3/agent-frolic", 13)
+        await click(pilot, "#map", (70, row_of(deck, 143)))                   # one of another repository
+        assert deck.sel == ("acme/web-console", 143)
+
+        rule = next(i for i, drawn in enumerate(deck.lines()) if drawn.row.pull is None) - deck.top
+        await click(pilot, "#map", (70, rule))                                # a rule is no pull request,
+        await click(pilot, "#map", (70, len(deck.lines()) - deck.top + 1))    # nor is the space below the list;
+        await click(pilot, "#map", (70, row_of(deck, 9)), button=2)           # the other button picks nothing,
+        await click(pilot, "#strip", (3, 0))                                  # nor does a click on a card
+        assert deck.sel == ("acme/web-console", 143)
+        await pilot.press("m")
+        await pilot.pause()
+        await click(pilot, "#map", (70, row_of(deck, 9)))                     # nor one under the menu
+        assert deck.sel == ("acme/web-console", 143)
+        await pilot.press("escape")
+        await pilot.press("up")                                               # the arrows go on from it
+        await pilot.pause()
+        order = deck.keys()
+        assert deck.sel == order[order.index(("acme/web-console", 143)) - 1]
+
+
+@drive
+async def test_a_click_in_the_list_leaves_the_list_where_it_is(isolated):
+    """The arrows keep two lines in view above the one they pick. A click picks what is
+    under the pointer: if the list moved to make that room, something else would be."""
+    a_long_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 34)) as pilot:
+        await settle(app, pilot)
+        deck = app.board
+        await wheel(pilot, MouseScrollDown, 3)
+        top = deck.top
+        first = next(drawn.row.pull.number for drawn in deck.lines()[top:] if drawn.row.pull is not None)
+        assert top > 0 and row_of(deck, first) <= 1                           # at the very top of the box
+        await click(pilot, "#map", (70, row_of(deck, first)))
+        assert deck.sel[1] == first and deck.top == top and deck.roam         # picked, and nothing moved
+        assert line(app, f"#{first} First change {first} ") != line(app, f"#{first + 1} First change")
+        await pilot.press("down")                                             # a key picks: the list follows again
+        await pilot.pause()
+        assert deck.sel[1] == first + 1 and not deck.roam
+
+
+@drive
+async def test_a_click_where_it_needs_effort_picks_that_pull_request_and_the_list_goes_to_it(isolated):
+    a_long_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 34)) as pilot:
+        await settle(app, pilot)
+        deck = app.board
+        listed = list(deck.effort_rows)
+        assert len(listed) >= 3 and len(deck.efforts) > len(listed)           # more need effort than fit
+        await pilot.press("end")                                              # the list is at its far end,
+        await pilot.pause()
+        far = listed[2]
+        assert deck.roam and not 0 <= row_of(deck, far[1]) < deck.page        # and this one out of view
+        await click(pilot, "#effort", (8, 2 + listed.index(far)))             # (the pane's edge, then its heading)
+        assert deck.sel == far and not deck.roam
+        assert 0 <= row_of(deck, far[1]) < deck.page                          # the list went to it
+        await click(pilot, "#effort", (8, 1))                                 # the heading picks nothing,
+        await click(pilot, "#effort", (8, 2 + len(listed)))                   # nor does "and N more"
+        await click(pilot, "#drawer", (8, 3))                                 # nor the drawer
+        assert deck.sel == far

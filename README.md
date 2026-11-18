@@ -126,6 +126,7 @@ From top to bottom:
 | key | action |
 |-----|--------|
 | ↑ ↓ | pick a pull request |
+| click | pick the pull request under the pointer, in the list or where it needs effort |
 | o | open it on GitHub in your browser |
 | page up / page down, home / end | scroll the list (the wheel does too) |
 | n | jump to the next thing that needs effort |
