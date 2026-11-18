@@ -26,7 +26,7 @@ from githubapi import GitHubError, Team
 from main import open_page as real_open_page       # conftest swaps main.open_page for a stand-in
 from picture import counts
 from repos import RepoStore
-from standins import (AUTHTOKEN, TOKEN, FakeGitHub, FakePulls, FakeTunnel, drive, fill, screen, settle,
+from standins import (AUTHTOKEN, TOKEN, FakeGitHub, FakePulls, FakeTunnel, age, drive, fill, screen, settle,
                       to_setup)
 from test_pulls import node, review
 from settings import Settings
@@ -82,7 +82,7 @@ async def test_a_replacement_token_that_fails_leaves_the_stored_one_in_use(isola
             last = app.lines[-1][1]
             assert said in last and "The one in your Keychain is still in use" in last
         FakePulls.asked.clear()
-        app.polled_at -= app.settings.poll_minutes * 60          # and the poll still runs
+        age(app)                                                 # and the timer still runs
         app.tick()
         await settle(app, pilot)
         assert FakePulls.asked == ["djp3/agent-frolic"]
@@ -825,11 +825,11 @@ async def test_the_poll_reads_every_shown_repository_when_it_is_due_and_u_reads_
         app.tick()
         await settle(app, pilot)
         assert FakePulls.asked == []                              # not due yet
-        app.polled_at = time.time() - app.settings.poll_minutes * 60 - 1
+        age(app)
         app.tick()
         await settle(app, pilot)
         assert sorted(FakePulls.asked) == ["Acme/ledger-api", "djp3/agent-frolic"]
-        assert time.time() - app.polled_at < 5                    # and the clock starts again
+        assert all(time.time() - at < 5 for at in app.read_at.values())    # and their clocks start again
         FakePulls.asked.clear()
         await pilot.press("u")
         await settle(app, pilot)
@@ -1336,7 +1336,7 @@ async def test_teams_that_cannot_be_read_leave_the_token_good_and_a_teams_reques
         assert "your teams could not be read: The token is not allowed to do this." in shown
         assert "A request to a team will not show as yours.  u tries again" in shown
         assert "fine-grained" not in shown and "lacks a scope" not in shown    # a classic token, with the repo scope
-        app.polled_at -= app.settings.poll_minutes * 60                   # a refusal would be one again:
+        age(app)                                                          # a refusal would be one again:
         app.tick()                                                        # the poll does not ask
         await settle(app, pilot)
         assert FakeGitHub.teams_asked == [TOKEN] and not app.teams_retry
@@ -1369,7 +1369,7 @@ async def test_a_read_of_the_teams_that_github_was_not_reached_for_is_tried_agai
     """The board is left open for days. One request failing at sign-in must not leave every
     request to the viewer's teams reading as someone else's until they happen to press u."""
     def poll():
-        app.polled_at -= app.settings.poll_minutes * 60
+        age(app)
         app.tick()
 
     def told():
@@ -1612,3 +1612,108 @@ async def test_another_account_signing_in_does_not_keep_the_teams_of_the_one_bef
         assert not app.teams_held                                         # its teams stand meanwhile
         FakeGitHub.gates[("teams", third)].set()
         await settle(app, pilot)
+
+
+# ---- each repository's timer ---------------------------------------------------------------
+
+@drive
+async def test_each_repository_is_read_when_its_own_timer_runs_out(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        assert sorted(app.read_at) == ["acme/ledger-api", "djp3/agent-frolic"]    # the hidden one has no timer
+        FakePulls.asked.clear()
+        age(app, only=["Acme/ledger-api"])
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["Acme/ledger-api"]                 # it alone was due,
+        assert time.time() - app.read_at["acme/ledger-api"] < 5       # and its timer starts again
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["Acme/ledger-api"]
+
+        FakePulls.broken["acme/ledger-api"] = "GitHub's rate limit is used up for now. Try again in a few minutes."
+        age(app, only=["Acme/ledger-api"])                            # a read that fails starts the timer
+        app.tick()                                                    # again too: it is not tried every second
+        await settle(app, pilot)
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["Acme/ledger-api"] * 2 and "acme/ledger-api" in app.pull_trouble
+        assert time.time() - app.read_at["acme/ledger-api"] < 5
+
+
+@drive
+async def test_a_read_that_a_webhook_asked_for_starts_that_repositorys_timer_again(isolated):
+    """GitHub has just said what changed there, and it was read: the clock has nothing to add."""
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.asked.clear()
+        age(app, minutes=app.settings.poll_minutes - 1)               # four of the five minutes have gone
+        app.delivered(Delivery("pull_request", "d-1", "djp3/agent-frolic", "opened"))
+        await settle(app, pilot)
+        assert FakePulls.asked == ["djp3/agent-frolic"]
+        assert time.time() - app.read_at["djp3/agent-frolic"] < 5
+        age(app, minutes=1)                                           # the fifth: the other one's time is up,
+        app.tick()                                                    # and this one's is a minute old
+        await settle(app, pilot)
+        assert FakePulls.asked == ["djp3/agent-frolic", "Acme/ledger-api"]
+
+
+@drive
+async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(isolated):
+    """There, silence means nothing changed. The timer only catches a delivery that never came."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        ours, theirs_ = app.store.get("djp3/agent-frolic"), app.store.get("Acme/ledger-api")
+        assert app.tunnel_state == "open" and app.covered(ours) and not app.covered(theirs_)    # not ours to hook
+        assert app.period(theirs_) == 5 * 60 and app.period(ours) == app.SAFETY_POLLS * 5 * 60 == 30 * 60
+        read, heard = app.freshness("djp3/agent-frolic")
+        assert read > 0.95 and heard > 0.95                           # both bars full: just read, tunnel just open
+        assert app.freshness("Acme/ledger-api")[1] == 0               # GitHub sends nothing about this one
+        FakePulls.asked.clear()
+        age(app)                                                      # the poll's five minutes
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["Acme/ledger-api"]
+        assert 0.80 < app.freshness("djp3/agent-frolic")[0] < 0.85    # five of its thirty are gone
+        age(app, minutes=app.settings.poll_minutes * (app.SAFETY_POLLS - 1))      # half an hour in all
+        app.tick()
+        await settle(app, pilot)
+        assert sorted(FakePulls.asked) == ["Acme/ledger-api", "Acme/ledger-api", "djp3/agent-frolic"]
+
+        app.delivered(Delivery("pull_request", "d-2", "djp3/agent-frolic", "opened"))
+        await settle(app, pilot)
+        assert app.freshness("djp3/agent-frolic")[1] > 0.95           # heard from: its lower bar is full
+        FakePulls.asked.clear()
+        await turn_webhooks_off(app, pilot)                           # no more deliveries will come:
+        await settle(app, pilot)
+        assert not app.covered(ours) and app.period(ours) == 5 * 60   # it is back on the short timer
+        assert app.freshness("djp3/agent-frolic")[1] == 0
+        age(app)
+        app.tick()
+        await settle(app, pilot)
+        assert sorted(FakePulls.asked) == ["Acme/ledger-api", "djp3/agent-frolic"]
+
+
+@drive
+async def test_u_reads_every_shown_repository_now_and_every_timer_starts_again(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.asked.clear()
+        age(app, minutes=3)
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert sorted(FakePulls.asked) == ["Acme/ledger-api", "djp3/agent-frolic"]
+        assert all(time.time() - at < 5 for at in app.read_at.values())
+        app.tick()
+        await settle(app, pilot)
+        assert len(FakePulls.asked) == 2

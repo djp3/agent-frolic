@@ -21,7 +21,7 @@ from repos import RepoStore
 from settings import Settings
 from githubapi import Team
 from picture import Agent
-from standins import AUTHTOKEN, TOKEN, FakeBrowser, FakeGitHub, FakePulls, drive, screen, settle
+from standins import AUTHTOKEN, TOKEN, FakeBrowser, FakeGitHub, FakePulls, age, drive, screen, settle
 from test_pulls import node, review
 from textual._xterm_parser import XTermParser
 from textual.events import MouseEvent, MouseScrollDown, MouseScrollUp
@@ -1247,3 +1247,72 @@ async def test_a_click_where_it_needs_effort_picks_that_pull_request_and_the_lis
         await click(pilot, "#effort", (8, 2 + len(listed)))                   # nor does "and N more"
         await click(pilot, "#drawer", (8, 3))                                 # nor the drawer
         assert deck.sel == far
+
+
+# ---- each repository's two bars -----------------------------------------------------------
+
+def bars(app, needle):
+    """The two thin bars on the screen line that holds `needle`: how many cells of the
+    upper one are lit, how many of the lower one, and how many cells there are."""
+    for strip in app.screen._compositor.render_strips():
+        if needle not in strip.text:
+            continue
+        upper = lower = cells = 0
+        for segment in strip:
+            n = segment.text.count("▀")
+            if not n or segment.style is None:
+                continue
+            ink = segment.style.color.get_truecolor().hex.lower() if segment.style.color else ""
+            back = segment.style.bgcolor.get_truecolor().hex.lower() if segment.style.bgcolor else ""
+            cells += n
+            upper += n if ink == board.POLL_INK.lower() else 0
+            lower += n if back == board.HOOK.lower() else 0
+        return upper, lower, cells
+    raise AssertionError(f"no line with {needle!r}")
+
+
+@drive
+async def test_each_repositorys_line_ends_in_two_bars_of_its_own(isolated):
+    """The upper one empties until that repository is next read on its timer, the lower one
+    since GitHub last sent a delivery about it. They used to be one pair, in the top line."""
+    a_board()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        app.draw()
+        await pilot.pause()
+        ours, theirs, quiet = "╪ djp3/agent-frolic", "╪ acme/web-console", "╪ djp3/quiet-one"
+        assert bars(app, ours) == (board.BAR, board.BAR, board.BAR)          # just read, and GitHub tells us
+        assert bars(app, theirs) == (board.BAR, 0, board.BAR)                # not ours to hook: no lower bar
+        assert bars(app, quiet) == (board.BAR, board.BAR, board.BAR)         # one with nothing open has them too
+        top = screen(app).splitlines()[0]
+        assert "▀▀" not in top and "▀ read  ▄ webhook" in top                # the top line keeps only their key
+
+        app.read_at["djp3/agent-frolic"] -= app.period(app.store.get("djp3/agent-frolic")) / 2
+        app.hook_at["djp3/agent-frolic"] = time.time() - app.period(app.store.get("djp3/agent-frolic")) / 4
+        app.tunnel_at -= 3600                                                # (the tunnel has been open a while)
+        app.draw()
+        await pilot.pause()
+        assert bars(app, ours) == (board.BAR // 2, board.BAR * 3 // 4, board.BAR)    # this one's have drained
+        assert bars(app, theirs) == (board.BAR, 0, board.BAR)                        # that one's have not
+        age(app, only=["acme/web-console"])                                  # its five minutes are up: it is
+        app.tick()                                                           # read, and its bar is full again
+        await settle(app, pilot)
+        app.draw()
+        await pilot.pause()
+        assert bars(app, theirs) == (board.BAR, 0, board.BAR) and bars(app, ours)[0] == board.BAR // 2
+
+
+@drive
+async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_bars(isolated):
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await settle(app, pilot)
+        app.draw()
+        await pilot.pause()
+        assert bars(app, "╪ djp3/agent-frolic")[2] == 0                      # no room: they are left out,
+        assert "djp3/agent-frolic  ●1  ○2  4 open" in line(app, "╪ djp3/agent-frolic")     # not drawn over it
+        assert bars(app, "╪ djp3/quiet-one")[2] == board.BAR                 # a shorter line has room for them

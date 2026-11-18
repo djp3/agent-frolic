@@ -175,6 +175,18 @@ async def settle(app, pilot):
         await pilot.pause()
 
 
+def age(app, minutes=None, only=None):
+    """Let time pass for the timers: as if `minutes` had gone by since each repository was
+    last read (the poll's own minutes when not said; `only` names the ones it passes for),
+    and since the viewer's teams were last asked for."""
+    seconds = (app.settings.poll_minutes if minutes is None else minutes) * 60 + 1
+    for key in app.read_at:
+        if only is None or key in {name.lower() for name in only}:
+            app.read_at[key] -= seconds
+    if only is None:
+        app.teams_tried_at -= seconds
+
+
 async def to_setup(app, pilot):
     """With a token stored the app starts on the board; these tests are about the setup."""
     if app.screen is not app.setup:

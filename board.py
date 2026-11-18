@@ -9,9 +9,8 @@ Top to bottom:
 
   • THE TOP LINE. Every repository in the list, the ones on screen bold and underlined,
     each with ●n (what you can get moving there) and ○n (other people something there
-    waits on). At the right, two thin bars share one row: the upper one empties until the
-    next poll of GitHub, the lower one empties since the last webhook delivery. Resting
-    the pointer on them says which is which.
+    waits on). At the right, the key to the two thin bars each repository's line ends in
+    (below). Resting the pointer on it says what they are.
   • THE CARDS. One per human: you, then everyone something waits on. A yellow dot on yours
     means things wait on you. The agents a human operates sit beneath their name. The
     background shows the focus. A team a review was asked of has a card too; a team you
@@ -26,6 +25,9 @@ Top to bottom:
     has reached, the color of that unit's letter. Only the weeks' color fades: at three
     months the bar is full and grey.
     A double rule starts a repository, a heavy one a base branch, a light one a commit.
+    A repository's rule ends in two thin bars that share one row, for that repository
+    alone: the upper one empties until it is next read on its timer, the lower one since
+    GitHub last sent a webhook delivery about it (empty where it sends none).
     A list longer than its box scrolls: it follows the selected pull request, and the
     wheel, the page keys and the bar at its right edge move it freely, to every
     repository on screen, the ones with nothing open included.
@@ -69,7 +71,7 @@ from picture import (CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, 
 from pulls import PullRequest, span
 from theme import (AXIS, CRIT, DIVIDER, INK, INK2, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN, darker)
 
-BAR = 16                         # cells in the two freshness bars
+BAR = 16                         # cells in each repository's two freshness bars
 POLL_INK = INK2                  # the poll bar: neutral, it is the steady one
 HOOK = "#199e70"                 # the webhook bar
 TRACK = AXIS                     # the part of a bar that has drained
@@ -272,15 +274,39 @@ class Line:
     lead: str = ""                               # the tree connectors on this line
 
 
+def fresh_key() -> Text:
+    """The key to the two bars at the end of each repository's line, for the top line."""
+    return (Text().append("▀", style=POLL_INK).append(" read  ", style=MUTED)
+            .append("▄", style=HOOK).append(" webhook", style=MUTED))
+
+
+FRESH_KEY_W = len(fresh_key().plain)
+
+
 def fresh_tip() -> Text:
-    """What the two freshness bars are, for the pointer resting on them."""
+    """What the two freshness bars are, for the pointer resting on their key."""
     tip = Text()
-    tip.append("▀", style=POLL_INK).append(" upper · poll\n", style=f"bold {INK}")
-    tip.append("Empties at a steady pace. When it is empty, GitHub is polled again.\n\n", style=INK2)
+    tip.append("Each repository's line ends in two thin bars.\n\n", style=INK2)
+    tip.append("▀", style=POLL_INK).append(" upper · the next read\n", style=f"bold {INK}")
+    tip.append("Empties at a steady pace. When it is empty, that repository is read again. Any "
+               "read of it fills the bar: a webhook's, u, or the timer's own. Where GitHub sends "
+               "webhooks, the timer is a slow one.\n\n", style=INK2)
     tip.append("▄", style=HOOK).append(" lower · webhooks\n", style=f"bold {INK}")
-    tip.append("Refills each time GitHub sends a change. If it keeps emptying, "
-               "the webhooks have gone quiet. Empty when webhooks are off.", style=INK2)
+    tip.append("Refills each time GitHub sends a change there. If it keeps emptying, the "
+               "webhooks have gone quiet. Empty for a repository GitHub sends none for.", style=INK2)
     return tip
+
+
+def fresh_bar(read: float, hook: float) -> Segments:
+    """Two thin bars in one row of BAR cells, for one repository: `read` and `hook` are how
+    much of each is left, from 1 down to 0 (Frolic.freshness). Each cell is an upper half
+    block: its ink is the read bar, its background the webhook bar. What is left sits
+    against the right edge, and blocks leave from the left."""
+    def cells(part: float) -> int:
+        return max(0, min(BAR, -int(-part * BAR // 1)))       # rounded up: full until a block's time is gone
+
+    r, h = cells(read), cells(hook)
+    return [("▀", f"{POLL_INK if i >= BAR - r else TRACK} on {HOOK if i >= BAR - h else TRACK}") for i in range(BAR)]
 
 
 class ListBar(Static):
@@ -315,7 +341,7 @@ class Board(Screen):
     Board {{ background: {PLANE}; color: {INK}; layers: base overlay; }}
     #topline {{ height: 1; margin: 0 2; }}
     #tabs {{ width: 1fr; height: 1; text-wrap: nowrap; text-overflow: ellipsis; }}
-    #fresh {{ width: {BAR}; height: 1; margin: 0 0 0 2; }}
+    #fresh {{ width: {FRESH_KEY_W}; height: 1; margin: 0 0 0 2; }}
     Tooltip {{ background: {RAISED}; color: {INK2}; }}
     #toprule {{ height: 1; margin: 0 1; }}
     #strip {{ height: 1; max-height: {STRIP}; margin: 0 1; }}
@@ -381,7 +407,7 @@ class Board(Screen):
     def compose(self):
         with Horizontal(id="topline"):
             yield Static(id="tabs")
-            yield Static(id="fresh")         # the two freshness bars, against the right edge
+            yield Static(fresh_key(), id="fresh")     # the key to each repository's two bars
         yield Static(id="toprule")
         yield Static(id="strip")
         yield Static(id="striprule")
@@ -511,7 +537,6 @@ class Board(Screen):
         try:
             self.look()
             self.query_one("#tabs", Static).update(self.top_line())
-            self.query_one("#fresh", Static).update(self.freshness())
             self.query_one("#strip", Static).update(self.strip())      # sets where the card lines stand
             self.query_one("#toprule", Static).update(self.card_rule("#toprule", "┬"))
             self.query_one("#striprule", Static).update(self.card_rule("#striprule", "┴", X_RULE))
@@ -560,28 +585,6 @@ class Board(Screen):
                 for text, style in count_marks(*counts(self.pic, repo.name)) or [(" ·", AXIS)]:
                     out.append(text, style=style)
             out.append("      ")
-        return out
-
-    def freshness(self) -> Text:
-        """Two thin bars in one row of cells. Each cell is an upper half block: its ink is
-        the poll bar, its background the webhook bar. Both count down to the right over one
-        poll interval (blocks leave from the left); the poll bar refills at each poll, the
-        webhook bar whenever a delivery arrives. With webhooks off the lower bar is empty."""
-        app = self.app
-        period = max(1, app.settings.poll_minutes) * 60
-
-        def left(since: float) -> int:
-            if not since:
-                return 0
-            part = 1 - (time.time() - since) / period
-            return max(0, min(BAR, -int(-part * BAR // 1)))       # rounded up: full until a block's time is gone
-
-        poll = left(app.polled_at)
-        hook = left(app.hook_at) if app.tunnel_state == "open" else 0
-        out = Text()
-        for i in range(BAR):                                   # what is left sits against the right edge
-            out.append("▀", style=f"{POLL_INK if i >= BAR - poll else TRACK} "
-                                  f"on {HOOK if i >= BAR - hook else TRACK}")
         return out
 
     def strip(self) -> Text:
@@ -854,6 +857,12 @@ class Board(Screen):
                 parts += [(" " + row.label, MUTED)]
         parts += [(" ", "")]
         write(canvas, X_TREE - 1, y, parts, max(0, width - X_TREE))
+        at = width - BAR - 2                                   # the repository's two bars, at the rule's end
+        if row.kind == "repo" and at >= X_TREE - 1 + seg_len(parts):
+            canvas.put(at, y, " ")
+            for i, (cell, style) in enumerate(fresh_bar(*self.app.freshness(row.repo)), start=at + 1):
+                canvas.put(i, y, cell, style)
+            canvas.put(at + BAR + 1, y, " ")
 
     def draw_note(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A line under a repository saying why it has no pull requests to show."""
