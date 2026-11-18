@@ -211,6 +211,8 @@ class Row:
     pull: PullRequest | None = None
     label: str = ""               # repo: its name; base: the branch; commit: "tip" or ""; note: its words
     sha: str = ""                 # commit: the short hash
+    total: int | None = None      # repo: how many pull requests are open there, None while it is unread
+    listed: int = 0               # repo: how many of them the list holds (the most recent, past the most read)
 
 
 def tree(picture: Picture) -> list[Row]:
@@ -228,20 +230,21 @@ def tree(picture: Picture) -> list[Row]:
           └ #24 …
 
     A repository that has not been read, or could not be read, gets a note row saying so.
-    One with nothing open gets none: its own row says "0 open", and a line more would only
-    make the list longer."""
+    One with nothing open gets none: its own row carries how many are open (`total`, 0
+    here), which the board writes on it, and a line more would only make the list longer."""
     rows: list[Row] = []
     for name in picture.names:
         low = name.lower()
         got = picture.pulls.get(low)
-        rows.append(Row("repo", "", got.repo if got else name, label=got.repo if got else name))
+        rows.append(Row("repo", "", got.repo if got else name, label=got.repo if got else name,
+                        total=got.total if got else None, listed=len(got.pulls) if got else 0))
         if low in picture.notes:
             rows.append(Row("note", "", name, label=picture.notes[low]))
         if got is None:
             if low not in picture.notes:
                 rows.append(Row("note", "", name, label="not read yet"))
             continue
-        if not got.pulls:                                        # its own row says "0 open"
+        if not got.pulls:                                        # its own row carries the count
             continue
         by_number = {p.number: p for p in got.pulls}
         roots = [p for p in got.pulls if not p.parent]

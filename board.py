@@ -843,23 +843,23 @@ class Board(Screen):
         """A rule across both columns, carrying its name: double at a repo, heavy at a base,
         light at a commit (with its short hash). It crosses the rule between the columns.
 
-        A repository's rule says how many pull requests are open there, and for one with
-        none that is the only place the board says so (tree() gives it no line beneath). So
-        in a window too narrow for all of it the count is what stays: first the "most recent
-        shown" goes, then ●n ○n (the top line has those too), then the name is cut short."""
+        A repository's rule says how many pull requests are open there (the row carries
+        the count), and for one with none that is the only place the board says so: tree()
+        gives it no line beneath. So in a window too narrow for all of it the count is what
+        stays: first the "most recent shown" goes, then ●n ○n (the top line has those too),
+        then the name is cut short."""
         line, cross = {"repo": ("═", "╪"), "base": ("━", "┿"), "commit": ("─", "┼")}[row.kind]
         canvas.put(0, y, line * width, DIVIDER)
         canvas.put(X_RULE, y, cross, DIVIDER)
         room = max(0, width - X_TREE)
         parts: Segments = [(" ", "")]
         if row.kind == "repo":
-            got = next((read for read in self.pic.read() if read.repo == row.repo), None)
             said: Segments = []
-            if got is not None:
+            if row.total is not None:
                 marks = count_marks(*counts(self.pic, row.repo), gap="  ")
-                opened: Segments = [(f"  {got.total} open", MUTED)]
-                more: Segments = ([(f", the {len(got.pulls)} most recent shown", MUTED)]
-                                  if got.total > len(got.pulls) else [])
+                opened: Segments = [(f"  {row.total} open", MUTED)]
+                more: Segments = ([(f", the {row.listed} most recent shown", MUTED)]
+                                  if row.total > row.listed else [])
                 beside = room - 2 - cell_len(row.label)        # what the whole name leaves, between two spaces
                 said = next((all_ for all_ in (marks + opened + more, marks + opened) if seg_len(all_) <= beside),
                             opened)

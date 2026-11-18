@@ -74,9 +74,16 @@ def test_the_tree_runs_repo_base_commit_then_the_pull_requests_in_stack_order():
         ("base", "└ release-0.2"),
         ("commit", "  ┬ " + OLD[:7]),
         ("pull", "  └ #24"),
-        ("repo", "o/web"),                               # nothing open there: its own row says so
+        ("repo", "o/web"),                               # nothing open there: no line beneath it
         ("repo", "o/slow"), ("note", "reading…"),
     ]
+    # each repository's row carries how many are open there and how many of them are listed:
+    # for the one with none, that count is all the board has to say so
+    assert [(r.repo, r.total, r.listed) for r in rows if r.kind == "repo"] == [
+        ("o/app", 7, 7), ("o/web", 0, 0), ("o/slow", None, 0)]
+    more = Picture(["o/app"], {"o/app": RepoPulls("o/app", "main", read("o/app", app_nodes()).pulls, 240, NOW, TIP)},
+                   "djp3", {}, {})
+    assert [(r.total, r.listed) for r in tree(more) if r.kind == "repo"] == [(240, 7)]     # more than were read
 
 
 def test_column_one_for_each_way_a_pull_request_can_stand():

@@ -202,6 +202,17 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
         assert "acme-plat…  0 open" in screen(app)
         assert "nothing is open" not in screen(app)
 
+        # more open than were read: the line says both, and "most recent shown" is the first to go
+        key = "djp3/agent-frolic"
+        app.pulls[key] = replace(app.pulls[key], total=240)
+        await pilot.resize_terminal(150, 46)
+        app.draw()
+        await pilot.pause()
+        assert "djp3/agent-frolic  ●1  ○2  240 open, the 4 most recent shown" in screen(app)
+        await pilot.resize_terminal(100, 46)
+        await pilot.pause()
+        assert "djp3/agent-frolic  ●1  ○2  240 open ═" in screen(app)
+
 
 @drive
 async def test_a_narrow_window_shows_quiet_as_one_block(isolated):
