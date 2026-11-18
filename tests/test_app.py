@@ -1622,6 +1622,14 @@ async def test_another_account_signing_in_does_not_keep_the_teams_of_the_one_bef
 
 # ---- each repository's timer ---------------------------------------------------------------
 
+async def read_since_hooked(app, pilot):
+    """Let the short timer run out once and the repositories be read: one whose webhook was
+    confirmed after its last read began is on the slow timer only from this read on."""
+    age(app)
+    app.tick()
+    await settle(app, pilot)
+
+
 @drive
 async def test_each_repository_is_read_when_its_own_timer_runs_out(isolated):
     three_repos()
@@ -1707,6 +1715,7 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
         await settle(app, pilot)
         ours, theirs_ = app.store.get("djp3/agent-frolic"), app.store.get("Acme/ledger-api")
         assert app.tunnel_state == "open" and app.covered(ours) and not app.covered(theirs_)    # not ours to hook
+        await read_since_hooked(app, pilot)
         assert app.period(theirs_) == 5 * 60 and app.period(ours) == app.SAFETY_POLLS * 5 * 60 == 30 * 60
         read, heard = app.freshness("djp3/agent-frolic")
         assert read > 0.95 and heard > 0.95                           # both bars full: just read, tunnel just open
@@ -1734,6 +1743,37 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
         app.tick()
         await settle(app, pilot)
         assert sorted(FakePulls.asked) == ["Acme/ledger-api", "djp3/agent-frolic"]
+
+
+@drive
+async def test_a_repository_is_on_the_slow_timer_only_once_it_has_been_read_since_its_hook_went_live(isolated):
+    """What changed between its last read and the hook going live was told to nobody."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(ngrok_domain="frolic.ngrok-free.dev").save()             # webhooks are off, for now
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        ours = app.store.get("djp3/agent-frolic")
+        age(app, minutes=4)                                           # read four minutes ago,
+        await to_setup(app, pilot)
+        await pilot.press("w")                                        # and now webhooks are turned on
+        await pilot.pause()
+        await fill(app, pilot, authtoken=AUTHTOKEN, domain="frolic.ngrok-free.dev")
+        await settle(app, pilot)
+        assert app.tunnel_state == "open" and app.covered(ours)
+        assert app.period(ours) == 5 * 60                             # not yet: a change in those four minutes
+        FakePulls.asked.clear()                                       # was told to nobody
+        age(app, minutes=1)
+        app.tick()                                                    # so the fifth minute still reads it,
+        await settle(app, pilot)
+        assert "djp3/agent-frolic" in FakePulls.asked
+        assert app.period(ours) == 30 * 60                            # and from that read on, silence means quiet
+        FakePulls.asked.clear()
+        age(app)
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["Acme/ledger-api"]
 
 
 @drive
@@ -1768,6 +1808,7 @@ async def test_a_read_that_failed_is_tried_again_on_the_short_timer_webhook_or_n
     async with app.run_test(size=(140, 40)) as pilot:
         await settle(app, pilot)
         ours = app.store.get("djp3/agent-frolic")
+        await read_since_hooked(app, pilot)
         assert app.covered(ours) and app.period(ours) == 30 * 60
         FakePulls.broken["djp3/agent-frolic"] = "GitHub's rate limit is used up for now. Try again in a few minutes."
         FakePulls.asked.clear()

@@ -366,6 +366,7 @@ class Frolic(App):
         self.stale: set[str] = set()              # repositories that changed while being fetched
         self.read_at: dict[str, float] = {}       # repository (lower case) -> when a read of it last ended,
                                                   # whether it worked or not: its timer runs from then
+        self.read_began: dict[str, float] = {}    # repository (lower case) -> when its last read was asked for
         self.teams_tried_at = 0.0                 # when the viewer's teams were last asked for
         self.ticked_at = 0.0                      # when the clock last ticked
         self.agents: dict = {}                    # (repository, number) -> the agents on it; nothing reports them yet
@@ -444,8 +445,15 @@ class Frolic(App):
 
         The slow timer is for a repository whose last read worked. One whose last read
         failed is on the short one until a read works: what the board shows of it is not
-        known to be right, however quiet GitHub is."""
-        slow = self.covered(repo) and repo.name.lower() not in self.pull_trouble
+        known to be right, however quiet GitHub is.
+
+        And it is for a repository read since its webhook was confirmed. What changed
+        between an earlier read and the hook going live was told to nobody: the hook was not
+        there, or pointed elsewhere. So until a read has begun after that, the timer stays
+        short, and one ordinary read closes the gap."""
+        key = repo.name.lower()
+        slow = (self.covered(repo) and key not in self.pull_trouble
+                and self.read_began.get(key, 0.0) >= self.hooked.get(key, 0.0))
         minutes = self.settings.poll_minutes * (self.SAFETY_POLLS if slow else 1)
         return min(minutes, Settings.POLL_MOST) * 60
 
@@ -775,6 +783,7 @@ class Frolic(App):
         self.stale.clear()
         self.news = None
         self.read_at.clear()
+        self.read_began.clear()
         self.hook_at.clear()
         if self.tunnel is not None or self.receiver is not None:
             self.stop_services()
@@ -836,7 +845,7 @@ class Frolic(App):
         if not asked or old == new:
             return repo, False
         for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
-                     self.hook_at):
+                     self.read_began, self.hook_at):
             held.pop(old, None)
         self.say(f"{asked} is now {name} on GitHub", INK)
         return repo, True
@@ -1216,6 +1225,7 @@ class Frolic(App):
                 self.stale.add(key)
             else:
                 self.fetching.add(key)
+                self.read_began[key] = time.time()
                 repo = self.store.get(name)                  # its long-lived branches, as they are now
                 wanted.append((name, None if repo is None or repo.long_lived is None else list(repo.long_lived)))
         if wanted:
