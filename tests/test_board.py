@@ -92,7 +92,7 @@ def colors(app, needle):
 async def test_the_board_is_the_first_screen_once_there_is_a_token_and_draws_what_was_read(isolated):
     a_board()
     app = main.Frolic()
-    async with app.run_test(size=(150, 46)) as pilot:
+    async with app.run_test(size=(160, 46)) as pilot:
         await settle(app, pilot)
         assert app.screen is app.board
         shown = screen(app)
@@ -121,30 +121,34 @@ async def test_the_board_is_the_first_screen_once_there_is_a_token_and_draws_wha
                                                   "#143 you · review", "#12 bob · review · holds up #13")]
         assert efforts == sorted(efforts)
         assert "https://github.com/djp3/agent-frolic/pull/12" in shown and "owner    you" in shown
-        # quiet is a bar under its scale, at the right edge; the drawer has the figure
+        # the age is a bar and a figure in days and hours, at the right edge under "age"; the drawer
+        # says how long too
         head = next(row for row in shown.splitlines() if "pull request" in row and "progress" in row)
-        assert head.endswith("m h d w")
-        at = head.index("m h d w")
+        assert head.endswith(" age")
         for number in ("#12 GraphQL", "#9 Jira", "#16 Transcript"):
             row = next(r for r in shown.splitlines() if number in r)
-            assert row[at:at + 4] == "████" and set(row[at:]) <= set("█▏▎▍▌▋▊▉")    # days, at the least
+            bar = re.fullmatch(r".* (━+─*) +\d+d \d\dh", row).group(1)              # days, at the least
+            assert len(bar) == board.AGE_BAR and len(row) == len(head)               # the figure ends where "age" does
         assert "last changed " in shown and " ago" in shown
         for secret in (TOKEN,):
             assert secret not in shown
 
 
-def test_a_narrow_list_gives_up_progress_then_the_names_and_the_quiet_bar():
-    x_review, x_ci, x_prog, names, x_quiet = board.columns(148)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (90, 114, 118, True, 140)
-    assert board.columns(143)[2] is not None and board.columns(142)[2] is None       # progress goes first
-    x_review, x_ci, x_prog, names, x_quiet = board.columns(130)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (93, 117, None, True, 122)     # the bar stays
-    assert board.columns(120)[3] and not board.columns(119)[3]                        # then the names
+def test_a_narrow_list_gives_up_progress_then_the_ages_bar_then_the_names():
+    x_review, x_ci, x_prog, names, x_quiet = board.columns(160)
+    assert (x_review, x_ci, x_prog, names, x_quiet) == (88, 112, 116, True, 138)
+    assert board.columns(157)[2] is not None and board.columns(156)[2] is None       # progress goes first
+    x_review, x_ci, x_prog, names, x_quiet = board.columns(140)
+    assert (x_review, x_ci, x_prog, names, x_quiet) == (89, 113, None, True, 118)     # the bar stays
+    assert board.columns(134)[3:] == (True, 134 - board.QUIET)                        # then the bar goes: the
+    assert board.columns(133)[3:] == (True, 133 - board.AGE_FIGURE - 1)               # figure has the column
+    assert board.columns(121)[3] and not board.columns(120)[3]                        # then the names
     x_review, x_ci, x_prog, names, x_quiet = board.columns(100)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (82, 91, None, False, 95)      # one block under "quiet"
-    assert board.columns(87)[0] is not None and board.columns(86)[0] is None          # then the review column
-    assert board.columns(86)[1:] == (77, None, False, 81)
-    assert board.columns(78)[1] is not None and board.columns(77)[1] is None          # then the checks
+    assert (x_review, x_ci, x_prog, names, x_quiet) == (78, 87, None, False, 91)
+    assert board.columns(91)[0] is not None and board.columns(90)[0] is None          # then the review column
+    assert board.columns(90)[1:] == (77, None, False, 81)
+    assert board.columns(82)[1] is not None and board.columns(81)[1] is None          # then the checks, and the
+    assert board.columns(81) == (None, None, None, False, 76)                         # hours of an age past a day
     assert board.columns(74) == (None, None, None, False, 69)
 
 
@@ -165,8 +169,10 @@ async def test_in_a_narrow_window_every_row_keeps_its_number_and_the_headings_ke
         shown = screen(app)
         for number in ("#12 ", "#13 ", "#9 ", "#16 "):
             assert any(number in row for row in shown.splitlines()), number
-        head = next(row for row in shown.splitlines() if "pull request" in row and "quiet" in row)
-        assert "review" not in head and head.index("pull request") < head.index("quiet")
+        head = next(row for row in shown.splitlines() if "pull request" in row and row.endswith(" age"))
+        assert "review" not in head and head.index("pull request") < head.index(" age")
+        row = next(r for r in shown.splitlines() if "#16 " in r)
+        assert re.search(r" \d+d$", row) and len(row) == len(head) and "━" not in row     # an age's larger unit
 
 
 @drive
@@ -215,16 +221,17 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
 
 
 @drive
-async def test_a_narrow_window_shows_quiet_as_one_block(isolated):
+async def test_in_a_narrow_window_an_age_is_its_figure_alone(isolated):
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(104, 46)) as pilot:
         await settle(app, pilot)
         shown = screen(app)
         head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
-        assert head.endswith("quiet") and "m h d w" not in shown
-        row = next(r for r in shown.splitlines() if "#16 Transcript" in r)
-        assert row[head.index("quiet"):] in set("▅▆▇█")                               # days, at the least
+        assert head.endswith(" age")
+        for number in ("#12 GraphQL", "#16 Transcript"):
+            row = next(r for r in shown.splitlines() if number in r)
+            assert re.search(r" \d+d \d\dh$", row) and len(row) == len(head) and "━" not in row     # no bar
 
 
 @drive
@@ -310,9 +317,9 @@ async def test_focus_dims_what_is_not_theirs_and_escape_brings_everyone_back(iso
         await pilot.press("tab", "tab", "tab")                                # everyone → you → tobias → bob
         await pilot.pause()
         assert app.board.focus == board.Focus("crew", "bob")
-        # not bob's: dimmed, but for the rule, and a quiet bar that has faded darker than that already
+        # not bob's: dimmed, but for the rule, and what is left of its age's bar, darker than that already
         other = {ink for ink, _ in colors(app, "#16 Transcript")} - {dim, board.DIVIDER.lower()}
-        assert all(light(ink) < light(dim) for ink in other)
+        assert other == {board.BAR_TRACK.lower()} and all(light(ink) < light(dim) for ink in other)
         assert dim not in {ink for ink, _ in colors(app, "#13 Review")}       # queued behind what waits on bob
         await pilot.press("shift+tab")
         await pilot.pause()
@@ -1305,49 +1312,65 @@ async def test_a_click_where_it_needs_effort_picks_that_pull_request_and_the_lis
         assert deck.sel == far
 
 
-# ---- each repository's two bars -----------------------------------------------------------
+# ---- the bars: each repository's timer, and an age -----------------------------------------
 
-def test_the_two_bars_are_at_most_three_runs_of_like_cells():
-    """From the left: where neither bar reaches, where only the longer does, where both do."""
-    track, read, hook = board.TRACK, board.POLL_INK, board.HOOK
-    full, half, quarter = board.BAR, board.BAR // 2, board.BAR // 4
-    assert board.fresh_bar(1, 1) == [("▀" * full, f"{read} on {hook}")]
-    assert board.fresh_bar(0, 0) == [("▀" * full, f"{track} on {track}")]
-    assert board.fresh_bar(1, 0) == [("▀" * full, f"{read} on {track}")]
-    assert board.fresh_bar(0.5, 0.75) == [("▀" * quarter, f"{track} on {track}"),
-                                          ("▀" * quarter, f"{track} on {hook}"),
-                                          ("▀" * half, f"{read} on {hook}")]
-    assert board.fresh_bar(0.75, 0.5) == [("▀" * quarter, f"{track} on {track}"),
-                                          ("▀" * quarter, f"{read} on {track}"),
-                                          ("▀" * half, f"{read} on {hook}")]
-    for read_left, hook_left in ((0.01, 0), (0.3, 0.9), (2, -1)):         # always BAR cells, whatever it is given
-        assert sum(len(text) for text, _ in board.fresh_bar(read_left, hook_left)) == full
+def test_a_thin_bars_white_is_anchored_at_the_event_the_time_is_from_or_to():
+    ink, track, full = board.BAR_INK, board.BAR_TRACK, board.AGE_BAR
+    # time since: the white starts at the left and grows, whole only when all of it has gone by
+    assert board.thin_bar(0) == [("─" * full, track)]
+    assert board.thin_bar(1) == [("━" * full, ink)]
+    assert board.thin_bar(0.5) == [("━" * (full // 2), ink), ("─" * (full // 2), track)]
+    assert board.thin_bar(0.99) == [("━" * (full - 1), ink), ("─", track)]
+    # time until: the white is what is left, ends at the right, and is gone only when the time is up
+    assert board.thin_bar(1, until=True) == [("━" * full, ink)]
+    assert board.thin_bar(0, until=True) == [("─" * full, track)]
+    assert board.thin_bar(0.5, until=True) == [("─" * (full // 2), track), ("━" * (full // 2), ink)]
+    assert board.thin_bar(0.01, until=True) == [("─" * (full - 1), track), ("━", ink)]
+    for part in (0.01, 0.3, 2, -1):                                           # always that many cells
+        assert sum(len(text) for text, _ in board.thin_bar(part)) == full
+        assert sum(len(text) for text, _ in board.thin_bar(part, until=True)) == full
 
 
-def bars(app, needle):
-    """The two thin bars on the screen line that holds `needle`: how many cells of the
-    upper one are lit, how many of the lower one, and how many cells there are."""
+def test_an_age_is_drawn_in_the_room_its_column_has():
+    age = 4 * 86400 + 7 * 3600
+
+    def said(room, seconds=age):
+        return "".join(text for text, _ in board.age_cells(seconds, room))
+
+    assert said(board.QUIET) == "━━━━━━━━────   4d 07h"                        # its bar and its figure
+    assert said(board.QUIET, 128 * 86400 + 11 * 3600) == "━━━━━━━━━━━━ 128d 11h"
+    assert said(board.QUIET, 20) == "────────────       0h"
+    assert said(board.AGE_FIGURE + 1) == "  4d 07h"                           # less room: the figure alone
+    assert said(5) == "  4d" and said(5, 21 * 3600) == " 21h"                 # the least: its larger unit
+    assert len(said(board.QUIET)) == board.QUIET - 1                          # a cell is left before the edge
+    assert board.age_cells(None, board.QUIET) == []                           # an age nobody knows
+
+
+def timer(app, needle):
+    """The timer on the screen line that holds `needle`: how many cells of its bar are
+    white, how many cells the bar has (0 when it is left out), and the figure after it
+    ("" for none)."""
     for strip in app.screen._compositor.render_strips():
         if needle not in strip.text:
             continue
-        upper = lower = cells = 0
+        filled = cells = 0
         for segment in strip:
-            n = segment.text.count("▀")
-            if not n or segment.style is None:
-                continue
-            ink = segment.style.color.get_truecolor().hex.lower() if segment.style.color else ""
-            back = segment.style.bgcolor.get_truecolor().hex.lower() if segment.style.bgcolor else ""
-            cells += n
-            upper += n if ink == board.POLL_INK.lower() else 0
-            lower += n if back == board.HOOK.lower() else 0
-        return upper, lower, cells
+            text, style = segment.text, segment.style
+            ink = style.color.get_truecolor().hex.lower() if style is not None and style.color else ""
+            if text and set(text) <= {"━"} and ink == board.BAR_INK.lower():
+                filled, cells = filled + len(text), cells + len(text)
+            elif text and set(text) <= {"─"} and ink == board.BAR_TRACK.lower():
+                cells += len(text)
+        figure = re.search(r" (-\d+m|0m)$", strip.text.rstrip())
+        return filled, cells, figure.group(1) if figure else ""
     raise AssertionError(f"no line with {needle!r}")
 
 
 @drive
-async def test_each_repositorys_line_ends_in_two_bars_of_its_own(isolated):
-    """The upper one empties until that repository is next read on its timer, the lower one
-    since GitHub last sent a delivery about it. They used to be one pair, in the top line."""
+async def test_each_repositorys_line_ends_in_its_own_timer(isolated):
+    """A thin bar whose white is the time left until that repository is next read, and after
+    it the minutes left, counted up to nought. It stands in the age column, over its pull
+    requests' bars, and its white ends at the right where theirs starts at the left."""
     a_board()
     keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
     Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
@@ -1357,45 +1380,52 @@ async def test_each_repositorys_line_ends_in_two_bars_of_its_own(isolated):
         app.draw()
         await pilot.pause()
         ours, theirs, quiet = "╪ djp3/agent-frolic", "╪ acme/web-console", "╪ djp3/quiet-one"
-        assert bars(app, ours) == (board.BAR, board.BAR, board.BAR)          # just read, and GitHub tells us
-        assert bars(app, theirs) == (board.BAR, 0, board.BAR)                # not ours to hook: no lower bar
-        assert bars(app, quiet) == (board.BAR, board.BAR, board.BAR)         # one with nothing open has them too
+        full = board.AGE_BAR
+        assert timer(app, theirs) == (full, full, "-5m")                     # just read: five minutes to go
+        assert timer(app, ours)[:2] == timer(app, quiet)[:2] == (full, full)     # one with nothing open has one too
         top = screen(app).splitlines()[0]
-        assert "▀▀" not in top and "▀ read  ▄ webhook" in top                # the top line keeps only their key
+        assert "━" not in top and "read" not in top                          # and the top line has no key to them
 
         app.hooked["djp3/agent-frolic"] -= 3600                              # its hook was confirmed long ago,
         span = app.period(app.store.get("djp3/agent-frolic"))                # so it is on the slow timer
         assert span == 30 * 60
         app.read_at["djp3/agent-frolic"] -= span / 2
-        app.hook_at["djp3/agent-frolic"] = time.time() - span / 4
         app.draw()
         await pilot.pause()
-        assert bars(app, ours) == (board.BAR // 2, board.BAR * 3 // 4, board.BAR)    # this one's have drained
-        assert bars(app, theirs) == (board.BAR, 0, board.BAR)                        # that one's have not
-        age(app, only=["acme/web-console"])                                  # its five minutes are up: it is
-        app.tick()                                                           # read, and its bar is full again
+        assert timer(app, ours) == (full // 2, full, "-15m")                 # half its time is left
+        assert timer(app, theirs) == (full, full, "-5m")                     # all of that one's is
+        # its bar stands over its pull requests' bars, its white at the right end where theirs is
+        # at the left, and its figure ends where theirs do
+        rows = screen(app).splitlines()
+        its, under = next(r for r in rows if ours in r), next(r for r in rows if "#12 GraphQL" in r)
+        assert its.rindex("━") == under.index("━") + full - 1 and its.index("─") == under.index("━")
+        assert len(its) == len(under)
+
+        age(app, only=["acme/web-console"])                                  # its five minutes are up: the
+        app.draw()                                                           # white is gone, and the figure
+        await pilot.pause()                                                  # is nought
+        assert timer(app, theirs) == (0, full, "0m")
+        app.tick()                                                           # it is read, and both start again
         await settle(app, pilot)
         app.draw()
         await pilot.pause()
-        assert bars(app, theirs) == (board.BAR, 0, board.BAR) and bars(app, ours)[0] == board.BAR // 2
-
-        app.hooked["djp3/quiet-one"] -= 3600                                 # another's hook, an hour old with
-        app.draw()                                                           # nothing heard since: its lower
-        await pilot.pause()                                                  # bar has run out,
-        assert bars(app, quiet)[1] == 0
-        app.hook_done("djp3/quiet-one", 9, "webhook #9 registered", app.webhooks_run)    # and is full again when the
-        await pilot.pause()                                                  # hook is confirmed anew, however
-        assert bars(app, quiet)[1] == board.BAR                              # long the tunnel has been open
+        assert timer(app, theirs) == (full, full, "-5m") and timer(app, ours)[0] == full // 2
 
 
 @drive
-async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_bars(isolated):
+async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_timer(isolated):
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(100, 40)) as pilot:
         await settle(app, pilot)
         app.draw()
         await pilot.pause()
-        assert bars(app, "╪ djp3/agent-frolic")[2] == 0                      # no room: they are left out,
-        assert "djp3/agent-frolic  ●1  ○2  4 open" in line(app, "╪ djp3/agent-frolic")     # not drawn over it
-        assert bars(app, "╪ djp3/quiet-one")[2] == board.BAR                 # a shorter line has room for them
+        assert timer(app, "╪ djp3/agent-frolic") == (0, 0, "-5m")            # no room for a bar: the figure alone,
+        assert "djp3/agent-frolic  ●1  ○2  4 open ═" in line(app, "╪ djp3/agent-frolic")   # after all of the line
+    async with main.Frolic().run_test(size=(82, 40)) as pilot:               # narrower still: the figure goes
+        app = pilot.app                                                      # too, where the line is full
+        await settle(app, pilot)
+        app.draw()
+        await pilot.pause()
+        assert timer(app, "╪ djp3/agent-frolic") == (0, 0, "")
+        assert "djp3/agent-frolic  4 open ═" in line(app, "╪ djp3/agent-frolic")           # and the count stays

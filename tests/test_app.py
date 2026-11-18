@@ -769,7 +769,7 @@ async def test_a_renamed_repository_read_before_it_is_checked_again_takes_its_ne
         age(app)
         app.tick()
         await settle(app, pilot)
-        assert FakePulls.asked == ["Acme/new"] and app.freshness("Acme/new")[0] > 0.95
+        assert FakePulls.asked == ["Acme/new"] and app.timer("Acme/new")[0] < 0.05
 
 
 @drive
@@ -1787,7 +1787,7 @@ async def test_a_repository_that_leaves_the_list_takes_its_timers_with_it(isolat
         await settle(app, pilot)
         app.delivered(Delivery("pull_request", "d-1", "Acme/ledger-api", "opened"))
         await settle(app, pilot)
-        kept = (app.read_at, app.read_began, app.hook_at, app.hook_read_at, app.pulls)
+        kept = (app.read_at, app.read_began, app.hook_read_at, app.pulls)
         assert all("acme/ledger-api" in held for held in kept)
         await to_setup(app, pilot)
         await pilot.press("down")
@@ -1864,15 +1864,15 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
         assert app.tunnel_state == "open" and app.covered(ours) and not app.covered(theirs_)    # not ours to hook
         await read_since_hooked(app, pilot)
         assert app.period(theirs_) == 5 * 60 and app.period(ours) == app.SAFETY_POLLS * 5 * 60 == 30 * 60
-        read, heard = app.freshness("djp3/agent-frolic")
-        assert read > 0.95 and heard > 0.95                           # both bars full: just read, tunnel just open
-        assert app.freshness("Acme/ledger-api")[1] == 0               # GitHub sends nothing about this one
+        ran, left = app.timer("djp3/agent-frolic")
+        assert ran < 0.05 and 29 * 60 < left <= 30 * 60               # just read: its half hour is ahead of it
+        assert 4 * 60 < app.timer("Acme/ledger-api")[1] <= 5 * 60     # and that one's five minutes
         FakePulls.asked.clear()
         age(app)                                                      # the poll's five minutes
         app.tick()
         await settle(app, pilot)
         assert FakePulls.asked == ["Acme/ledger-api"]
-        assert 0.80 < app.freshness("djp3/agent-frolic")[0] < 0.85    # five of its thirty are gone
+        assert 0.15 < app.timer("djp3/agent-frolic")[0] < 0.20        # five of its thirty have run
         age(app, minutes=app.settings.poll_minutes * (app.SAFETY_POLLS - 1))      # half an hour in all
         app.tick()
         await settle(app, pilot)
@@ -1880,12 +1880,12 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
 
         app.delivered(Delivery("pull_request", "d-2", "djp3/agent-frolic", "opened"))
         await settle(app, pilot)
-        assert app.freshness("djp3/agent-frolic")[1] > 0.95           # heard from: its lower bar is full
+        assert app.timer("djp3/agent-frolic")[0] < 0.05               # a delivery's read starts its timer again
         FakePulls.asked.clear()
         await turn_webhooks_off(app, pilot)                           # no more deliveries will come:
         await settle(app, pilot)
         assert not app.covered(ours) and app.period(ours) == 5 * 60   # it is back on the short timer
-        assert app.freshness("djp3/agent-frolic")[1] == 0
+        assert app.timer("djp3/agent-frolic")[1] <= 5 * 60            # and counts from five minutes
         age(app)
         app.tick()
         await settle(app, pilot)
@@ -2215,7 +2215,7 @@ async def test_a_timer_is_never_shorter_than_a_minute_whatever_the_setting_holds
         app.settings.poll_minutes = 0
         ours = app.store.get("djp3/agent-frolic")
         assert app.period(ours) == 60
-        assert app.freshness("djp3/agent-frolic")[0] > 0.9            # and the bars still draw
+        assert app.timer("djp3/agent-frolic")[0] < 0.1                # and its bar still draws
         FakePulls.asked.clear()
         app.tick()
         await settle(app, pilot)

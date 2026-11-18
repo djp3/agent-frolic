@@ -399,8 +399,6 @@ class Frolic(App):
         self.news: tuple[float, str] | None = None        # the last thing that happened on GitHub, for the
                                                           # board's ticker (set by `happened` alone)
         self.notice: tuple[float, str] | None = None      # words in the ticker's place, and until when (announce)
-        self.hook_at: dict[str, float] = {}       # repository (lower case) -> when GitHub last sent a delivery
-                                                  # about it
         self.board = Board()
         self.setup = SetupScreen()
         self.title_shown: str | None = None       # the terminal title last written: none is written twice
@@ -517,23 +515,16 @@ class Frolic(App):
             return False
         return key not in self.read_at or now >= self.read_at[key] + self.period(repo)
 
-    def freshness(self, name: str) -> tuple[float, float]:
-        """What a repository's two bars show, each from 1 (full) down to 0: how much of its
-        timer is left before it is read again, and how much of that same span is left since
-        GitHub was last heard from about it: its last delivery, or its webhook being
-        confirmed, whichever is later. A hook confirmed a moment ago is as fresh as webhooks
-        get, however long the tunnel has been open. The second is 0 for a repository GitHub
-        sends no webhooks for."""
+    def timer(self, name: str) -> tuple[float, float]:
+        """What a repository's line shows of its timer: how far it has run toward its next
+        read, from 0 (just read) to 1 (due), and how many seconds are left until then. One
+        that has not been read yet is due."""
         repo = self.store.get(name)
         if repo is None:
             return 0.0, 0.0
-        key, span, now = repo.name.lower(), self.period(repo), time.time()
-
-        def left(since: float) -> float:
-            return max(0.0, min(1.0, 1 - (now - since) / span)) if since else 0.0
-
-        heard = max(self.hook_at.get(key, 0.0), self.hooked.get(key, 0.0)) if self.covered(repo) else 0.0
-        return left(self.read_at.get(key, 0.0)), left(heard)
+        span, read = self.period(repo), self.read_at.get(repo.name.lower(), 0.0)
+        gone = min(span, max(0.0, time.time() - read)) if read else span
+        return gone / span, span - gone
 
     def retry_token(self) -> None:
         """Ask GitHub again about the stored token. The screen keeps saying "not checked"
@@ -887,7 +878,6 @@ class Frolic(App):
         self.stale.clear()
         self.read_at.clear()
         self.read_began.clear()
-        self.hook_at.clear()
         if self.tunnel is not None or self.receiver is not None:
             self.stop_services()
             self.say("webhooks: tunnel closed until there is a token again")
@@ -941,7 +931,7 @@ class Frolic(App):
         """Drop all that is kept about a repository under this name (lower case): it has
         left the list, or goes by another name now. Its timers too, or they would outlive it."""
         for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
-                     self.read_began, self.hook_at, self.hook_read_at, self.hook_read_due):
+                     self.read_began, self.hook_read_at, self.hook_read_due):
             held.pop(key, None)
 
     def take_name(self, asked: str, name: str, private: bool, admin: bool,
@@ -1226,8 +1216,6 @@ class Frolic(App):
         known = repo is not None or not delivery.repo
         self.say(f"webhook · {delivery.said}" + ("" if known else "  (not in the list)"), INK)
         now = time.time()
-        if repo is not None:
-            self.hook_at[repo.name.lower()] = now
         self.happened(now, f"webhook · {delivery.said}")
         if repo is not None and repo.shown and delivery.event != "ping":
             self.read_for_webhook(repo.name)                # something changed there: read it again

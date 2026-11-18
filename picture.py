@@ -46,7 +46,7 @@ from typing import Mapping
 from canvas import Segments, cell_len, cut, seg_len
 from pulls import PullRequest, RepoPulls, Review, Step, ago, is_team, known_as, team_slug
 from standing import Standing, settle
-from theme import AXIS, CRIT, GOOD, INK, INK2, MUTED, SERIOUS, UNITS, WAITING, WARN, blend
+from theme import AXIS, CRIT, GOOD, INK, INK2, MUTED, SERIOUS, WAITING, WARN
 
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"            # the dots that turn where an agent is at work
 Key = tuple[str, int]             # a pull request: (repository in lower case, number)
@@ -555,80 +555,41 @@ def quiet(pull: PullRequest, now: datetime | None = None) -> str:
     return ago(pull.updated, now)
 
 
-QUIET = 8                         # cells in the quiet bar: two to each unit of time
-QUIET_UNITS = "mhdw"              # minutes, hours, days, weeks: the letters of its heading
-QUIET_SETTLED = AXIS              # a bar that has been quiet for three months or more
-_MINUTE, _HOUR, _DAY, _WEEK, _SEASON = 60, 3600, 86400, 7 * 86400, 90 * 86400
-_SPANS = ((_MINUTE, _HOUR), (_HOUR, _DAY), (_DAY, _WEEK), (_WEEK, _SEASON))   # each unit, from and to
-_EIGHTHS = "▏▎▍▌▋▊▉"
-_RISE = "▁▂▃▄▅▆▇█"
+AGE_BAR = 12                      # cells in the bar of an age, and in the bar of a repository's timer
+AGE_FIGURE = 8                    # cells the figure after a bar takes at the most: "128d 11h"
+QUIET = AGE_BAR + 1 + AGE_FIGURE + 1             # the age column: the bar, the figure, a cell before the edge
+_SPANS = ((60, 3600), (3600, 86400), (86400, 7 * 86400), (7 * 86400, 90 * 86400))   # minutes, hours, days, weeks
 
 
-def quiet_scale() -> Segments:
-    """The heading over the quiet bar: each unit's letter where its two cells begin, in
-    the color the bar has while the silence is counted in that unit."""
-    out: Segments = []
-    for letter, color in zip(QUIET_UNITS, UNITS):
-        out += [(letter, color), (" ", "")]
-    return out[:-1]
+def age_said(seconds: float, short: bool = False) -> str:
+    """An age in days and hours, and nothing finer: "128d 11h". Under a day it is the hours
+    alone ("21h"), and under an hour that is "0h". `short`, only the larger of the two
+    ("128d"), for a window with room for no more."""
+    hours = max(0, int(seconds // 3600))
+    if hours < 24:
+        return f"{hours}h"
+    return f"{hours // 24}d" if short else f"{hours // 24}d {hours % 24:02d}h"
 
 
-def _reach(seconds: float) -> tuple[float, str]:
-    """(cells, color) of the quiet bar for a silence this long.
+def age_reach(seconds: float) -> float:
+    """How much of its bar an age fills, from 0 to 1: a quarter each for minutes, hours, days
+    and weeks, and within each by the logarithm, so that its first doubling counts for as
+    much as its last. A minute or less is 0, three months or more is 1.
 
-    The cells, 0 to 8: a minute at 0, an hour at 2, a day at 4, a week at 6, three months
-    or more at 8. Within a unit they fill by the logarithm, so its first doubling counts
-    for as much as its last.
-
-    The color is that of the unit the silence is counted in, for the whole bar: minutes,
-    then hours, then days, each at full strength for as long as it lasts. Only the weeks'
-    color fades, by the same step each day, and is the settled grey at three months."""
+    The figure says nothing finer than the hour, so within the hour the bar is what tells
+    two ages apart."""
     for unit, (low, high) in enumerate(_SPANS):
         if seconds < high:
-            cells = 2 * unit + 2 * math.log(max(seconds, low) / low) / math.log(high / low)
-            fading = unit == len(_SPANS) - 1
-            return cells, blend(UNITS[unit], QUIET_SETTLED, (seconds - low) / (high - low)) if fading else UNITS[unit]
-    return float(QUIET), QUIET_SETTLED
+            return (unit + math.log(max(seconds, low) / low) / math.log(high / low)) / len(_SPANS)
+    return 1.0
 
 
-def quiet_place(seconds: float) -> float:
-    """Where a silence this long ends on the quiet scale, 0 to 8."""
-    return _reach(seconds)[0]
-
-
-def _silence(pull: PullRequest, now: datetime | None) -> float | None:
+def silence(pull: PullRequest, now: datetime | None = None) -> float | None:
+    """How many seconds the pull request has been quiet. None when GitHub did not say when
+    it last changed."""
     if pull.updated is None:
         return None
     return max(0.0, ((now or datetime.now(timezone.utc)) - pull.updated).total_seconds())
-
-
-def quiet_bar(pull: PullRequest, now: datetime | None = None) -> tuple[str, str]:
-    """(bar, color): how long the pull request has been quiet, as a bar on the quiet
-    scale, drawn to an eighth of a cell, all of it in the color of the unit the silence
-    has reached. A change within the last minute is a bright tick instead, since that
-    is news."""
-    seconds = _silence(pull, now)
-    if seconds is None:
-        return "", MUTED
-    if seconds < _MINUTE:
-        return _EIGHTHS[0], f"bold {INK}"
-    cells, color = _reach(seconds)
-    part = int((cells - int(cells)) * 8)
-    bar = "█" * int(cells) + (_EIGHTHS[part - 1] if part else "")
-    return bar or _EIGHTHS[0], color                            # never an empty bar
-
-
-def quiet_block(pull: PullRequest, now: datetime | None = None) -> tuple[str, str]:
-    """(block, color): the same in one cell, for a narrow window. The block rises two
-    steps to each unit of time (▁▂ minutes, ▃▄ hours, ▅▆ days, ▇█ weeks and more) and
-    has the color of the bar."""
-    seconds = _silence(pull, now)
-    if seconds is None:
-        return "", MUTED
-    if seconds < _MINUTE:
-        return _RISE[0], f"bold {INK}"
-    cells, color = _reach(seconds)
-    return _RISE[min(7, int(cells))], color
 
 
 # ---- what needs effort -----------------------------------------------------------------

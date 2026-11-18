@@ -9,12 +9,11 @@ import picture as pictures
 from canvas import plain, seg_len
 from picture import (CHECK_MARK, CHECK_SAID, Agent, Focus, Picture, cells, changes, counts, fingerprint, fit,
                      focuses, humans, in_focus,
-                     key_of, labels, line_agents, mark, move_words, needs_effort, progress, quiet_bar, quiet_block,
-                     quiet_place, quiet_scale, review_cell, review_marks, review_said, reviewers, tree,
-                     waits_words)
+                     AGE_BAR, AGE_FIGURE, QUIET, age_reach, age_said, key_of, labels, line_agents, mark,
+                     move_words, needs_effort, progress, review_cell, review_marks, review_said, reviewers,
+                     silence, tree, waits_words)
 from pulls import RepoPulls, parse_pull, stack
 from test_pulls import node, review, thread
-from theme import AXIS, INK, MUTED, UNITS, blend
 
 NOW = datetime(2026, 11, 14, 16, 0, tzinfo=timezone.utc)
 TIP, OLD = "a1" * 20, "c3" * 20
@@ -294,39 +293,25 @@ def test_marks_review_cells_and_progress():
     assert progress(done, pull(done, 31)) == ("resolved", 2, 2)      # all resolved; the request still stands
 
 
-def test_the_quiet_bar_has_two_cells_to_each_unit_of_time_and_the_color_of_the_unit_it_has_reached():
+def test_an_age_is_said_in_days_and_hours_and_its_bar_has_a_quarter_for_each_unit_of_time():
     minute, hour, day = 60, 3600, 86400
-    assert [quiet_place(s) for s in (5, minute, hour, day, 7 * day, 90 * day, 400 * day)] == [0, 0, 2, 4, 6, 8, 8]
-    assert 0 < quiet_place(10 * minute) < 2 < quiet_place(3 * hour) < 4 < quiet_place(2 * day) < 6
-    assert plain(quiet_scale()) == "m h d w"
-    assert [color for text, color in quiet_scale() if text.strip()] == list(UNITS)    # the heading is the key
+    ages = (20, 59 * minute, hour, 21 * hour + 59 * minute, day, 4 * day + 7 * hour, 128 * day + 11 * hour)
+    assert [age_said(s) for s in ages] == ["0h", "0h", "1h", "21h", "1d 00h", "4d 07h", "128d 11h"]   # nothing finer
+    assert [age_said(s, short=True) for s in ages] == ["0h", "0h", "1h", "21h", "1d", "4d", "128d"]   # the larger unit
+    assert all(len(age_said(s)) <= AGE_FIGURE for s in (0, 999 * day + 23 * hour))
+    assert QUIET == AGE_BAR + 1 + AGE_FIGURE + 1                      # the bar, the figure, a cell before the edge
+    # the bar: a quarter each for minutes, hours, days and weeks, full at three months
+    assert [age_reach(s) for s in (5, minute, hour, day, 7 * day, 90 * day, 400 * day)] == [0, 0, 0.25, 0.5, 0.75, 1, 1]
+    assert 0 < age_reach(10 * minute) < 0.25 < age_reach(3 * hour) < 0.5 < age_reach(2 * day) < 0.75
+    assert 0.75 < age_reach(30 * day) < 1
+    assert age_reach(12 * minute) < age_reach(47 * minute)            # both are "0h": the bar tells them apart
 
     def quiet_for(seconds):
         at = datetime.fromtimestamp(NOW.timestamp() - seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return parse_pull("o/app", node(40, "x", updatedAt=at))
 
-    def bar(seconds):
-        return quiet_bar(quiet_for(seconds), NOW)
-
-    minutes, hours, days, weeks = UNITS
-    assert bar(20) == ("▏", f"bold {INK}")                           # within the minute: news
-    assert bar(minute) == ("▏", minutes)                             # never an empty bar
-    # minutes, hours and days: the whole bar in the unit's color, at full strength throughout
-    assert bar(40 * minute) == ("█▊", minutes) and bar(hour - 1) == ("█▉", minutes)
-    assert bar(hour) == ("██", hours) and bar(3 * hour) == ("██▋", hours) and bar(20 * hour) == ("███▉", hours)
-    assert bar(day) == ("████", days) and bar(4 * day) == ("█████▍", days) and bar(7 * day - 1) == ("█████▉", days)
-    # weeks: the whole bar again, and only this color fades, to grey at three months
-    assert bar(7 * day) == ("██████", weeks)
-    assert bar(9 * day) == ("██████▏", blend(weeks, AXIS, 2 / 83))
-    assert bar(60 * day) == ("███████▋", blend(weeks, AXIS, 53 / 83))
-    assert bar(90 * day) == bar(400 * day) == ("████████", AXIS)
-    # the same in one cell: two steps to each unit, in the color of the bar
-    blocks = [quiet_block(quiet_for(s), NOW) for s in (
-        20, 5 * minute, 40 * minute, 3 * hour, 20 * hour, 2 * day + hour, 5 * day, 9 * day, 60 * day, 90 * day)]
-    assert [block for block, _ in blocks] == list("▁▁▂▃▄▅▆▇██")
-    assert [ink for _, ink in blocks[1:7]] == [minutes, minutes, hours, hours, days, days] and blocks[-1][1] == AXIS
-    never = parse_pull("o/app", node(41, "y", updatedAt=None))
-    assert quiet_bar(never, NOW) == ("", MUTED) and quiet_block(never, NOW) == ("", MUTED)
+    assert silence(quiet_for(3 * hour), NOW) == 3 * hour
+    assert silence(parse_pull("o/app", node(41, "y", updatedAt=None)), NOW) is None
 
 
 def test_the_mark_is_about_the_review_whatever_the_checks_and_the_next_move_are():
