@@ -90,7 +90,9 @@ Space shows or hides one on the board, and `b` names its long-lived branches (su
 address, and [ngrok](https://ngrok.com) gives this Mac one: press `w` and enter your ngrok
 authtoken and domain (a free account has one domain). The app opens the tunnel while it is
 running, and registers a webhook on each shown repository you administer. Repositories you do
-not administer cannot have one, and are read every five minutes instead.
+not administer cannot have one, and are read every five minutes instead. The app keeps checking
+that the tunnel still leads back to it; while it does not, every repository is read every five
+minutes.
 
 | key | on the setup screen |
 |-----|---------------------|

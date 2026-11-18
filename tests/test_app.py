@@ -1802,6 +1802,54 @@ async def test_a_repository_is_on_the_slow_timer_only_once_it_has_been_read_sinc
 
 
 @drive
+async def test_a_tunnel_that_stops_leading_here_is_noticed_and_the_short_timers_take_over(isolated, monkeypatch):
+    """It is checked when it opens. It can die later: another ngrok session takes the address,
+    the network changes. Then no delivery arrives, and silence means nothing."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await read_since_hooked(app, pilot)
+        ours = app.store.get("djp3/agent-frolic")
+        assert app.tunnel_state == "open" and app.period(ours) == 30 * 60
+        asked = []
+        leads_here = [True]
+        monkeypatch.setattr(main, "wait_reachable", lambda url, nonce, **how: asked.append(url) or leads_here[0])
+        app.tick()
+        await settle(app, pilot)
+        assert asked == []                                            # checked a moment ago: not yet again
+        app.tunnel_checked_at -= app.settings.poll_minutes * 60 + 1
+        app.tick()
+        await settle(app, pilot)
+        assert asked == ["https://frolic.ngrok-free.dev"] and app.tunnel_state == "open"     # still good
+
+        leads_here[0] = False                                         # the tunnel dies
+        app.tunnel_checked_at -= app.settings.poll_minutes * 60 + 1
+        app.tick()
+        await settle(app, pilot)
+        assert app.tunnel_state == "unreachable" and not app.covered(ours) and app.period(ours) == 5 * 60
+        assert any("no longer leads back to this app" in text for text in said(app))
+        FakePulls.asked.clear()
+        age(app)
+        app.tick()
+        await settle(app, pilot)
+        assert sorted(FakePulls.asked) == ["Acme/ledger-api", "djp3/agent-frolic"]      # both, every five minutes
+
+        leads_here[0] = True                                          # and comes back
+        confirmed = app.hooked.get("djp3/agent-frolic")
+        app.tunnel_checked_at -= app.settings.poll_minutes * 60 + 1
+        app.tick()
+        await settle(app, pilot)
+        assert app.tunnel_state == "open" and app.covered(ours)
+        assert app.hooked["djp3/agent-frolic"] > (confirmed or 0)     # its hook is confirmed afresh,
+        assert app.period(ours) == 5 * 60                             # and it is read once more
+        await read_since_hooked(app, pilot)                           # before silence means quiet again
+        assert app.period(ours) == 30 * 60
+
+
+@drive
 async def test_while_github_works_out_whether_a_pull_request_can_merge_the_timer_stays_short(isolated):
     """It works that out a little after a push to the base branch, and sends no webhook
     when it knows. Left to the slow timer, "ready to merge" would be missing for half an hour."""

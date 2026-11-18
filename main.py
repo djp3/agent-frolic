@@ -369,6 +369,8 @@ class Frolic(App):
         self.read_began: dict[str, float] = {}    # repository (lower case) -> when its last read was asked for
         self.teams_tried_at = 0.0                 # when the viewer's teams were last asked for
         self.ticked_at = 0.0                      # when the clock last ticked
+        self.tunnel_checked_at = 0.0              # when the tunnel was last checked to lead back here (or
+        self.tunnel_checking = False              # opened); and whether such a check is under way
         self.agents: dict = {}                    # (repository, number) -> the agents on it; nothing reports them yet
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
@@ -423,6 +425,11 @@ class Frolic(App):
                                                            # known: until it works. Known ones are left be
         if self.token_state == "unchecked" and time.time() >= self.token_tried_at + self.TOKEN_RETRY_S:
             self.retry_token()
+        if (self.tunnel is not None and self.receiver is not None and not self.tunnel_checking
+                and self.tunnel_state in ("open", "unreachable")
+                and (slept or now >= self.tunnel_checked_at + self.settings.poll_minutes * 60)):
+            self.tunnel_checking, self.tunnel_checked_at = True, now       # does it still lead back here?
+            self.check_tunnel(self.webhooks_run, self.tunnel.url, self.receiver.nonce)
         for key, at in list(self.hook_read_due.items()):
             if time.time() >= at:
                 del self.hook_read_due[key]
@@ -1059,6 +1066,31 @@ class Frolic(App):
                                   "The tunnel opened, but its address did not lead back to this app.")
             self.later(self.webhooks_changed, run, "open", "")
 
+    @work(thread=True, group="webhooks")
+    def check_tunnel(self, run: int, url: str, nonce: str) -> None:
+        """Ask again whether the public address leads back to this app: the check made when
+        the tunnel opened, repeated for as long as it is open (tick). A tunnel can die
+        later, another ngrok session taking its address or the network changing, and
+        nothing else would say so."""
+        ok = wait_reachable(url, nonce, tries=3, pause=2.0, sleep=self.closing.wait,
+                            stop=lambda: self.closing.is_set() or run != self.webhooks_run)
+        self.later(self.tunnel_checked, run, ok)
+
+    def tunnel_checked(self, run: int, ok: bool) -> None:
+        """What check_tunnel found. A tunnel that no longer leads here is "unreachable": no
+        repository is covered then, so each is back on the short timer. One that leads here
+        again is open again, and the hooks are confirmed afresh (webhooks_changed): what
+        changed meanwhile was told to nobody, and each repository is read once before its
+        timer is the slow one again (period)."""
+        self.tunnel_checking = False
+        if run != self.webhooks_run or self.tunnel is None:  # turned off or started again meanwhile
+            return
+        if ok and self.tunnel_state == "unreachable":
+            self.webhooks_changed(run, "open", "")
+        elif not ok and self.tunnel_state == "open":
+            self.webhooks_changed(run, "unreachable", "The tunnel's address no longer leads back to this app. "
+                                  "Every repository is read on the short timer until it does.")
+
     def hand_on(self, delivery: Delivery) -> None:
         """From the receiver's thread: queue the delivery for the screen's thread, and do not
         wait for it. GitHub's answer waits for this, and the screen may be busy. (Textual's
@@ -1082,6 +1114,7 @@ class Frolic(App):
     def tunnel_changed(self, state: str, note: str) -> None:
         self.tunnel_state, self.tunnel_note = state, note
         if state == "open":
+            self.tunnel_checked_at = time.time()
             self.say(f"webhooks: tunnel open at https://{self.settings.ngrok_domain}", INK)
         elif state in ("failed", "unreachable"):
             self.say(f"webhooks: {note}", INK)
