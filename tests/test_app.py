@@ -755,6 +755,12 @@ async def test_a_renamed_repository_read_before_it_is_checked_again_takes_its_ne
         assert list(app.pulls) == ["acme/new"] and app.board.pic.names == ["Acme/new"]
         assert FakePulls.asked == ["acme/old"]                       # read once
         assert [text for _, text, _ in app.lines if "is now" in text] == ["acme/old is now Acme/new on GitHub"]
+        assert sorted(app.read_at) == ["acme/new"]                   # its timer is the new name's,
+        FakePulls.asked.clear()                                      # so the clock goes on reading it
+        age(app)
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["Acme/new"] and app.freshness("Acme/new")[0] > 0.95
 
 
 @drive

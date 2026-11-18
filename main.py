@@ -1218,7 +1218,7 @@ class Frolic(App):
         if before is None or len(before.pulls) != len(got.pulls):
             self.say(f"{repo.name}: {got.total} open pull request{'' if got.total == 1 else 's'}")
         self.note_changes(repo.name, before, got)
-        self.fetch_ended(name)
+        self.fetch_ended(name, repo.name)                    # under the name it has now, if that changed
 
     def note_changes(self, name: str, before: RepoPulls | None, got: RepoPulls) -> None:
         """Compare this reading with the one before: the pull requests that changed wash on
@@ -1266,17 +1266,23 @@ class Frolic(App):
         self.say(f"{name}: pull requests not read: {note}", INK)
         self.fetch_ended(name)
 
-    def fetch_ended(self, name: str) -> None:
+    def fetch_ended(self, name: str, now_named: str = "") -> None:
         """A read of a repository is over, whether it worked or not, and whatever asked for
         it: its timer starts again from here. One that failed is tried again when the timer
-        runs out, not at once."""
+        runs out, not at once.
+
+        `name` is what the read was asked for under. `now_named` is the repository's name
+        when the read found it renamed on GitHub: the timer is that name's, and so is a
+        read that was asked for while this one was under way. Left under the old name,
+        the timer would be nobody's, and the repository would never be read by the clock."""
         key = name.lower()
         self.fetching.discard(key)
-        self.read_at[key] = time.time()
-        if key in self.stale:                                # it changed while we were reading it
-            self.stale.discard(key)
-            if self.store.get(name) is not None:
-                self.update_pulls([name], "again")
+        again = key in self.stale                            # it changed while we were reading it
+        self.stale.discard(key)
+        name = now_named or name
+        self.read_at[name.lower()] = time.time()
+        if again and self.store.get(name) is not None:
+            self.update_pulls([name], "again")
         self.draw()
 
     def open_pull(self, pull: PullRequest, ref: str) -> None:
