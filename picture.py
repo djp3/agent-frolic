@@ -244,9 +244,7 @@ def tree(picture: Picture) -> list[Row]:
             if low not in picture.notes:
                 rows.append(Row("note", "", name, label="not read yet"))
             continue
-        if not got.pulls:                                        # its own row carries the count
-            continue
-        by_number = {p.number: p for p in got.pulls}
+        by_number = {p.number: p for p in got.pulls}             # (none open: nothing more is added)
         roots = [p for p in got.pulls if not p.parent]
         bases = sorted({p.base for p in roots}, key=lambda b: (b != got.default_branch, b))
         for base in bases:
