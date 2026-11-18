@@ -37,8 +37,14 @@ final class FirstClickTerminalView: LocalProcessTerminalView {
 /// newest GitHub release) once a day and on Check for Updates. Its own window offers the
 /// update and shows that release's notes, which scripts/release.sh embeds in the appcast.
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcessTerminalViewDelegate {
-    /// Shown until the board sets a title of its own (via OSC 0) and whenever it clears it.
-    private let defaultTitle = "agent-frolic"
+    /// The bundle's release number ("0.1.4"); the board gets it as AGENT_FROLIC_VERSION.
+    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    /// Shown until the board sets a title of its own (via OSC 0: the same words, then a hammer
+    /// for each repository it watches) and whenever it clears it.
+    private var defaultTitle: String {
+        guard let v = version, !v.isEmpty else { return "🐓 agent-frolic" }
+        return "🐓 agent-frolic v\(v)"
+    }
     private var window: NSWindow!
     private var terminal: LocalProcessTerminalView!
     private var updater: SPUStandardUpdaterController?
@@ -146,7 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         // The board runs no other program, so the child only needs the PATH it was launched with.
         env.append("PATH=" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"))
         env.append("TERM_PROGRAM=agent-frolic")
-        if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+        if let v = version {
             env.append("AGENT_FROLIC_VERSION=\(v)")
         }
         return env

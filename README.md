@@ -133,6 +133,10 @@ From top to bottom:
 - **The band**: what needs effort, and the drawer for the selected pull request.
 - **The ticker**: the last thing that happened.
 
+The title bar reads 🐓 agent-frolic and the version (v0.1.4, say), then one 🔨 for each
+repository being watched (on screen, with a token GitHub has accepted), so the Dock, Mission
+Control and the window switcher show how many the board is keeping an eye on.
+
 ### Keys
 
 | key | action |

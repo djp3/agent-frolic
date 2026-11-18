@@ -90,6 +90,22 @@ from webhook import Delivery, Receiver
 
 log = logging.getLogger("agent_frolic")
 NO_TEAMS: Mapping[str, str] = MappingProxyType({})   # the viewer's teams while none are known
+# The terminal's title: the Mac app shows it in its title bar (and so in the Dock, Mission
+# Control and the window switcher), iTerm2 in its tab. After the name and version, a hammer
+# for each repository being watched: everyone brings one to a barn raising.
+VERSION = app_version()
+WINDOW_TITLE = f"🐓 agent-frolic v{VERSION}" if VERSION else "🐓 agent-frolic"
+HAMMER = "🔨"
+
+
+def title_sequence(title: str) -> str:
+    """OSC 0 sets the terminal's window title; Textual never sets one itself. An empty
+    title hands the choice back to the terminal."""
+    return f"\x1b]0;{title}\x07"
+
+
+def window_title(watched: int) -> str:
+    return f"{WINDOW_TITLE} {HAMMER * watched}" if watched > 0 else WINDOW_TITLE
 
 
 OPEN_WAIT_S = 10.0             # how long `open` is waited on to say whether it could start the browser
@@ -382,6 +398,8 @@ class Frolic(App):
                                                   # about it
         self.board = Board()
         self.setup = SetupScreen()
+        self.title_shown: str | None = None       # the terminal title last written: none is written twice
+        self.leaving = False                      # set as the app quits: the title stays cleared
 
     def on_mount(self) -> None:
         self.install_screen(self.board, "board")
@@ -396,6 +414,7 @@ class Frolic(App):
             except (NotImplementedError, RuntimeError, ValueError):
                 pass
         self.say("started")
+        self.set_window_title(window_title(self.watched()))
         self.set_interval(1.0, self.tick)
         self.check_stored_token()
 
@@ -521,6 +540,29 @@ class Frolic(App):
         self.closing.set()
         self.stop_services()
 
+    # ---- the terminal's title ----------------------------------------------------------
+    def watched(self) -> int:
+        """How many repositories are being watched: the shown ones, while GitHub has
+        accepted the token. Without that nothing is read, so there is nothing to count."""
+        return len(self.store.shown()) if self.token_state == "ok" else 0
+
+    def set_window_title(self, title: str) -> None:
+        """Write the terminal's title when it has changed (draw runs every second, and an
+        escape on every tick would be wasted). Once the app is quitting it is left cleared."""
+        driver = self._driver
+        if driver is None or self.leaving or title == self.title_shown:
+            return
+        try:
+            driver.write(title_sequence(title))
+            self.title_shown = title
+        except Exception:                 # headless, or already out of application mode
+            log.debug("window title not set", exc_info=True)
+
+    def exit(self, *args, **kwargs) -> None:
+        self.set_window_title("")         # the Mac app goes back to its own title, iTerm2's tab to its
+        self.leaving = True
+        super().exit(*args, **kwargs)
+
     # ---- helpers -----------------------------------------------------------------------
     def say(self, text: str, style: str = INK2) -> None:
         self.lines.append((time.time(), text, style))
@@ -543,7 +585,9 @@ class Frolic(App):
         return isinstance(self.screen, ModalScreen)
 
     def draw(self) -> None:
-        """Redraw whichever of the two screens is showing (under a dialog, the one beneath)."""
+        """Redraw whichever of the two screens is showing (under a dialog, the one beneath),
+        and the terminal's title, should the number of repositories watched have changed."""
+        self.set_window_title(window_title(self.watched()))
         for screen in reversed(self.screen_stack):
             if isinstance(screen, (Board, SetupScreen)):
                 try:
