@@ -301,12 +301,17 @@ def fresh_bar(read: float, hook: float) -> Segments:
     """Two thin bars in one row of BAR cells, for one repository: `read` and `hook` are how
     much of each is left, from 1 down to 0 (Frolic.freshness). Each cell is an upper half
     block: its ink is the read bar, its background the webhook bar. What is left sits
-    against the right edge, and blocks leave from the left."""
+    against the right edge, and blocks leave from the left. So the row is at most three runs
+    of like cells, from the left: where neither bar reaches, where only the longer one
+    does, and where both do."""
     def cells(part: float) -> int:
         return max(0, min(BAR, -int(-part * BAR // 1)))       # rounded up: full until a block's time is gone
 
     r, h = cells(read), cells(hook)
-    return [("▀", f"{POLL_INK if i >= BAR - r else TRACK} on {HOOK if i >= BAR - h else TRACK}") for i in range(BAR)]
+    runs = [(BAR - max(r, h), TRACK, TRACK),
+            (abs(r - h), POLL_INK if r > h else TRACK, HOOK if h > r else TRACK),
+            (min(r, h), POLL_INK, HOOK)]
+    return [("▀" * n, f"{ink} on {back}") for n, ink, back in runs if n]
 
 
 class ListBar(Static):
@@ -859,10 +864,7 @@ class Board(Screen):
         write(canvas, X_TREE - 1, y, parts, max(0, width - X_TREE))
         at = width - BAR - 2                                   # the repository's two bars, at the rule's end
         if row.kind == "repo" and at >= X_TREE - 1 + seg_len(parts):
-            canvas.put(at, y, " ")
-            for i, (cell, style) in enumerate(fresh_bar(*self.app.freshness(row.repo)), start=at + 1):
-                canvas.put(i, y, cell, style)
-            canvas.put(at + BAR + 1, y, " ")
+            write(canvas, at, y, [(" ", ""), *fresh_bar(*self.app.freshness(row.repo)), (" ", "")], BAR + 2)
 
     def draw_note(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A line under a repository saying why it has no pull requests to show."""

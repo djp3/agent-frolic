@@ -1251,6 +1251,23 @@ async def test_a_click_where_it_needs_effort_picks_that_pull_request_and_the_lis
 
 # ---- each repository's two bars -----------------------------------------------------------
 
+def test_the_two_bars_are_at_most_three_runs_of_like_cells():
+    """From the left: where neither bar reaches, where only the longer does, where both do."""
+    track, read, hook = board.TRACK, board.POLL_INK, board.HOOK
+    full, half, quarter = board.BAR, board.BAR // 2, board.BAR // 4
+    assert board.fresh_bar(1, 1) == [("▀" * full, f"{read} on {hook}")]
+    assert board.fresh_bar(0, 0) == [("▀" * full, f"{track} on {track}")]
+    assert board.fresh_bar(1, 0) == [("▀" * full, f"{read} on {track}")]
+    assert board.fresh_bar(0.5, 0.75) == [("▀" * quarter, f"{track} on {track}"),
+                                          ("▀" * quarter, f"{track} on {hook}"),
+                                          ("▀" * half, f"{read} on {hook}")]
+    assert board.fresh_bar(0.75, 0.5) == [("▀" * quarter, f"{track} on {track}"),
+                                          ("▀" * quarter, f"{read} on {track}"),
+                                          ("▀" * half, f"{read} on {hook}")]
+    for read_left, hook_left in ((0.01, 0), (0.3, 0.9), (2, -1)):         # always BAR cells, whatever it is given
+        assert sum(len(text) for text, _ in board.fresh_bar(read_left, hook_left)) == full
+
+
 def bars(app, needle):
     """The two thin bars on the screen line that holds `needle`: how many cells of the
     upper one are lit, how many of the lower one, and how many cells there are."""
