@@ -862,13 +862,21 @@ class Frolic(App):
         """The list takes GitHub's name for a repository it has as `asked`: other capitals,
         or a new name GitHub followed (renamed or transferred). This is the one place the
         two spellings meet; everywhere else compares the list's names as they are. What was
-        read under an old name is dropped. Returns the entry, and whether it was renamed."""
+        read under an old name is dropped. Returns the entry, and whether it was renamed.
+
+        Its webhook moved with it on GitHub and goes on sending. So one whose hook was
+        confirmed under the old name has it confirmed again under the new one, now: left to
+        the next time the webhooks are registered, it would be read on the short timer
+        until then, for no reason anyone could see."""
         repo = self.store.add(name, private, admin, default_branch, was=asked)
         old, new = asked.lower(), name.lower()
         if not asked or old == new:
             return repo, False
+        hooked = old in self.hooked
         self.forget_repo(old)
         self.say(f"{asked} is now {name} on GitHub", INK)
+        if hooked and repo.shown and self.tunnel_state == "open":
+            self.sync_hooks([repo.name])
         return repo, True
 
     @work(thread=True, group="repos")

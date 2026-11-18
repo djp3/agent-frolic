@@ -1850,6 +1850,37 @@ async def test_a_tunnel_that_stops_leading_here_is_noticed_and_the_short_timers_
 
 
 @drive
+async def test_a_repository_renamed_on_github_goes_on_being_one_github_sends_webhooks_for(isolated):
+    """Its webhook moved with it, and goes on sending."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await read_since_hooked(app, pilot)
+        hook_id = app.store.get("djp3/agent-frolic").hook_id
+        assert hook_id and app.period(app.store.get("djp3/agent-frolic")) == 30 * 60
+        for hook in FakeGitHub.hooks_made.values():                   # renamed on GitHub: the hook goes along
+            hook.repo = "djp3/agent-barn" if hook.repo == "djp3/agent-frolic" else hook.repo
+        FakePulls.spelled = {"djp3/agent-frolic": "djp3/agent-barn"}
+        FakePulls.open_["djp3/agent-barn"] = FakePulls.open_["djp3/agent-frolic"]
+        age(app, minutes=30, only=["djp3/agent-frolic"])
+        app.tick()                                                    # the next read finds the new name
+        await settle(app, pilot)
+        ours = app.store.get("djp3/agent-barn")
+        assert ours is not None and app.store.get("djp3/agent-frolic") is None
+        assert sorted(app.hooked) == ["djp3/agent-barn"] and app.covered(ours)    # confirmed under it at once,
+        assert ours.hook_id == hook_id and len(FakeGitHub.hooks_made) == 1        # the same hook, not a second
+        await read_since_hooked(app, pilot)
+        assert app.period(ours) == 30 * 60                            # and back on the slow timer
+
+        app.repo_known("Acme/ledger", True, False, False, "main", "Acme/ledger-api")     # one with no hook
+        await settle(app, pilot)
+        assert not any(text.startswith("Acme/ledger: ") and "webhook" in text for text in said(app))
+
+
+@drive
 async def test_a_hook_confirmed_for_the_tunnel_before_does_not_count_for_the_one_open_now(isolated, monkeypatch):
     """Webhooks are started again, with another address say. Until GitHub has each hook
     pointing there, its deliveries go to the old one."""
