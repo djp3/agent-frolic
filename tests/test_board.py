@@ -537,6 +537,11 @@ def a_long_board():
     }
 
 
+# How many lines the list of a_long_board() has: for each of the two repositories its own line,
+# its base branch, the commit and its pull requests; then the line of the one with nothing open.
+LONG = (3 + 24) + (3 + 20) + 1
+
+
 def bar(app) -> str:
     """The scroll bar, top to bottom: the window's last column beside the list, read by
     screen cell (a wide character to its left takes two cells but is one in a string)."""
@@ -650,8 +655,8 @@ async def test_the_wheel_scrolls_the_list_and_the_selection_stays_where_it_was(i
         await settle(app, pilot)
         deck = app.board
         first, last, total = deck.where
-        assert (first, total) == (1, 51) and last < total and "djp3/quiet-one  " not in screen(app)
-        assert f"rows 1–{last} of 51" in screen(app)
+        assert (first, total) == (1, LONG) and last < total and "djp3/quiet-one  " not in screen(app)
+        assert f"rows 1–{last} of {LONG}" in screen(app)
         assert bar(app)[0] == board.THUMB and bar(app)[-1] == board.TRACK_LINE     # at the top, more below
         chosen = deck.sel
         await wheel(pilot, MouseScrollDown, 3)
@@ -776,12 +781,12 @@ async def test_the_page_keys_and_end_reach_a_repository_with_nothing_open(isolat
         await pilot.press("end")
         await pilot.pause()
         shown = screen(app)
-        assert deck.where == (51 - rows + 1, 51, 51) and "rows" in shown
+        assert deck.where == (LONG - rows + 1, LONG, LONG) and "rows" in shown
         assert "djp3/quiet-one  0 open" in shown.split("needs effort")[0] and "nothing is open" not in shown
         assert bar(app)[-1] == board.THUMB and bar(app)[0] == board.TRACK_LINE     # at the bottom, more above
         await pilot.press("pageup")
         await pilot.pause()
-        assert deck.top == 51 - rows - (rows - 2)
+        assert deck.top == LONG - rows - (rows - 2)
         await pilot.press("home")
         await pilot.pause()
         assert deck.top == 0 and bar(app)[0] == board.THUMB
@@ -816,10 +821,10 @@ async def test_dragging_the_scroll_bar_moves_the_list(isolated):
         rows = deck.page
         await pilot.mouse_down("#scroll", offset=(0, rows - 1))                    # a press at the track's foot
         await pilot.pause()
-        assert deck.top == 51 - rows and "djp3/quiet-one" in screen(app).split("needs effort")[0]
+        assert deck.top == LONG - rows and "djp3/quiet-one" in screen(app).split("needs effort")[0]
         await pilot.hover("#scroll", offset=(0, rows // 2))                        # dragged to the middle
         await pilot.pause()
-        assert 0 < deck.top < 51 - rows
+        assert 0 < deck.top < LONG - rows
         await pilot.hover("#scroll", offset=(0, 0))                                # and to the head
         await pilot.pause()
         assert deck.top == 0
@@ -849,7 +854,7 @@ async def test_in_the_smallest_window_the_list_counts_the_rows_it_really_has(iso
             assert f"#{deck.sel[1]} First change {deck.sel[1]}" in listed()
         await pilot.press("end")
         await pilot.pause()
-        assert deck.where == (51, 51, 51) and "djp3/quiet-one  0 open" in listed()    # the very last line
+        assert deck.where == (LONG, LONG, LONG) and "djp3/quiet-one  0 open" in listed()    # the very last line
         assert bar(app) == board.THUMB                                             # one cell, the thumb in it
 
 
