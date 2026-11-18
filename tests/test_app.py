@@ -1658,6 +1658,31 @@ async def test_each_repository_is_read_when_its_own_timer_runs_out(isolated):
 
 
 @drive
+async def test_a_repository_that_leaves_the_list_takes_its_timers_with_it(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        app.delivered(Delivery("pull_request", "d-1", "Acme/ledger-api", "opened"))
+        await settle(app, pilot)
+        kept = (app.read_at, app.read_began, app.hook_at, app.hook_read_at, app.pulls)
+        assert all("acme/ledger-api" in held for held in kept)
+        await to_setup(app, pilot)
+        await pilot.press("down")
+        await answer_yes(pilot, "x")
+        assert app.store.get("Acme/ledger-api") is None
+        assert not any("acme/ledger-api" in held for held in kept)
+        app.fetch_ended("Acme/ledger-api")                            # a read of it that was under way ends:
+        assert "acme/ledger-api" not in app.read_at                   # there is nothing left to time
+        assert sorted(app.read_at) == ["djp3/agent-frolic"]
+
+        await answer_yes(pilot, "f")                                  # the token is forgotten,
+        assert app.token_state == "none" and app.read_at == {}
+        app.fetch_ended("djp3/agent-frolic")                          # and a read ends after that
+        assert app.read_at == {}
+
+
+@drive
 async def test_a_repository_shown_while_the_token_is_checked_is_read_by_the_clock(isolated):
     """Showing it asks for a read, but not while a pasted token is with GitHub. That one is
     refused, the stored one stands, and nothing else would ever read it."""

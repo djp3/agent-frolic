@@ -841,6 +841,13 @@ class Frolic(App):
                 self.sync_hooks([repo.name])
         self.draw()
 
+    def forget_repo(self, key: str) -> None:
+        """Drop all that is kept about a repository under this name (lower case): it has
+        left the list, or goes by another name now. Its timers too, or they would outlive it."""
+        for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
+                     self.read_began, self.hook_at, self.hook_read_at, self.hook_read_due):
+            held.pop(key, None)
+
     def take_name(self, asked: str, name: str, private: bool, admin: bool,
                   default_branch: str = "") -> tuple[Repo, bool]:
         """The list takes GitHub's name for a repository it has as `asked`: other capitals,
@@ -851,9 +858,7 @@ class Frolic(App):
         old, new = asked.lower(), name.lower()
         if not asked or old == new:
             return repo, False
-        for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
-                     self.read_began, self.hook_at):
-            held.pop(old, None)
+        self.forget_repo(old)
         self.say(f"{asked} is now {name} on GitHub", INK)
         return repo, True
 
@@ -926,10 +931,7 @@ class Frolic(App):
             if not yes:
                 return
             self.store.remove(repo.name)
-            self.hook_state.pop(repo.name.lower(), None)
-            self.hooked.pop(repo.name.lower(), None)
-            self.pulls.pop(repo.name.lower(), None)
-            self.pull_trouble.pop(repo.name.lower(), None)
+            self.forget_repo(repo.name.lower())
             self.say(f"removed {repo.name}", INK)
             if repo.hook_id:
                 self.delete_hooks([(repo.name, repo.hook_id)])
@@ -1328,15 +1330,17 @@ class Frolic(App):
         `name` is what the read was asked for under. `now_named` is the repository's name
         when the read found it renamed on GitHub: the timer is that name's, and so is a
         read that was asked for while this one was under way. Left under the old name,
-        the timer would be nobody's, and the repository would never be read by the clock."""
+        the timer would be nobody's, and the repository would never be read by the clock.
+        A repository that left the list while it was read gets no timer at all."""
         key = name.lower()
         self.fetching.discard(key)
         again = key in self.stale                            # it changed while we were reading it
         self.stale.discard(key)
         name = now_named or name
-        self.read_at[name.lower()] = time.time()
-        if again and self.store.get(name) is not None:
-            self.update_pulls([name], "again")
+        if self.store.get(name) is not None and self.token_state != "none":
+            self.read_at[name.lower()] = time.time()         # not for one removed, or a token forgotten,
+            if again:                                        # while it was read: there is nothing to time
+                self.update_pulls([name], "again")
         self.draw()
 
     def open_pull(self, pull: PullRequest, ref: str) -> None:
