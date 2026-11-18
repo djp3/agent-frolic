@@ -227,8 +227,9 @@ def tree(picture: Picture) -> list[Row]:
           ┬ 6935c77
           └ #24 …
 
-    A repository that has not been read, could not be read, or has nothing open gets a
-    note row saying so."""
+    A repository that has not been read, or could not be read, gets a note row saying so.
+    One with nothing open gets none: its own row says "0 open", and a line more would only
+    make the list longer."""
     rows: list[Row] = []
     for name in picture.names:
         low = name.lower()
@@ -240,8 +241,7 @@ def tree(picture: Picture) -> list[Row]:
             if low not in picture.notes:
                 rows.append(Row("note", "", name, label="not read yet"))
             continue
-        if not got.pulls:
-            rows.append(Row("note", "", name, label="nothing is open"))
+        if not got.pulls:                                        # its own row says "0 open"
             continue
         by_number = {p.number: p for p in got.pulls}
         roots = [p for p in got.pulls if not p.parent]

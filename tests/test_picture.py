@@ -74,7 +74,7 @@ def test_the_tree_runs_repo_base_commit_then_the_pull_requests_in_stack_order():
         ("base", "└ release-0.2"),
         ("commit", "  ┬ " + OLD[:7]),
         ("pull", "  └ #24"),
-        ("repo", "o/web"), ("note", "nothing is open"),
+        ("repo", "o/web"),                               # nothing open there: its own row says so
         ("repo", "o/slow"), ("note", "reading…"),
     ]
 
