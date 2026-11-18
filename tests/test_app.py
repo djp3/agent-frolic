@@ -1650,6 +1650,34 @@ async def test_each_repository_is_read_when_its_own_timer_runs_out(isolated):
 
 
 @drive
+async def test_a_repository_shown_while_the_token_is_checked_is_read_by_the_clock(isolated):
+    """Showing it asks for a read, but not while a pasted token is with GitHub. That one is
+    refused, the stored one stands, and nothing else would ever read it."""
+    bad = "ghp_bad" + "x" * 33
+    three_repos()
+    FakeGitHub.gates[bad] = threading.Event()                     # GitHub is slow to refuse it
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await to_setup(app, pilot)
+        await paste(app, pilot, bad)
+        await until(pilot, lambda: bad in FakeGitHub.waiting)
+        FakePulls.asked.clear()
+        app.show_repo("djp3/hidden-one", True)                        # shown, while the token is checked
+        await pilot.pause()
+        assert FakePulls.asked == [] and "djp3/hidden-one" not in app.read_at     # no read, and no timer
+        FakeGitHub.gates[bad].set()
+        await settle(app, pilot)
+        assert app.token_state == "ok" and FakePulls.asked == []
+        app.tick()                                                    # the clock finds it has never been read
+        await settle(app, pilot)
+        assert FakePulls.asked == ["djp3/hidden-one"] and "djp3/hidden-one" in app.read_at
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["djp3/hidden-one"]                 # once: now it has a timer
+
+
+@drive
 async def test_a_read_that_a_webhook_asked_for_starts_that_repositorys_timer_again(isolated):
     """GitHub has just said what changed there, and it was read: the clock has nothing to add."""
     three_repos()

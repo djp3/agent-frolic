@@ -428,11 +428,17 @@ class Frolic(App):
         return min(minutes, Settings.POLL_MOST) * 60
 
     def due(self, repo: Repo, now: float) -> bool:
-        """Whether the timer of a shown repository has run out. It runs from the end of its
-        last read, whatever asked for that read: a webhook, u, the start, or the timer. One
-        never read yet has no timer: what shows or adds it has it read."""
+        """Whether a shown repository is to be read now: its timer has run out, or it has
+        none. The timer runs from the end of its last read, whatever asked for that read: a
+        webhook, u, the start, or the timer.
+
+        One with no timer has never been read. What shows or adds a repository has it
+        read, but not while the token is being checked, and if that check ends with the
+        old token still in use nothing asks again. So the clock reads it."""
         key = repo.name.lower()
-        return key not in self.fetching and key in self.read_at and now >= self.read_at[key] + self.period(repo)
+        if key in self.fetching:
+            return False
+        return key not in self.read_at or now >= self.read_at[key] + self.period(repo)
 
     def freshness(self, name: str) -> tuple[float, float]:
         """What a repository's two bars show, each from 1 (full) down to 0: how much of its
