@@ -1037,10 +1037,11 @@ class Board(Screen):
                        style=INK if agent.working else INK2)
 
         def human(login: str) -> None:
-            if pic.mine(pull) and pic.acts_as(login, end.pull):     # the viewer, or a team they are on
-                out.append("● ", style=WAITING).append(pic.shown(login), style=f"bold {INK}")
+            if pic.mine(pull) and pic.acts_as(login, end.pull):     # the viewer, or a team or organization
+                                                                    # they act for
+                out.append("● ", style=WAITING).append(pic.shown(login, end.pull), style=f"bold {INK}")
             else:
-                out.append(pic.shown(login), style=INK)
+                out.append(pic.shown(login, end.pull), style=INK)
 
         out.append("owner    ", style=MUTED).append(pic.shown(pull.author), style=INK)
         own = [a for a in pic.on(pull) if a.role == "author"]
