@@ -61,6 +61,7 @@ query($owner: String!, $name: String!, $page: Int!, $cursor: String) {
   rateLimit { cost limit }
   repository(owner: $owner, name: $name) {
     nameWithOwner
+    owner { __typename }
     viewerPermission
     defaultBranchRef { name target { oid } }
     pullRequests(states: OPEN, first: $page, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -235,6 +236,13 @@ class RepoPulls:
                                   # "triage", "read"; "" when GitHub did not say
     cost: int = 0                 # what reading it took of GitHub's hourly allowance, in its points
     limit: int = 0                # that allowance, as GitHub said; 0 when it did not
+    org: bool = False             # its owner is an organization, not a person
+
+    @property
+    def rights(self) -> tuple[bool, bool]:
+        """What the viewer may do here: (ask someone to review, merge). Neither when GitHub
+        did not say."""
+        return _RIGHTS.get(self.access.upper().replace(" ", "_"), (False, False))
 
 
 def when(text: str | None) -> datetime | None:
@@ -523,6 +531,7 @@ def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
     pulls: list[PullRequest] = []
     cursor, total, default_branch, spelled, tip, viewer, permission = None, 0, "", repo, "", "", ""
     cost = limit = 0
+    org = False
     while True:
         data = github.graphql(QUERY, {"owner": owner, "name": name, "page": PAGE, "cursor": cursor})
         viewer = (data.get("viewer") or {}).get("login") or viewer
@@ -532,7 +541,8 @@ def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
         repository = data.get("repository") or {}
         spelled = repository.get("nameWithOwner") or spelled
         permission = repository.get("viewerPermission") or permission
-        branch = repository.get("defaultBranchRef") or {}
+        org = org or (repository.get("owner") or {}).get("__typename") == "Organization"
+        branch =repository.get("defaultBranchRef") or {}
         default_branch = branch.get("name") or default_branch
         tip = (branch.get("target") or {}).get("oid") or tip
         page = repository.get("pullRequests") or {}
@@ -554,7 +564,7 @@ def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
     log.info("fetched %d of %d open pull requests of %s (your access: %s; it cost %d of %d points)",
              len(pulls), total, spelled, access or "not said", cost, limit)
     return RepoPulls(spelled, default_branch, stack(pulls, default_branch, long_lived), max(total, len(pulls)),
-                     now or datetime.now(timezone.utc), tip, access, cost, limit)
+                     now or datetime.now(timezone.utc), tip, access, cost, limit, org)
 
 
 def span(seconds: float, fine: bool = False) -> str:

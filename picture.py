@@ -14,6 +14,11 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     "● you" is, under the team's name, and the team has a card of its own. One request is
     one job, so it shows once, on the team, and on no member's card. While the viewer's
     teams are still being read (`held`), a team's request is nobody's yet (`undecided`).
+  • ORGANIZATIONS. When an author may not merge or ask for a review, the move is the
+    maintainer's, named by the repository's owner (standing.py). If that owner is an
+    organization and the viewer's own rights in the repository allow the move, the viewer
+    acts for the organization as for a team they are on (`maintains`): drawn as
+    "you @ Acme" with the yellow dot, with a card of its own among the viewer's teams.
   • THE TREE, `tree()`: repo, then base branch (the default branch first), then the commit
     of that branch a pull request stands on, then the pull requests in stack order.
   • COLUMN 1, `cells()`: owner | state | waits on, as many lines as a pull request needs.
@@ -21,7 +26,7 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     is empty; when reviewers must act each is a line under waits on; a queued pull request
     shows "#12 →" and then whoever that one waits on; with checks running nobody must act.
   • YELLOW (theme.WAITING) marks one thing: a move that is the viewer's, their own or
-    through a team they are on.
+    through a team or an organization they act for.
   • WHAT NEEDS EFFORT, `needs_effort()`: every pull request that waits on a human, most
     urgent first: idle agents because of it, then how long it has been quiet.
   • THE HUMANS for the cards, `humans()`: the viewer, the viewer's teams, then everyone
@@ -105,11 +110,17 @@ class Picture:
                                                    # answer, once something has asked for it
     twins: set[str] | None = field(default=None, repr=False, compare=False)         # the labels two teams
                                                    # asked here would share (lower case), once asked for
+    orgs: dict[str, bool] = field(default_factory=dict, repr=False, compare=False)  # the organizations that
+                                                   # own a shown repository (lower case) -> whether the
+                                                   # viewer has rights in one of them to act for it
 
     def __post_init__(self) -> None:
         for got in self.read():
             for number, standing in settle(got.pulls).items():
                 self.standings[(got.repo.lower(), number)] = standing
+            if got.org:
+                owner = got.repo.split("/", 1)[0].lower()
+                self.orgs[owner] = self.orgs.get(owner, False) or any(got.rights)
 
     def read(self) -> list[RepoPulls]:
         """What was read, for the shown repositories that have been read, in order."""
@@ -132,13 +143,18 @@ class Picture:
     def is_viewer(self, login: str) -> bool:
         return bool(self.viewer) and login.lower() == self.viewer.lower()
 
-    def shown(self, login: str) -> str:
+    def shown(self, login: str, pull: PullRequest | None = None) -> str:
         """A login as it reads on screen: the viewer is "you", a bot goes by the name GitHub
         shows for it, and a team by its name when the viewer is on it. No other team's
         name is known: it reads "team/slug". Two teams asked here that would read alike,
-        one in each of two organizations, read "Acme/Platform" or "team/Acme/platform"."""
+        one in each of two organizations, read "Acme/Platform" or "team/Acme/platform".
+        An organization the viewer acts for reads "you @ Acme": on `pull`, where they may
+        make its move there (`maintains`); with no pull request named, where they have
+        rights in it (`yours`)."""
         if self.is_viewer(login):
             return "you"
+        if self.is_org(login) and (self.maintains(login, pull) if pull is not None else self.yours(login)):
+            return f"you @ {login}"
         if is_team(login):
             label = self._team_label(login)
             if label.lower() not in self._twins():
@@ -166,9 +182,29 @@ class Picture:
         """`who` is a team the viewer is on. With no viewer there is no such team."""
         return bool(self.viewer) and who.lower() in self.teams
 
+    def is_org(self, who: str) -> bool:
+        """`who` is the organization that owns one of the shown repositories."""
+        return who.lower() in self.orgs
+
     def yours(self, who: str) -> bool:
-        """The viewer, or a team the viewer is on."""
-        return self.is_viewer(who) or self.on_team(who)
+        """The viewer, a team the viewer is on, or an organization they have rights in: in
+        one of its shown repositories they may at least ask for a review."""
+        return self.is_viewer(who) or self.on_team(who) or (bool(self.viewer) and self.orgs.get(who.lower(), False))
+
+    def maintains(self, who: str, pull: PullRequest) -> bool:
+        """The move on `pull` is the maintainer's (its author may not make it, standing.py),
+        `who` is the organization that owns the repository and so stands as its maintainer,
+        and the viewer's own rights there allow that move: merging takes write access or
+        more, asking for a review triage or more. A person's repository is not so: its
+        maintainer is that person, and is the viewer or is not."""
+        here = self.standings.get(key_of(pull))
+        got = self.pulls.get(pull.repo.lower())
+        if not self.viewer or here is None or here.by != "maintainer" or got is None or not got.org:
+            return False
+        if who.lower() != pull.repo.split("/", 1)[0].lower():
+            return False
+        may_ask, may_merge = got.rights
+        return may_merge if here.what == "merge" else may_ask
 
     def undecided(self, who: str, pull: PullRequest | None = None) -> bool:
         """A team, while the viewer's teams are not known yet: whether its requests are the
@@ -181,9 +217,10 @@ class Picture:
 
     def acts_as(self, who: str, pull: PullRequest) -> bool:
         """Whether a move on `pull` that is `who`'s is the viewer's to make: `who` is the
-        viewer, or a team they are on. Not on a pull request the viewer wrote: GitHub lets
-        no author review their own, so a request to their team is for the others on it."""
-        if self.is_viewer(who):
+        viewer, a team they are on, or the organization they may act for as its maintainer
+        (`maintains`). A team's is not theirs on a pull request the viewer wrote: GitHub
+        lets no author review their own, so a request to their team is for the others on it."""
+        if self.is_viewer(who) or self.maintains(who, pull):
             return True
         return self.on_team(who) and not self.is_viewer(pull.author)
 
@@ -195,7 +232,7 @@ class Picture:
 
     def mine(self, pull: PullRequest) -> bool:
         """The viewer is one of those who must act for it to move, themselves or through a
-        team they are on, and no agent is on it."""
+        team or an organization they act for, and no agent is on it."""
         here = self.stand(pull)
         end = (here.end or here).pull                    # where the wait ends: whose move it is
         return not self.working(pull) and any(self.acts_as(who, end) for who in here.movers)
@@ -278,10 +315,11 @@ def _visit(rows: list[Row], by_number: dict[int, PullRequest], pull: PullRequest
 
 # ---- column 1: owner | state | waits on ------------------------------------------------
 
-def human_cell(picture: Picture, login: str, yours_to_act: bool) -> Segments:
-    """A human, or a team: a two-cell mark, then the name. The mark is the yellow dot when
-    the move is the viewer's: this is the viewer, or a team they are on."""
-    name = picture.shown(login)
+def human_cell(picture: Picture, login: str, yours_to_act: bool, pull: PullRequest | None = None) -> Segments:
+    """A human, a team, or an organization standing as maintainer: a two-cell mark, then
+    the name. The mark is the yellow dot when the move is the viewer's: this is the viewer,
+    or a team or an organization they act for. `pull` is the one whose move it is."""
+    name = picture.shown(login, pull)
     if yours_to_act:
         return [("● ", WAITING), (name, f"bold {INK}")]
     return [("  ", MUTED), (name, INK if picture.yours(login) else INK2)]
@@ -348,7 +386,7 @@ def _lines(picture: Picture, pull: PullRequest,
             right.append(([("  ", MUTED), ("checks running", MUTED)], []))
         for who in end.who:
             yours = mine and picture.acts_as(who, end.pull)
-            right.append((human_cell(picture, who, yours), []))
+            right.append((human_cell(picture, who, yours, end.pull), []))
             right += [(agent_cell(picture, a, spin), [a]) for a in reviewing(picture, end.pull, who)]
     lines = max(len(left), len(right))
     left += [([], [], [])] * (lines - len(left))
@@ -638,7 +676,7 @@ def _needs_effort(picture: Picture, now: datetime) -> list[Effort]:
         elif here.who and not picture.working(pull):
             idle = sum(not a.working for a in picture.on(pull))
             mine = picture.mine(pull)
-            found[key_of(pull)] = Effort(pull, here, mine, ", ".join(picture.shown(w) for w in here.who),
+            found[key_of(pull)] = Effort(pull, here, mine, ", ".join(picture.shown(w, pull) for w in here.who),
                                          undecided=not mine and any(picture.undecided(w, pull) for w in here.who),
                                          waiting=idle, quiet=quiet(pull, now))
     for pull in queued:
@@ -660,26 +698,28 @@ class Person:
     name: str                     # as shown: "you" for the viewer, a team's name
     to_act: list[PullRequest] = field(default_factory=list)     # what waits on them
     agents: list[Agent] = field(default_factory=list)           # the agents they operate
-    kind: str = "human"           # "human" | "team"
+    kind: str = "human"           # "human" | "team" | "org" (an organization, as maintainer)
     viewer: bool = False          # the viewer's own card. Told by this, never by the name: a
                                   # team may be called anything, "you" included
-    yours: bool = False           # the viewer, or a team the viewer is on
+    yours: bool = False           # the viewer, a team the viewer is on, or an organization they
+                                  # have rights in
     dot: bool = False             # something here is the viewer's to act on
 
 
 def humans(picture: Picture) -> list[Person]:
-    """The viewer first, then the viewer's teams that something waits on, then everyone
-    else something waits on; within each, the one waited on longest first. Someone nothing
-    waits on has no card: on a real repository that is every stranger who ever left a
-    review. A team has a card as a human has; what waits on it is on its card alone, not
-    on its members'. A team that is still undecided has none."""
+    """The viewer first, then the viewer's teams that something waits on (with the
+    organizations they have rights in), then everyone else something waits on; within each,
+    the one waited on longest first. Someone nothing waits on has no card: on a real
+    repository that is every stranger who ever left a review. A team has a card as a human
+    has; what waits on it is on its card alone, not on its members'. A team that is still
+    undecided has none."""
     found: dict[str, Person] = {}
     if picture.viewer:
         found[picture.viewer.lower()] = Person(picture.viewer, "you", viewer=True, yours=True)
 
     def card(who: str) -> Person:
-        return found.setdefault(who.lower(), Person(who, picture.shown(who), yours=picture.yours(who),
-                                                    kind="team" if is_team(who) else "human"))
+        kind = "team" if is_team(who) else "org" if picture.is_org(who) else "human"
+        return found.setdefault(who.lower(), Person(who, picture.shown(who), yours=picture.yours(who), kind=kind))
 
     for effort in needs_effort(picture):
         for who in effort.standing.who:
@@ -697,7 +737,7 @@ def humans(picture: Picture) -> list[Person]:
         return min((p.updated or far for p in person.to_act), default=far)
 
     def own_team(person: Person) -> bool:
-        return person.kind == "team" and person.yours
+        return person.kind in ("team", "org") and person.yours
 
     viewer = [p for p in found.values() if p.viewer]
     teams = sorted((p for p in found.values() if own_team(p) and p.to_act), key=longest)
@@ -785,7 +825,8 @@ def waits_words(picture: Picture, pull: PullRequest) -> str:
     here = picture.stand(pull)
     if not here.movers:
         return here.move
-    who = ", ".join(picture.shown(w) for w in here.movers)
+    end = (here.end or here).pull                       # whose move it is: where the wait ends
+    who = ", ".join(picture.shown(w, end) for w in here.movers)
     through = f" (behind #{here.chain[0]})" if here.queued else ""
     return f"waits on {who} to {here.move}{through}"
 

@@ -38,7 +38,9 @@ not theirs, and the pull request waits on the repository's maintainer instead:
       and the author may not ask
 
 The maintainer is named by the owner in "owner/name": the one account certain to have the
-rights, whether it is a person or an organization.
+rights, whether it is a person or an organization. An organization never signs in, so the
+picture lets a viewer whose own rights in the repository allow the move act for it
+(picture.py, `maintains`).
 
 A stacked pull request that is ready to merge cannot merge before the one it stands on,
 so it waits on that one, and through it on whoever that one waits on (`settle`).

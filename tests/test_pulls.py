@@ -8,8 +8,8 @@ import pytest
 
 from githubapi import GitHubError
 from picture import Picture, mark
-from pulls import (PAGE, QUERY, THREADS_QUERY, ago, fetch_pulls, is_team, judge, known_as, parse_pull, span,
-                   stack, when)
+from pulls import (PAGE, QUERY, THREADS_QUERY, RepoPulls, ago, fetch_pulls, is_team, judge, known_as, parse_pull,
+                   span, stack, when)
 
 
 def node(number, head, base="main", **over):
@@ -411,6 +411,24 @@ def test_for_the_viewers_own_pull_requests_github_says_exactly_what_they_may_do(
     assert (mine.can_ask, mine.can_merge) == rights
     assert (theirs.can_ask, theirs.can_merge) == (True, True)   # the permission is the viewer's alone
     assert got.access == access
+
+
+@pytest.mark.parametrize("access, rights", [
+    ("admin", (True, True)), ("maintain", (True, True)), ("write", (True, True)), ("triage", (True, False)),
+    ("read", (False, False)), ("", (False, False))])
+def test_the_viewers_rights_in_a_repository_follow_their_access(access, rights):
+    got = RepoPulls("o/r", "main", [], 0, datetime(2026, 11, 14, tzinfo=timezone.utc), access=access)
+    assert got.rights == rights
+
+
+@pytest.mark.parametrize("owner, org", [
+    ({"__typename": "Organization"}, True), ({"__typename": "User"}, False), (None, False)])
+def test_fetch_says_whether_an_organization_owns_the_repository(owner, org):
+    assert "owner { __typename }" in QUERY
+    reply = page([], 0)
+    if owner is not None:
+        reply["repository"]["owner"] = owner
+    assert fetch_pulls(FakeGitHub([reply]), "owner/repo").org is org
 
 
 def test_the_query_asks_who_is_looking_and_what_they_and_each_author_may_do():

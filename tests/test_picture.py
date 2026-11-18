@@ -174,6 +174,51 @@ def test_a_pull_request_whose_author_has_no_rights_waits_on_the_maintainer():
     assert counts(keeper, "o/app") == (2, 0)
 
 
+def org_picture(access, org=True, viewer="djp3"):
+    """acme/app, owned by `acme`: a bot's pull request nobody has looked at (#40, the
+    maintainer reviews) and an approved one from outside (#41, the maintainer merges)."""
+    nodes = [node(40, "deps", author={"login": "dependabot"}, authorAssociation="NONE", baseRefOid=TIP,
+                  updatedAt="2026-11-12T16:00:00Z"),
+             node(41, "fix", author={"login": "wen"}, authorAssociation="CONTRIBUTOR", baseRefOid=TIP,
+                  reviewDecision="APPROVED", latestOpinionatedReviews=APPROVED("kenji"),
+                  updatedAt="2026-11-13T16:00:00Z")]
+    got = RepoPulls("acme/app", "main", stack([parse_pull("acme/app", n) for n in nodes], "main"), 2, NOW, TIP,
+                    access=access, org=org)
+    return Picture(["acme/app"], {"acme/app": got}, viewer)
+
+
+def test_an_organization_that_stands_as_maintainer_is_the_viewers_where_their_rights_allow_the_move():
+    admin = org_picture("admin")
+    assert text(cells(admin, pull(admin, 40, "acme/app"))) == ["  dependabot | waiting | ● you @ acme"]
+    assert text(cells(admin, pull(admin, 41, "acme/app"))) == ["  wen | waiting | ● you @ acme"]
+    assert waits_words(admin, pull(admin, 40, "acme/app")) == "waits on you @ acme to review"
+    assert all(admin.mine(p) for p in admin.all()) and counts(admin, "acme/app") == (2, 0)
+    assert [e.who for e in needs_effort(admin)] == ["you @ acme", "you @ acme"]
+    people = humans(admin)
+    assert [(p.name, p.kind, p.yours, p.dot, [x.number for x in p.to_act]) for p in people] == [
+        ("you", "human", True, False, []), ("you @ acme", "org", True, True, [40, 41])]
+
+    triage = org_picture("triage")                                # may ask for a review, may not merge
+    assert [triage.mine(pull(triage, n, "acme/app")) for n in (40, 41)] == [True, False]
+    assert waits_words(triage, pull(triage, 41, "acme/app")) == "waits on acme to merge"   # not a move of theirs
+    assert counts(triage, "acme/app") == (1, 1)
+    assert [(p.name, p.yours, p.dot) for p in humans(triage)] == [("you", True, False), ("you @ acme", True, True)]
+
+    read = org_picture("read")                                    # may do neither: it is the others'
+    assert text(cells(read, pull(read, 40, "acme/app"))) == ["  dependabot | waiting |   acme"]
+    assert not any(read.mine(p) for p in read.all()) and counts(read, "acme/app") == (0, 1)
+    assert [(p.name, p.yours, p.dot) for p in humans(read)] == [("you", True, False), ("acme", False, False)]
+
+
+def test_a_person_who_owns_a_repository_is_never_the_viewer_by_rights_alone():
+    pic = org_picture("admin", org=False)                         # acme is a person: the viewer is not them
+    assert text(cells(pic, pull(pic, 40, "acme/app"))) == ["  dependabot | waiting |   acme"]
+    assert counts(pic, "acme/app") == (0, 1)
+    assert [(p.name, p.kind, p.yours) for p in humans(pic)] == [("you", "human", True), ("acme", "human", False)]
+    owner = org_picture("admin", org=False, viewer="acme")        # unless they are the one looking
+    assert counts(owner, "acme/app") == (2, 0)
+
+
 def test_the_humans_are_the_viewer_and_then_whoever_is_waited_on_longest():
     people = humans(picture())
     assert [(p.name, [x.number for x in p.to_act]) for p in people] == [

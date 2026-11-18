@@ -48,7 +48,7 @@ def stand_ins(monkeypatch):
     FakeGitHub.logins, FakeGitHub.scopes = {}, ["repo", "read:org"]
     FakeTunnel.made, FakeTunnel.gate = [], None
     FakePulls.open_, FakePulls.asked, FakePulls.broken, FakePulls.tips, FakePulls.spelled = {}, [], {}, {}, {}
-    FakePulls.costs = {}
+    FakePulls.costs, FakePulls.access, FakePulls.orgs = {}, {}, set()
     monkeypatch.setattr(main, "fetch_pulls", FakePulls.fetch)
     monkeypatch.setattr(main, "GitHub", FakeGitHub)
     monkeypatch.setattr(main, "Tunnel", FakeTunnel)

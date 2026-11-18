@@ -217,7 +217,9 @@ The rule, checked top to bottom. The first line that fits decides.
 | nobody was asked and nobody has reviewed | the author | request a review |
 
 Someone whose pull request comes from a fork can neither merge nor ask for a review, so those
-two moves pass to the repository's maintainer.
+two moves pass to the repository's maintainer. When an organization owns the repository and
+your access there lets you make the move, it is yours: it shows as "you @ Acme" (the
+organization's name) with the yellow dot.
 
 ## Made to work with agent-farm and agent-grange
 
