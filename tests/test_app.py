@@ -2059,6 +2059,28 @@ async def test_repositories_whose_timers_run_out_moments_apart_are_read_by_one_w
 
 
 @drive
+async def test_the_log_says_what_asked_for_each_read(isolated, caplog):
+    """Each read costs part of the hour's allowance. What used it up is a question for the log."""
+    caplog.set_level(logging.INFO, logger="agent_frolic")
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        assert "reading (start): djp3/agent-frolic, Acme/ledger-api" in caplog.messages
+        age(app, only=["Acme/ledger-api"])
+        app.tick()
+        await settle(app, pilot)
+        assert "reading (poll): Acme/ledger-api" in caplog.messages
+        app.delivered(Delivery("pull_request", "d-1", "djp3/agent-frolic", "opened"))
+        await settle(app, pilot)
+        assert "reading (webhook): djp3/agent-frolic" in caplog.messages
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert "reading (asked): djp3/agent-frolic, Acme/ledger-api" in caplog.messages
+        assert not any(text.startswith("reading (") for text in said(app))       # the log file's, not the screen's
+
+
+@drive
 async def test_a_timer_is_never_shorter_than_a_minute_whatever_the_setting_holds(isolated):
     """Settings.load keeps the poll's minutes from 1 up. A setting that reached the app some
     other way, at 0, would make a timer of no length: every repository read every second,

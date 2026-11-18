@@ -1285,7 +1285,11 @@ class Frolic(App):
     def update_pulls(self, names: list[str], why: str) -> None:
         """Fetch the open pull requests of these repositories. One fetch per repository at
         a time: a repository that changes while it is being fetched is fetched once more
-        when that fetch ends."""
+        when that fetch ends.
+
+        `why` is what asked for the read: the timer ("poll"), a webhook, u ("asked"), and so
+        on. It goes in the log file with the names, and nowhere else: each read costs part
+        of the hour's allowance from GitHub, and what used it up is a question for the log."""
         if self.token_state != "ok":
             return
         wanted = []
@@ -1299,6 +1303,7 @@ class Frolic(App):
                 repo = self.store.get(name)                  # its long-lived branches, as they are now
                 wanted.append((name, None if repo is None or repo.long_lived is None else list(repo.long_lived)))
         if wanted:
+            log.info("reading (%s): %s", why, ", ".join(name for name, _ in wanted))
             self.fetch(wanted)
         self.draw()
 
