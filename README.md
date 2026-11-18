@@ -53,6 +53,12 @@ one GitHub sends no webhooks for is read again every five minutes, and one it do
 half hour, to catch a delivery that never came. Any read starts that repository's timer
 again, and `u` reads them all now.
 
+The half hour is for a repository whose webhook can be relied on. It is back to five minutes
+while its last read failed, while GitHub is still working out whether a pull request there can
+merge (it sends no webhook when it knows), and while the tunnel does not lead back to the app.
+After the Mac has slept, the repositories with webhooks are read at once: what GitHub sent
+meanwhile reached nobody.
+
 ### Your token in your Keychain. Your work on your Mac.
 
 The GitHub token, and the two secrets webhooks need, are kept in the macOS Keychain and nowhere
@@ -252,14 +258,17 @@ today the board shows people and teams, from GitHub's records alone.
 The log records what was read and what changed, and why anything failed. It starts afresh
 past 2 MB and keeps the three before it.
 
+`poll_minutes` in the settings is how many minutes a repository's timer runs: 5 unless you
+change it, from 1 to 1440. A repository with a webhook that can be relied on is read every six
+times that.
+
 ## How it works
 
 The app asks GitHub for the open pull requests of each shown repository with one query: at
 start, when that repository's timer runs out, when you press `u`, and when a webhook says
-something changed there. The
-webhook receiver listens on 127.0.0.1 only; deliveries reach it through the ngrok tunnel and
-are accepted only with GitHub's signature. Everything on the board is worked out from what was
-read; the board itself never talks to GitHub.
+something changed there. The webhook receiver listens on 127.0.0.1 only; deliveries reach it
+through the ngrok tunnel and are accepted only with GitHub's signature. Everything on the board
+is worked out from what was read; the board itself never talks to GitHub.
 
 It is a Python program (Textual) running inside a native window. To run it from source:
 
