@@ -1290,9 +1290,11 @@ async def test_each_repositorys_line_ends_in_two_bars_of_its_own(isolated):
         top = screen(app).splitlines()[0]
         assert "▀▀" not in top and "▀ read  ▄ webhook" in top                # the top line keeps only their key
 
-        app.read_at["djp3/agent-frolic"] -= app.period(app.store.get("djp3/agent-frolic")) / 2
-        app.hook_at["djp3/agent-frolic"] = time.time() - app.period(app.store.get("djp3/agent-frolic")) / 4
-        app.tunnel_at -= 3600                                                # (the tunnel has been open a while)
+        app.hooked["djp3/agent-frolic"] -= 3600                              # its hook was confirmed long ago,
+        span = app.period(app.store.get("djp3/agent-frolic"))                # so it is on the slow timer
+        assert span == 30 * 60
+        app.read_at["djp3/agent-frolic"] -= span / 2
+        app.hook_at["djp3/agent-frolic"] = time.time() - span / 4
         app.draw()
         await pilot.pause()
         assert bars(app, ours) == (board.BAR // 2, board.BAR * 3 // 4, board.BAR)    # this one's have drained
@@ -1303,6 +1305,14 @@ async def test_each_repositorys_line_ends_in_two_bars_of_its_own(isolated):
         app.draw()
         await pilot.pause()
         assert bars(app, theirs) == (board.BAR, 0, board.BAR) and bars(app, ours)[0] == board.BAR // 2
+
+        app.hooked["djp3/quiet-one"] -= 3600                                 # another's hook, an hour old with
+        app.draw()                                                           # nothing heard since: its lower
+        await pilot.pause()                                                  # bar has run out,
+        assert bars(app, quiet)[1] == 0
+        app.hook_done("djp3/quiet-one", 9, "webhook #9 registered", True)    # and is full again the moment the
+        await pilot.pause()                                                  # hook is confirmed anew, however
+        assert bars(app, quiet)[1] == board.BAR                              # long the tunnel has been open
 
 
 @drive

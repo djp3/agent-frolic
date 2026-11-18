@@ -377,7 +377,6 @@ class Frolic(App):
         self.notice: tuple[float, str] | None = None      # words in the ticker's place, and until when (announce)
         self.hook_at: dict[str, float] = {}       # repository (lower case) -> when GitHub last sent a delivery
                                                   # about it
-        self.tunnel_at = 0.0                      # when the tunnel opened: as fresh as webhooks get
         self.board = Board()
         self.setup = SetupScreen()
 
@@ -473,8 +472,10 @@ class Frolic(App):
     def freshness(self, name: str) -> tuple[float, float]:
         """What a repository's two bars show, each from 1 (full) down to 0: how much of its
         timer is left before it is read again, and how much of that same span is left since
-        GitHub last sent a delivery about it (or the tunnel opened). The second is 0 for a
-        repository GitHub sends no webhooks for."""
+        GitHub was last heard from about it: its last delivery, or its webhook being
+        confirmed, whichever is later. A hook confirmed a moment ago is as fresh as webhooks
+        get, however long the tunnel has been open. The second is 0 for a repository GitHub
+        sends no webhooks for."""
         repo = self.store.get(name)
         if repo is None:
             return 0.0, 0.0
@@ -483,7 +484,7 @@ class Frolic(App):
         def left(since: float) -> float:
             return max(0.0, min(1.0, 1 - (now - since) / span)) if since else 0.0
 
-        heard = max(self.hook_at.get(key, 0.0), self.tunnel_at) if self.covered(repo) else 0.0
+        heard = max(self.hook_at.get(key, 0.0), self.hooked.get(key, 0.0)) if self.covered(repo) else 0.0
         return left(self.read_at.get(key, 0.0)), left(heard)
 
     def retry_token(self) -> None:
@@ -1073,7 +1074,6 @@ class Frolic(App):
     def tunnel_changed(self, state: str, note: str) -> None:
         self.tunnel_state, self.tunnel_note = state, note
         if state == "open":
-            self.tunnel_at = time.time()                   # as fresh as it gets: the webhook bars start full
             self.say(f"webhooks: tunnel open at https://{self.settings.ngrok_domain}", INK)
         elif state in ("failed", "unreachable"):
             self.say(f"webhooks: {note}", INK)
