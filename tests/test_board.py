@@ -1310,7 +1310,7 @@ async def test_each_repositorys_line_ends_in_two_bars_of_its_own(isolated):
         app.draw()                                                           # nothing heard since: its lower
         await pilot.pause()                                                  # bar has run out,
         assert bars(app, quiet)[1] == 0
-        app.hook_done("djp3/quiet-one", 9, "webhook #9 registered", True)    # and is full again the moment the
+        app.hook_done("djp3/quiet-one", 9, "webhook #9 registered", app.webhooks_run)    # and is full again when the
         await pilot.pause()                                                  # hook is confirmed anew, however
         assert bars(app, quiet)[1] == board.BAR                              # long the tunnel has been open
 

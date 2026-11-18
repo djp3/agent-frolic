@@ -1850,6 +1850,41 @@ async def test_a_tunnel_that_stops_leading_here_is_noticed_and_the_short_timers_
 
 
 @drive
+async def test_a_hook_confirmed_for_the_tunnel_before_does_not_count_for_the_one_open_now(isolated, monkeypatch):
+    """Webhooks are started again, with another address say. Until GitHub has each hook
+    pointing there, its deliveries go to the old one."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        ours = app.store.get("djp3/agent-frolic")
+        assert app.covered(ours)
+        before = app.webhooks_run
+
+        def refused(*args, **kwargs):
+            raise main.GitHubError(0, "x", "GitHub could not be reached. Check the network and try again.")
+
+        moved = main.ensure_hook
+        monkeypatch.setattr(main, "ensure_hook", refused)             # the hooks cannot be moved just now
+        app.start_webhooks()
+        await settle(app, pilot)
+        assert app.tunnel_state == "open" and app.webhooks_run > before
+        assert not app.covered(ours) and app.period(ours) == 5 * 60   # not taken for covered meanwhile
+        app.hook_done("djp3/agent-frolic", 100, "webhook #100 registered", before)    # an answer for the old tunnel
+        assert not app.covered(ours)                                                  # comes late: it is not this one's
+        monkeypatch.setattr(main, "ensure_hook", moved)
+        await to_setup(app, pilot)
+        await pilot.press("r")                                        # registered again, for the tunnel open now
+        await settle(app, pilot)
+        assert app.covered(ours)
+        await turn_webhooks_off(app, pilot)
+        await settle(app, pilot)
+        assert app.hooked == {}
+
+
+@drive
 async def test_while_github_works_out_whether_a_pull_request_can_merge_the_timer_stays_short(isolated):
     """It works that out a little after a push to the base branch, and sends no webhook
     when it knows. Left to the slow timer, "ready to merge" would be missing for half an hour."""
@@ -1893,7 +1928,7 @@ async def test_what_counts_as_covered_is_a_record_of_confirmed_hooks_not_the_wor
         assert not app.covered(theirs_)                                   # nor does a failure that ends alike
         app.hook_done("djp3/agent-frolic", 0, "webhook failed: GitHub could not be reached")
         assert not app.covered(ours) and app.period(ours) == 5 * 60       # a hook that failed is not coverage
-        app.hook_done("djp3/agent-frolic", 7, "webhook #7 registered", True)
+        app.hook_done("djp3/agent-frolic", 7, "webhook #7 registered", app.webhooks_run)
         assert app.covered(ours)
         app.hook_gone("djp3/agent-frolic")
         assert not app.covered(ours) and "djp3/agent-frolic" not in app.hooked

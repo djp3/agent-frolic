@@ -1013,15 +1013,19 @@ class Frolic(App):
 
     def stop_services(self) -> None:
         """Close the tunnel and the receiver. A start still under way is out of date from
-        now on: it closes what it opens and says nothing."""
+        now on: it closes what it opens and says nothing. No repository's hook is confirmed
+        any more: a confirmation is about the tunnel it was made for."""
         self.webhooks_run += 1
+        self.hooked.clear()
         tunnel, receiver, self.tunnel, self.receiver = self.tunnel, self.receiver, None, None
         close_services(tunnel, receiver)
 
     def start_webhooks(self) -> None:
         """Open the webhooks afresh. What is open is closed first (by the worker), and a
-        start still under way gives up."""
+        start still under way gives up. Each hook has to be confirmed again for the tunnel
+        this opens: until GitHub has it pointing there, its deliveries go to the old one."""
         self.webhooks_run += 1
+        self.hooked.clear()
         old, self.tunnel, self.receiver = (self.tunnel, self.receiver), None, None
         self.tunnel_changed("starting", "")
         self.open_webhooks(self.webhooks_run, old)
@@ -1157,9 +1161,13 @@ class Frolic(App):
         points_an_hour = got.limit * self.WEBHOOK_SHARE / max(1, len(self.store.shown()))
         return max(self.WEBHOOK_SOONEST_S, got.cost * 3600 / points_an_hour)
 
-    @work(thread=True, group="hooks")
     def sync_hooks(self, names: list[str]) -> None:
-        """Make sure each named repository has our webhook, pointing at the tunnel."""
+        """Make sure each named repository has our webhook, pointing at the tunnel that is
+        open now. What it finds is for that tunnel (hook_done drops it otherwise)."""
+        self.sync_hooks_for(self.webhooks_run, names)
+
+    @work(thread=True, group="hooks")
+    def sync_hooks_for(self, run: int, names: list[str]) -> None:
         try:
             github = GitHub(keychain.get(keychain.GITHUB_TOKEN) or "")
             secret = keychain.webhook_secret()
@@ -1180,18 +1188,20 @@ class Frolic(App):
             except GitHubError as e:
                 self.later(self.hook_done, name, repo.hook_id, f"webhook failed: {e}")
             else:
-                self.later(self.hook_done, name, hook.id, f"webhook #{hook.id} registered", True)
+                self.later(self.hook_done, name, hook.id, f"webhook #{hook.id} registered", run)
 
-    def hook_done(self, name: str, hook_id: int, note: str, confirmed: bool = False) -> None:
+    def hook_done(self, name: str, hook_id: int, note: str, confirmed_for: int = 0) -> None:
         """What became of a repository's webhook: `note` says it in words, for the setup, and
-        `confirmed` says whether GitHub now has the hook pointing at the tunnel. Only that
-        makes the repository one GitHub sends deliveries about (covered)."""
+        `confirmed_for` is the run of the tunnel GitHub now has the hook pointing at, 0 when
+        it has not. Only a hook confirmed for the tunnel that is open now makes the
+        repository one GitHub sends deliveries about (covered): after a restart, one
+        confirmed for the tunnel before points at an address nobody listens on."""
         if not self.settings.webhooks:                       # turned off while this one was being made
             if hook_id:
                 self.delete_hooks([(name, hook_id)])
             return
         self.hook_state[name.lower()] = note
-        if confirmed:
+        if confirmed_for and confirmed_for == self.webhooks_run:
             self.hooked[name.lower()] = time.time()
         else:
             self.hooked.pop(name.lower(), None)
