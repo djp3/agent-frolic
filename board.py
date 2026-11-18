@@ -841,19 +841,29 @@ class Board(Screen):
 
     def draw_rule(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A rule across both columns, carrying its name: double at a repo, heavy at a base,
-        light at a commit (with its short hash). It crosses the rule between the columns."""
+        light at a commit (with its short hash). It crosses the rule between the columns.
+
+        A repository's rule says how many pull requests are open there, and for one with
+        none that is the only place the board says so (tree() gives it no line beneath). So
+        in a window too narrow for all of it the count is what stays: first the "most recent
+        shown" goes, then ●n ○n (the top line has those too), then the name is cut short."""
         line, cross = {"repo": ("═", "╪"), "base": ("━", "┿"), "commit": ("─", "┼")}[row.kind]
         canvas.put(0, y, line * width, DIVIDER)
         canvas.put(X_RULE, y, cross, DIVIDER)
+        room = max(0, width - X_TREE)
         parts: Segments = [(" ", "")]
         if row.kind == "repo":
-            parts += [(row.label, f"bold {INK}")]
             got = next((read for read in self.pic.read() if read.repo == row.repo), None)
+            said: Segments = []
             if got is not None:
-                parts += count_marks(*counts(self.pic, row.repo), gap="  ")
-                parts += [(f"  {got.total} open", MUTED)]
-                if got.total > len(got.pulls):
-                    parts += [(f", the {len(got.pulls)} most recent shown", MUTED)]
+                marks = count_marks(*counts(self.pic, row.repo), gap="  ")
+                opened: Segments = [(f"  {got.total} open", MUTED)]
+                more: Segments = ([(f", the {len(got.pulls)} most recent shown", MUTED)]
+                                  if got.total > len(got.pulls) else [])
+                beside = room - 2 - cell_len(row.label)        # what the whole name leaves, between two spaces
+                said = next((all_ for all_ in (marks + opened + more, marks + opened) if seg_len(all_) <= beside),
+                            opened)
+            parts += [(cut(row.label, room - 2 - seg_len(said)), f"bold {INK}")] + said
         elif row.kind == "base":
             parts += [(row.lead, AXIS), (row.label, f"bold {INK}")]
         else:
@@ -861,7 +871,7 @@ class Board(Screen):
             if row.label:
                 parts += [(" " + row.label, MUTED)]
         parts += [(" ", "")]
-        write(canvas, X_TREE - 1, y, parts, max(0, width - X_TREE))
+        write(canvas, X_TREE - 1, y, parts, room)
         at = width - BAR - 2                                   # the repository's two bars, at the rule's end
         if row.kind == "repo" and at >= X_TREE - 1 + seg_len(parts):
             write(canvas, at, y, [(" ", ""), *fresh_bar(*self.app.freshness(row.repo)), (" ", "")], BAR + 2)

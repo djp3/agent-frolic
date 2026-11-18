@@ -170,6 +170,40 @@ async def test_in_a_narrow_window_every_row_keeps_its_number_and_the_headings_ke
 
 
 @drive
+async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_open(isolated):
+    """For a repository with nothing open that count is the only place the board says so:
+    there is no line beneath it. So the count stays, and what gives way is the rest."""
+    a_board()
+    long = "acme-platform/regional-ledger-reconciliation"
+    RepoStore().add(long, admin=True)
+    FakePulls.open_[long] = []
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        assert f"{long}  0 open" in screen(app)                                    # room for all of it
+        assert "djp3/agent-frolic  ●1  ○2  4 open" in screen(app)
+
+        await pilot.resize_terminal(100, 46)
+        await pilot.pause()
+        row = line(app, "acme-platform/")
+        assert "…  0 open" in row and long not in row                              # the name is cut, the count kept
+        assert "acme-platform/regional-ledger" in row
+        assert "djp3/agent-frolic  ●1  ○2  4 open" in screen(app)                  # where there is room, as it was
+
+        await pilot.resize_terminal(82, 46)
+        await pilot.pause()
+        assert "djp3/agent-frolic  4 open" in screen(app)                          # ●n ○n go before the name is cut:
+        assert "agent-frolic ●1 ○2" in screen(app).splitlines()[0]                 # the top line has them too
+        assert "djp3/quiet-one  0 open" in screen(app)
+
+        await pilot.resize_terminal(75, 46)                                        # the narrowest the Mac's window goes
+        await pilot.pause()
+        assert "djp3/quie…  0 open" in screen(app) and "djp3/agen…  4 open" in screen(app)
+        assert "acme-plat…  0 open" in screen(app)
+        assert "nothing is open" not in screen(app)
+
+
+@drive
 async def test_a_narrow_window_shows_quiet_as_one_block(isolated):
     a_board()
     app = main.Frolic()
