@@ -287,6 +287,7 @@ class Frolic(App):
     SAFETY_POLLS = 6              # a repository GitHub sends webhooks for is read on its timer this many times
                                   # less often than one it does not: every 30 minutes at the usual five
     ASLEEP_S = 60.0               # the clock ticks every second: this long between two ticks, and the Mac slept
+    TOGETHER_S = 15.0             # a repository due within this long of a read that is starting goes with it
     OPEN_AGAIN_S = 2.0            # o on the same pull request sooner than this after the last o is the key repeating
     NOTICE_S = 3.0                # how long a word about what the user just did takes the ticker's line,
     NOTICE_FAILED_S = 10.0        # and how long when it says that it failed
@@ -399,7 +400,8 @@ class Frolic(App):
         self.check_stored_token()
 
     def tick(self) -> None:
-        """Once a second: each shown repository whose timer has run out is read again (and,
+        """Once a second: each shown repository whose timer has run out is read again, with
+        those whose timers are about to (TOGETHER_S), by one worker (and,
         at the pace of the poll, another try at the viewer's teams while a read of them has
         failed and none are known), another try at checking a stored token GitHub could not
         be reached for, and the ages ("3s ago") move on. A tick that comes long after the
@@ -419,7 +421,14 @@ class Frolic(App):
                 if missed:
                     self.say("the Mac was asleep: reading again the repositories GitHub sends webhooks for")
             if due or missed:
-                self.update_pulls([repo.name for repo in due + missed], "woke" if missed else "poll")
+                # One worker reads its repositories one after another, with one look in the
+                # Keychain, so the timers of those read together run out moments apart. What
+                # is nearly due goes with what is due: or from the second round on, each would
+                # be read by a worker of its own, a second or two after the last.
+                soon = [repo for repo in shown
+                        if repo not in (due + missed) and self.due(repo, now + self.TOGETHER_S)]
+                together = due + missed + soon
+                self.update_pulls([repo.name for repo in shown if repo in together], "woke" if missed else "poll")
             if self.teams_retry and now >= self.teams_tried_at + self.settings.poll_minutes * 60:
                 self.start_teams_read()                    # a read of the teams that failed, with none
                                                            # known: until it works. Known ones are left be

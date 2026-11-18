@@ -2027,6 +2027,38 @@ async def test_after_the_mac_has_slept_a_repository_that_relies_on_its_webhook_i
 
 
 @drive
+async def test_repositories_whose_timers_run_out_moments_apart_are_read_by_one_worker(isolated, monkeypatch):
+    """Read one after another, they end a second or two apart, and their timers with them.
+    Left at that, each would have a worker and a look in the Keychain of its own from then on."""
+    three_repos()
+    RepoStore().add("djp3/quiet-one", admin=True)
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        app.tick()
+        span = app.settings.poll_minutes * 60
+        app.read_at["djp3/agent-frolic"] = now[0] - span              # its timer has just run out,
+        app.read_at["acme/ledger-api"] = now[0] - span + 2            # the next one's does in two seconds,
+        app.read_at["djp3/quiet-one"] = now[0] - span + 60            # and the last one's in a minute
+        workers = []
+        fetch = app.fetch
+        monkeypatch.setattr(app, "fetch", lambda wanted: workers.append([name for name, _ in wanted]) or fetch(wanted))
+        app.tick()
+        await settle(app, pilot)
+        assert workers == [["djp3/agent-frolic", "Acme/ledger-api"]]  # one worker, in the list's order
+
+        now[0] += 3                                                   # nothing more when the second one's
+        app.tick()                                                    # own moment comes: it has been read
+        await settle(app, pilot)
+        assert len(workers) == 1
+        now[0] += 57                                                  # the last is read at its own time:
+        app.tick()                                                    # nothing else is near
+        await settle(app, pilot)
+        assert workers[1:] == [["djp3/quiet-one"]]
+
+
+@drive
 async def test_a_timer_is_never_shorter_than_a_minute_whatever_the_setting_holds(isolated):
     """Settings.load keeps the poll's minutes from 1 up. A setting that reached the app some
     other way, at 0, would make a timer of no length: every repository read every second,
