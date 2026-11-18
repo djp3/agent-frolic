@@ -324,6 +324,8 @@ class Frolic(App):
         self.token_used = 0                       # the token run whose check accepted the token in use:
                                                   # each read of the pull requests is made with that token,
                                                   # and one made with another is not used (pulls_known)
+        self.pulls_for = ""                       # the login what is read of the pull requests is for,
+                                                  # lower case: another account's sign-in forgets it
         self.token_lock = threading.Lock()        # storing a checked token and forgetting take turns
         self.identity: Identity | None = None
         # the teams the viewer is on: a review asked of one of them is theirs to give. The list
@@ -665,7 +667,7 @@ class Frolic(App):
         self.token_state, self.token_mask, self.identity, self.token_note = state, mask, me, note
         if state == "ok":
             self.say(f"GitHub token accepted: signed in as {me.login}", INK)
-            self.take_token()
+            self.take_token(me.login)
             if me.login.lower() != self.teams_for:         # another account: the teams of the one before
                 self.forget_teams()                        # are not this one's
                 self.teams_for = me.login.lower()
@@ -678,13 +680,33 @@ class Frolic(App):
             self.say(f"GitHub token problem: {note}", INK)
         self.draw()
 
-    def take_token(self) -> None:
-        """The token just accepted is the one in use from now on. What was read with the
-        one before stays on the board until each repository is read again, which starts at
-        once, but not what that token's account may do there: its rights are not this
-        token's to lend. Reads still under way with it are not used when they end."""
+    def take_token(self, login: str) -> None:
+        """The token just accepted, `login`'s, is the one in use from now on. Reads still
+        under way with the one before are not used when they end.
+
+        Another account's: what the account before read goes. It may hold repositories this
+        one cannot see, and one this account cannot read at all would keep it on the board
+        for good. Each shown repository is read again at once, and says "reading…" till then.
+
+        The same account's: what was read stays on the board until each repository is read
+        again, but not what the token before could do there: its rights are not this
+        token's to lend."""
         self.token_used = self.token_run
-        self.pulls = {key: replace(got, access="") for key, got in self.pulls.items()}
+        if login.lower() != self.pulls_for:
+            self.forget_readings()
+            self.pulls_for = login.lower()
+        else:
+            self.pulls = {key: replace(got, access="") for key, got in self.pulls.items()}
+
+    def forget_readings(self) -> None:
+        """What was read of the pull requests, and all that was made of it on screen: the
+        readings, why some could not be read, the wash on what changed, the ticker's line.
+        Not the timers, nor which reads are under way: their answers go to `pulls_known`,
+        which tells the ones made with a token no longer in use."""
+        for held in (self.pulls, self.pull_trouble, self.flashes):
+            held.clear()
+        self.news = None
+        self.pulls_for = ""
 
     # ---- the teams the viewer is on --------------------------------------------------------
     @property
@@ -814,11 +836,11 @@ class Frolic(App):
         """With the token gone, what it read goes too, and the tunnel closes: nothing on
         screen is left to go stale, and no delivery arrives that could not be acted on. The
         webhooks setting stays, so a new token opens the tunnel again."""
-        for held in (self.pulls, self.pull_trouble, self.flashes, self.hook_state, self.hooked):
+        self.forget_readings()
+        for held in (self.hook_state, self.hooked):
             held.clear()
         self.forget_teams()
         self.stale.clear()
-        self.news = None
         self.read_at.clear()
         self.read_began.clear()
         self.hook_at.clear()

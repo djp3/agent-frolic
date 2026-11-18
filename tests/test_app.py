@@ -1701,6 +1701,47 @@ async def test_a_new_token_does_not_lend_the_rights_read_with_the_one_before(iso
         assert app.news is None and not app.flashes                       # not taken for a change on GitHub
 
 
+@drive
+async def test_another_account_signing_in_does_not_keep_what_the_one_before_read(isolated):
+    """What one account read is not shown once another signs in, not even until the new
+    account's reads come: it may hold a private repository the new account cannot see, and
+    one it cannot read at all would keep it for good. Another token of the same account
+    keeps it all until read again."""
+    second, third = TOKEN[:-4] + "4321", TOKEN[:-4] + "8765"
+    FakeGitHub.logins = {second: "mira", third: "mira"}
+    an_org_move()
+    FakePulls.access.update({second: "read", third: "read"})
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        FakePulls.open_["acme/web-console"].append(node(302, "more", author={"login": "dependabot"},
+                                                        authorAssociation="NONE", title="Bump c"))
+        await pilot.press("u")                                            # djp3 sees one open: said and washed
+        await settle(app, pilot)
+        assert app.news is not None and app.flashes and app.pulls_for == "djp3"
+
+        FakePulls.broken["acme/web-console"] = "No such repository, or the token cannot see it."
+        await to_setup(app, pilot)
+        await paste(app, pilot, second)                                   # mira cannot read it at all
+        await settle(app, pilot)
+        assert app.identity.login == "mira" and app.pulls_for == "mira"
+        assert app.pulls == {} and app.news is None and not app.flashes   # nothing of djp3's is left
+        app.board.look()
+        assert app.board.pic.all() == []
+        assert app.board.pic.notes["acme/web-console"].startswith("could not be read")
+
+        del FakePulls.broken["acme/web-console"]
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert sorted(p.number for p in app.pulls["acme/web-console"].pulls) == [301, 302]
+        FakeGitHub.gates[("pulls", third)] = threading.Event()
+        await paste(app, pilot, third)                                    # mira again, another token
+        await until(pilot, lambda: ("pulls", third) in FakeGitHub.waiting)
+        assert sorted(p.number for p in app.pulls["acme/web-console"].pulls) == [301, 302]    # kept meanwhile
+        FakeGitHub.gates[("pulls", third)].set()
+        await settle(app, pilot)
+
+
 # ---- each repository's timer ---------------------------------------------------------------
 
 async def read_since_hooked(app, pilot):
