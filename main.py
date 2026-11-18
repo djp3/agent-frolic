@@ -1593,7 +1593,8 @@ class Frolic(App):
 
     def pulls_text(self) -> Text:
         """The open pull requests of the shown repositories, as GitHub records them, each
-        repository in stack order."""
+        repository in stack order. One with nothing open is its head line and no more: that
+        line says "0 open", as its line on the board does."""
         out = Text("pull requests", style=f"bold {INK}")
         out.append("   p shows the log · u updates now · ↑↓ scroll\n", style=MUTED)
         width = max(60, self.setup.query_one("#lower", VerticalScroll).size.width - 1)
@@ -1617,8 +1618,6 @@ class Frolic(App):
                 out.append("    ✗ ", style=CRIT).append(trouble + "\n", style=INK)
             if got is None:
                 continue
-            if not got.pulls:
-                out.append("    nothing is open\n", style=MUTED)
             for pull in got.pulls:
                 out.append_text(pull_line(pull, got.default_branch, width)).append("\n")
         return out

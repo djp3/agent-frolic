@@ -694,6 +694,15 @@ async def test_pull_requests_are_read_at_start_for_the_shown_repositories_and_li
         before = app.sel
         await pilot.press("down", "down")                         # in the list the arrows scroll, not pick
         assert app.sel == before
+
+        FakePulls.open_["acme/ledger-api"] = []                   # the last one there is merged
+        await pilot.press("u")
+        await settle(app, pilot)
+        shown = screen(app)
+        head = next(row for row in shown.splitlines() if "Acme/ledger-api" in row and "default branch" in row)
+        assert "0 open" in head                                   # its head line says so,
+        assert "nothing is open" not in shown                     # and no line under it says so again
+
         await pilot.press("p")
         await pilot.pause()
         assert "started" in screen(app)                           # back to the log
