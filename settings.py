@@ -30,7 +30,9 @@ DEFAULT_PATH = data_dir() / "settings.json"
 class Settings:
     webhooks: bool = False          # receive GitHub webhooks through an ngrok tunnel while the app is open
     ngrok_domain: str = ""          # the ngrok domain the tunnel uses: "your-name.ngrok-free.dev"
-    poll_minutes: int = 5           # how often GitHub is polled, with or without webhooks (1 to POLL_MOST)
+    poll_minutes: int = 5           # minutes between two reads of a repository on its timer (1 to POLL_MOST).
+                                    # One GitHub sends webhooks for, with nothing amiss, is read every
+                                    # Frolic.SAFETY_POLLS times that (Frolic.period)
 
     POLL_MOST: ClassVar[int] = 24 * 60
 

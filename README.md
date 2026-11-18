@@ -48,8 +48,16 @@ GitHub.
 ### Changes arrive as they happen
 
 Turn on webhooks and GitHub tells the app the moment something changes; the row washes pale
-for a moment and the ticker says what happened. Without them the app reads GitHub again every
-five minutes, and `u` reads it now.
+for a moment and the ticker says what happened. Each repository also has a timer of its own:
+one GitHub sends no webhooks for is read again every five minutes, and one it does, every
+half hour, to catch a delivery that never came. Any read starts that repository's timer
+again, and `u` reads them all now.
+
+The half hour is for a repository whose webhook can be relied on. It is back to five minutes
+while its last read failed, while GitHub is still working out whether a pull request there can
+merge (it sends no webhook when it knows), and while the tunnel does not lead back to the app.
+After the Mac has slept, the repositories with webhooks are read at once: what GitHub sent
+meanwhile reached nobody.
 
 ### Your token in your Keychain. Your work on your Mac.
 
@@ -88,7 +96,9 @@ Space shows or hides one on the board, and `b` names its long-lived branches (su
 address, and [ngrok](https://ngrok.com) gives this Mac one: press `w` and enter your ngrok
 authtoken and domain (a free account has one domain). The app opens the tunnel while it is
 running, and registers a webhook on each shown repository you administer. Repositories you do
-not administer are read on the timer instead.
+not administer cannot have one, and are read every five minutes instead. The app keeps checking
+that the tunnel still leads back to it; while it does not, every repository is read every five
+minutes.
 
 | key | on the setup screen |
 |-----|---------------------|
@@ -111,13 +121,15 @@ From top to bottom:
 
 - **The top line**: every repository in your list, the ones on screen underlined, each with
   `●n` (what you can get moving there) and `○n` (other people and teams something there waits
-  on). At the right, two thin bars: the upper one empties until GitHub is next read, the lower
-  one since the last webhook delivery.
+  on). At the right, the key to the two bars on each repository's line.
 - **The cards**: you, then the teams you are on, then everyone else something waits on, the
   longest wait first. A yellow dot on a card means something on it is yours to act on.
 - **The list**, in two columns. On the left, who: owner, state, and who it waits on. On the
   right, the tree: repository, base branch, commit, then the pull requests in stack order, each
-  with its reviews, checks, progress and how long it has been quiet.
+  with its reviews, checks, progress and how long it has been quiet. Each repository's line
+  ends in two thin bars of its own: the upper one empties until that repository is next read
+  on its timer, the lower one since GitHub last sent a webhook about it (empty where it sends
+  none).
 - **The band**: what needs effort, and the drawer for the selected pull request.
 - **The ticker**: the last thing that happened.
 
@@ -246,13 +258,17 @@ today the board shows people and teams, from GitHub's records alone.
 The log records what was read and what changed, and why anything failed. It starts afresh
 past 2 MB and keeps the three before it.
 
+`poll_minutes` in the settings is how many minutes a repository's timer runs: 5 unless you
+change it, from 1 to 1440. A repository with a webhook that can be relied on is read every six
+times that.
+
 ## How it works
 
 The app asks GitHub for the open pull requests of each shown repository with one query: at
-start, on the timer, when you press `u`, and when a webhook says something changed there. The
-webhook receiver listens on 127.0.0.1 only; deliveries reach it through the ngrok tunnel and
-are accepted only with GitHub's signature. Everything on the board is worked out from what was
-read; the board itself never talks to GitHub.
+start, when that repository's timer runs out, when you press `u`, and when a webhook says
+something changed there. The webhook receiver listens on 127.0.0.1 only; deliveries reach it
+through the ngrok tunnel and are accepted only with GitHub's signature. Everything on the board
+is worked out from what was read; the board itself never talks to GitHub.
 
 It is a Python program (Textual) running inside a native window. To run it from source:
 

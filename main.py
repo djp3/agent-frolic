@@ -20,8 +20,12 @@ the board to the setup; s or escape goes back.
     .venv/bin/python -m pytest                     # the tests: no network, no real Keychain
 
 The pull requests are read when the app starts, whenever a webhook arrives for a
-repository, every few minutes (the poll), and on request (u). When a reading differs from
-the one before, the board washes the rows that changed and says what changed.
+repository, on a timer, and on request (u). Each repository has a timer of its own, which
+starts again whenever it has been read, whatever asked for the read: so one that a webhook
+has just had read is not read again by the clock a moment later. A repository GitHub
+sends webhooks for is read on its timer only now and then, to catch a delivery that never
+came; the others every few minutes (Frolic.period). When a reading differs from the one
+before, the board washes the rows that changed and says what changed.
 
 The teams the viewer is on are read once the token is accepted and again on u, on their
 own: a review asked of one of them is the viewer's to give, and the board draws it so.
@@ -280,6 +284,10 @@ class Frolic(App):
     TOKEN_RETRY_S = 30            # how often a stored token GitHub could not be reached for is checked again
     WEBHOOK_SHARE = 0.5           # of GitHub's hourly allowance, the most that reads webhooks ask for may use
     WEBHOOK_SOONEST_S = 10.0      # the least time between two of them for one repository: a burst is read once
+    SAFETY_POLLS = 6              # a repository GitHub sends webhooks for is read on its timer this many times
+                                  # less often than one it does not: every 30 minutes at the usual five
+    ASLEEP_S = 60.0               # the clock ticks every second: this long between two ticks, and the Mac slept
+    TOGETHER_S = 15.0             # a repository due within this long of a read that is starting goes with it
     OPEN_AGAIN_S = 2.0            # o on the same pull request sooner than this after the last o is the key repeating
     NOTICE_S = 3.0                # how long a word about what the user just did takes the ticker's line,
     NOTICE_FAILED_S = 10.0        # and how long when it says that it failed
@@ -342,7 +350,11 @@ class Frolic(App):
         self.closing = threading.Event()          # set as the app closes: workers stop at their next chance
         self.authtoken_mask = ""                  # what was last read of the ngrok authtoken: its mask,
                                                   # "stored", "missing" or "unreadable"; "" until then
-        self.hook_state: dict[str, str] = {}      # repository (lower case) -> what happened to its hook
+        self.hook_state: dict[str, str] = {}      # repository (lower case) -> what happened to its hook,
+                                                  # in words, for the setup to show
+        self.hooked: dict[str, float] = {}        # repository (lower case) -> when its webhook was confirmed:
+                                                  # GitHub sends deliveries about it from then. What decides
+                                                  # things is this record, never the words above
         self.hook_read_at: dict[str, float] = {}  # repository (lower case) -> when a delivery last had it read
         self.hook_read_due: dict[str, float] = {}  # repository (lower case) -> when its waiting read may start
         self.repo_note: dict[str, str] = {}       # repository (lower case) -> trouble seeing it
@@ -353,14 +365,21 @@ class Frolic(App):
         self.pull_trouble: dict[str, str] = {}    # repository (lower case) -> why the last fetch failed
         self.fetching: set[str] = set()           # repositories being fetched right now
         self.stale: set[str] = set()              # repositories that changed while being fetched
-        self.polled_at = 0.0                      # when every shown repository was last asked for
+        self.read_at: dict[str, float] = {}       # repository (lower case) -> when a read of it last ended,
+                                                  # whether it worked or not: its timer runs from then
+        self.read_began: dict[str, float] = {}    # repository (lower case) -> when its last read was asked for
+        self.teams_tried_at = 0.0                 # when the viewer's teams were last asked for
+        self.ticked_at = 0.0                      # when the clock last ticked
+        self.tunnel_checked_at = 0.0              # when the tunnel was last checked to lead back here (or
+        self.tunnel_checking = False              # opened); and whether such a check is under way
         self.agents: dict = {}                    # (repository, number) -> the agents on it; nothing reports them yet
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
         self.news: tuple[float, str] | None = None        # the last thing that happened on GitHub, for the
                                                           # board's ticker (set by `happened` alone)
         self.notice: tuple[float, str] | None = None      # words in the ticker's place, and until when (announce)
-        self.hook_at = 0.0                        # when the last webhook delivery arrived (or the tunnel opened)
+        self.hook_at: dict[str, float] = {}       # repository (lower case) -> when GitHub last sent a delivery
+                                                  # about it
         self.board = Board()
         self.setup = SetupScreen()
 
@@ -381,21 +400,116 @@ class Frolic(App):
         self.check_stored_token()
 
     def tick(self) -> None:
-        """Once a second: the poll when it is due (and with it another try at the viewer's
-        teams, while a read of them has failed and none are known), another try at checking
-        a stored token GitHub could not be reached for, and the ages ("3s ago") move on."""
-        due = self.polled_at + self.settings.poll_minutes * 60
-        if self.token_state == "ok" and self.polled_at and time.time() >= due:
-            if self.teams_retry:                           # a read of the teams that failed, with none
-                self.start_teams_read()                    # known: until it works. Known ones are left be
-            self.update_pulls([r.name for r in self.store.shown()], "poll")
+        """Once a second: each shown repository whose timer has run out is read again, with
+        those whose timers are about to (TOGETHER_S), by one worker (and,
+        at the pace of the poll, another try at the viewer's teams while a read of them has
+        failed and none are known), another try at checking a stored token GitHub could not
+        be reached for, and the ages ("3s ago") move on. A tick that comes long after the
+        one before says the Mac slept (ASLEEP_S)."""
+        now = time.time()
+        slept, self.ticked_at = bool(self.ticked_at) and now - self.ticked_at > self.ASLEEP_S, now
+        if self.token_state == "ok":
+            shown = self.store.shown()
+            due = [repo for repo in shown if self.due(repo, now)]
+            missed = []
+            if slept:
+                # While the Mac slept, what GitHub sent reached nobody, and GitHub does not send
+                # it again. A repository that relies on its webhook is read now, not when its
+                # slow timer says. (The others are overdue by now, or soon will be.)
+                missed = [repo for repo in shown
+                          if repo not in due and repo.name.lower() not in self.fetching and self.covered(repo)]
+                if missed:
+                    self.say("the Mac was asleep: reading again the repositories GitHub sends webhooks for")
+            if due or missed:
+                # One worker reads its repositories one after another, with one look in the
+                # Keychain, so the timers of those read together run out moments apart. What
+                # is nearly due goes with what is due: or from the second round on, each would
+                # be read by a worker of its own, a second or two after the last.
+                soon = [repo for repo in shown
+                        if repo not in (due + missed) and self.due(repo, now + self.TOGETHER_S)]
+                together = due + missed + soon
+                self.update_pulls([repo.name for repo in shown if repo in together], "woke" if missed else "poll")
+            if self.teams_retry and now >= self.teams_tried_at + self.settings.poll_minutes * 60:
+                self.start_teams_read()                    # a read of the teams that failed, with none
+                                                           # known: until it works. Known ones are left be
         if self.token_state == "unchecked" and time.time() >= self.token_tried_at + self.TOKEN_RETRY_S:
             self.retry_token()
+        if (self.tunnel is not None and self.receiver is not None and not self.tunnel_checking
+                and self.tunnel_state in ("open", "unreachable")
+                and (slept or now >= self.tunnel_checked_at + self.settings.poll_minutes * 60)):
+            self.tunnel_checking, self.tunnel_checked_at = True, now       # does it still lead back here?
+            self.check_tunnel(self.webhooks_run, self.tunnel.url, self.receiver.nonce)
         for key, at in list(self.hook_read_due.items()):
             if time.time() >= at:
                 del self.hook_read_due[key]
                 self.read_for_webhook(key)
         self.draw()
+
+    # ---- each repository's timer -----------------------------------------------------------
+    def covered(self, repo: Repo) -> bool:
+        """Whether GitHub tells the app when this repository changes: webhooks are on, the
+        tunnel is open, and the repository's webhook has been confirmed (hook_done)."""
+        return self.settings.webhooks and self.tunnel_state == "open" and repo.name.lower() in self.hooked
+
+    def period(self, repo: Repo) -> float:
+        """How long a repository goes between two reads on its timer, in seconds. The poll's
+        minutes for one GitHub sends no webhooks for. SAFETY_POLLS times that for one it
+        does: there silence means nothing changed, and the timer is only there to catch a
+        delivery that never came (GitHub does not send one again). When the tunnel closes,
+        or webhooks are turned off, such a repository is back on the short timer at once.
+
+        The slow timer is for a repository whose last read worked. One whose last read
+        failed is on the short one until a read works: what the board shows of it is not
+        known to be right, however quiet GitHub is.
+
+        And it is for a repository read since its webhook was confirmed. What changed
+        between an earlier read and the hook going live was told to nobody: the hook was not
+        there, or pointed elsewhere. So until a read has begun after that, the timer stays
+        short, and one ordinary read closes the gap.
+
+        And not for a repository where GitHub is still working out whether a pull request
+        can merge. It does that a little after it is asked, following a push to the base
+        branch, and sends no delivery when it knows: only another read finds out."""
+        key = repo.name.lower()
+        got = self.pulls.get(key)
+        slow = (self.covered(repo) and key not in self.pull_trouble
+                and self.read_began.get(key, 0.0) >= self.hooked.get(key, 0.0)
+                and not (got is not None and any(pull.mergeable == "unknown" for pull in got.pulls)))
+        # At least a minute, whatever the setting holds: Settings.load keeps it from 1 up, but
+        # a timer of no length would read every repository every second.
+        minutes = max(1, self.settings.poll_minutes) * (self.SAFETY_POLLS if slow else 1)
+        return min(minutes, Settings.POLL_MOST) * 60
+
+    def due(self, repo: Repo, now: float) -> bool:
+        """Whether a shown repository is to be read now: its timer has run out, or it has
+        none. The timer runs from the end of its last read, whatever asked for that read: a
+        webhook, u, the start, or the timer.
+
+        One with no timer has never been read. What shows or adds a repository has it
+        read, but not while the token is being checked, and if that check ends with the
+        old token still in use nothing asks again. So the clock reads it."""
+        key = repo.name.lower()
+        if key in self.fetching:
+            return False
+        return key not in self.read_at or now >= self.read_at[key] + self.period(repo)
+
+    def freshness(self, name: str) -> tuple[float, float]:
+        """What a repository's two bars show, each from 1 (full) down to 0: how much of its
+        timer is left before it is read again, and how much of that same span is left since
+        GitHub was last heard from about it: its last delivery, or its webhook being
+        confirmed, whichever is later. A hook confirmed a moment ago is as fresh as webhooks
+        get, however long the tunnel has been open. The second is 0 for a repository GitHub
+        sends no webhooks for."""
+        repo = self.store.get(name)
+        if repo is None:
+            return 0.0, 0.0
+        key, span, now = repo.name.lower(), self.period(repo), time.time()
+
+        def left(since: float) -> float:
+            return max(0.0, min(1.0, 1 - (now - since) / span)) if since else 0.0
+
+        heard = max(self.hook_at.get(key, 0.0), self.hooked.get(key, 0.0)) if self.covered(repo) else 0.0
+        return left(self.read_at.get(key, 0.0)), left(heard)
 
     def retry_token(self) -> None:
         """Ask GitHub again about the stored token. The screen keeps saying "not checked"
@@ -580,7 +694,7 @@ class Frolic(App):
         """Ask GitHub which teams the viewer is on, unless it is being asked for this token
         already. At each sign-in and on u; there is no timer for it."""
         if self.teams_run != self.token_run:
-            self.teams_run = self.token_run
+            self.teams_run, self.teams_tried_at = self.token_run, time.time()
             self.read_teams(self.token_run, self.teams_for)
 
     def forget_teams(self) -> None:
@@ -688,11 +802,14 @@ class Frolic(App):
         """With the token gone, what it read goes too, and the tunnel closes: nothing on
         screen is left to go stale, and no delivery arrives that could not be acted on. The
         webhooks setting stays, so a new token opens the tunnel again."""
-        for held in (self.pulls, self.pull_trouble, self.flashes, self.hook_state):
+        for held in (self.pulls, self.pull_trouble, self.flashes, self.hook_state, self.hooked):
             held.clear()
         self.forget_teams()
         self.stale.clear()
-        self.news, self.polled_at = None, 0.0
+        self.news = None
+        self.read_at.clear()
+        self.read_began.clear()
+        self.hook_at.clear()
         if self.tunnel is not None or self.receiver is not None:
             self.stop_services()
             self.say("webhooks: tunnel closed until there is a token again")
@@ -742,19 +859,33 @@ class Frolic(App):
                 self.sync_hooks([repo.name])
         self.draw()
 
+    def forget_repo(self, key: str) -> None:
+        """Drop all that is kept about a repository under this name (lower case): it has
+        left the list, or goes by another name now. Its timers too, or they would outlive it."""
+        for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
+                     self.read_began, self.hook_at, self.hook_read_at, self.hook_read_due):
+            held.pop(key, None)
+
     def take_name(self, asked: str, name: str, private: bool, admin: bool,
                   default_branch: str = "") -> tuple[Repo, bool]:
         """The list takes GitHub's name for a repository it has as `asked`: other capitals,
         or a new name GitHub followed (renamed or transferred). This is the one place the
         two spellings meet; everywhere else compares the list's names as they are. What was
-        read under an old name is dropped. Returns the entry, and whether it was renamed."""
+        read under an old name is dropped. Returns the entry, and whether it was renamed.
+
+        Its webhook moved with it on GitHub and goes on sending. So one whose hook was
+        confirmed under the old name has it confirmed again under the new one, now: left to
+        the next time the webhooks are registered, it would be read on the short timer
+        until then, for no reason anyone could see."""
         repo = self.store.add(name, private, admin, default_branch, was=asked)
         old, new = asked.lower(), name.lower()
         if not asked or old == new:
             return repo, False
-        for held in (self.pulls, self.pull_trouble, self.hook_state, self.repo_note):
-            held.pop(old, None)
+        hooked = old in self.hooked
+        self.forget_repo(old)
         self.say(f"{asked} is now {name} on GitHub", INK)
+        if hooked and repo.shown and self.tunnel_state == "open":
+            self.sync_hooks([repo.name])
         return repo, True
 
     @work(thread=True, group="repos")
@@ -826,9 +957,7 @@ class Frolic(App):
             if not yes:
                 return
             self.store.remove(repo.name)
-            self.hook_state.pop(repo.name.lower(), None)
-            self.pulls.pop(repo.name.lower(), None)
-            self.pull_trouble.pop(repo.name.lower(), None)
+            self.forget_repo(repo.name.lower())
             self.say(f"removed {repo.name}", INK)
             if repo.hook_id:
                 self.delete_hooks([(repo.name, repo.hook_id)])
@@ -903,15 +1032,19 @@ class Frolic(App):
 
     def stop_services(self) -> None:
         """Close the tunnel and the receiver. A start still under way is out of date from
-        now on: it closes what it opens and says nothing."""
+        now on: it closes what it opens and says nothing. No repository's hook is confirmed
+        any more: a confirmation is about the tunnel it was made for."""
         self.webhooks_run += 1
+        self.hooked.clear()
         tunnel, receiver, self.tunnel, self.receiver = self.tunnel, self.receiver, None, None
         close_services(tunnel, receiver)
 
     def start_webhooks(self) -> None:
         """Open the webhooks afresh. What is open is closed first (by the worker), and a
-        start still under way gives up."""
+        start still under way gives up. Each hook has to be confirmed again for the tunnel
+        this opens: until GitHub has it pointing there, its deliveries go to the old one."""
         self.webhooks_run += 1
+        self.hooked.clear()
         old, self.tunnel, self.receiver = (self.tunnel, self.receiver), None, None
         self.tunnel_changed("starting", "")
         self.open_webhooks(self.webhooks_run, old)
@@ -956,6 +1089,31 @@ class Frolic(App):
                                   "The tunnel opened, but its address did not lead back to this app.")
             self.later(self.webhooks_changed, run, "open", "")
 
+    @work(thread=True, group="webhooks")
+    def check_tunnel(self, run: int, url: str, nonce: str) -> None:
+        """Ask again whether the public address leads back to this app: the check made when
+        the tunnel opened, repeated for as long as it is open (tick). A tunnel can die
+        later, another ngrok session taking its address or the network changing, and
+        nothing else would say so."""
+        ok = wait_reachable(url, nonce, tries=3, pause=2.0, sleep=self.closing.wait,
+                            stop=lambda: self.closing.is_set() or run != self.webhooks_run)
+        self.later(self.tunnel_checked, run, ok)
+
+    def tunnel_checked(self, run: int, ok: bool) -> None:
+        """What check_tunnel found. A tunnel that no longer leads here is "unreachable": no
+        repository is covered then, so each is back on the short timer. One that leads here
+        again is open again, and the hooks are confirmed afresh (webhooks_changed): what
+        changed meanwhile was told to nobody, and each repository is read once before its
+        timer is the slow one again (period)."""
+        self.tunnel_checking = False
+        if run != self.webhooks_run or self.tunnel is None:  # turned off or started again meanwhile
+            return
+        if ok and self.tunnel_state == "unreachable":
+            self.webhooks_changed(run, "open", "")
+        elif not ok and self.tunnel_state == "open":
+            self.webhooks_changed(run, "unreachable", "The tunnel's address no longer leads back to this app. "
+                                  "Every repository is read on the short timer until it does.")
+
     def hand_on(self, delivery: Delivery) -> None:
         """From the receiver's thread: queue the delivery for the screen's thread, and do not
         wait for it. GitHub's answer waits for this, and the screen may be busy. (Textual's
@@ -979,7 +1137,7 @@ class Frolic(App):
     def tunnel_changed(self, state: str, note: str) -> None:
         self.tunnel_state, self.tunnel_note = state, note
         if state == "open":
-            self.hook_at = time.time()                     # as fresh as it gets: the bar starts full
+            self.tunnel_checked_at = time.time()
             self.say(f"webhooks: tunnel open at https://{self.settings.ngrok_domain}", INK)
         elif state in ("failed", "unreachable"):
             self.say(f"webhooks: {note}", INK)
@@ -989,8 +1147,10 @@ class Frolic(App):
         repo = self.store.get(delivery.repo) if delivery.repo else None
         known = repo is not None or not delivery.repo
         self.say(f"webhook · {delivery.said}" + ("" if known else "  (not in the list)"), INK)
-        self.hook_at = time.time()
-        self.happened(self.hook_at, f"webhook · {delivery.said}")
+        now = time.time()
+        if repo is not None:
+            self.hook_at[repo.name.lower()] = now
+        self.happened(now, f"webhook · {delivery.said}")
         if repo is not None and repo.shown and delivery.event != "ping":
             self.read_for_webhook(repo.name)                # something changed there: read it again
         self.draw()
@@ -1020,9 +1180,13 @@ class Frolic(App):
         points_an_hour = got.limit * self.WEBHOOK_SHARE / max(1, len(self.store.shown()))
         return max(self.WEBHOOK_SOONEST_S, got.cost * 3600 / points_an_hour)
 
-    @work(thread=True, group="hooks")
     def sync_hooks(self, names: list[str]) -> None:
-        """Make sure each named repository has our webhook, pointing at the tunnel."""
+        """Make sure each named repository has our webhook, pointing at the tunnel that is
+        open now. What it finds is for that tunnel (hook_done drops it otherwise)."""
+        self.sync_hooks_for(self.webhooks_run, names)
+
+    @work(thread=True, group="hooks")
+    def sync_hooks_for(self, run: int, names: list[str]) -> None:
         try:
             github = GitHub(keychain.get(keychain.GITHUB_TOKEN) or "")
             secret = keychain.webhook_secret()
@@ -1043,14 +1207,23 @@ class Frolic(App):
             except GitHubError as e:
                 self.later(self.hook_done, name, repo.hook_id, f"webhook failed: {e}")
             else:
-                self.later(self.hook_done, name, hook.id, f"webhook #{hook.id} registered")
+                self.later(self.hook_done, name, hook.id, f"webhook #{hook.id} registered", run)
 
-    def hook_done(self, name: str, hook_id: int, note: str) -> None:
+    def hook_done(self, name: str, hook_id: int, note: str, confirmed_for: int = 0) -> None:
+        """What became of a repository's webhook: `note` says it in words, for the setup, and
+        `confirmed_for` is the run of the tunnel GitHub now has the hook pointing at, 0 when
+        it has not. Only a hook confirmed for the tunnel that is open now makes the
+        repository one GitHub sends deliveries about (covered): after a restart, one
+        confirmed for the tunnel before points at an address nobody listens on."""
         if not self.settings.webhooks:                       # turned off while this one was being made
             if hook_id:
                 self.delete_hooks([(name, hook_id)])
             return
         self.hook_state[name.lower()] = note
+        if confirmed_for and confirmed_for == self.webhooks_run:
+            self.hooked[name.lower()] = time.time()
+        else:
+            self.hooked.pop(name.lower(), None)
         if hook_id:
             self.store.set_hook(name, hook_id)
         self.say(f"{name}: {note}")
@@ -1074,6 +1247,7 @@ class Frolic(App):
     def hook_gone(self, name: str) -> None:
         self.store.set_hook(name, 0)
         self.hook_state.pop(name.lower(), None)
+        self.hooked.pop(name.lower(), None)
         self.say(f"{name}: webhook deleted on GitHub")
         self.draw()
 
@@ -1111,11 +1285,13 @@ class Frolic(App):
     def update_pulls(self, names: list[str], why: str) -> None:
         """Fetch the open pull requests of these repositories. One fetch per repository at
         a time: a repository that changes while it is being fetched is fetched once more
-        when that fetch ends."""
+        when that fetch ends.
+
+        `why` is what asked for the read: the timer ("poll"), a webhook, u ("asked"), and so
+        on. It goes in the log file with the names, and nowhere else: each read costs part
+        of the hour's allowance from GitHub, and what used it up is a question for the log."""
         if self.token_state != "ok":
             return
-        if why in ("poll", "start", "asked"):
-            self.polled_at = time.time()
         wanted = []
         for name in names:
             key = name.lower()
@@ -1123,9 +1299,11 @@ class Frolic(App):
                 self.stale.add(key)
             else:
                 self.fetching.add(key)
+                self.read_began[key] = time.time()
                 repo = self.store.get(name)                  # its long-lived branches, as they are now
                 wanted.append((name, None if repo is None or repo.long_lived is None else list(repo.long_lived)))
         if wanted:
+            log.info("reading (%s): %s", why, ", ".join(name for name, _ in wanted))
             self.fetch(wanted)
         self.draw()
 
@@ -1163,7 +1341,7 @@ class Frolic(App):
         if before is None or len(before.pulls) != len(got.pulls):
             self.say(f"{repo.name}: {got.total} open pull request{'' if got.total == 1 else 's'}")
         self.note_changes(repo.name, before, got)
-        self.fetch_ended(name)
+        self.fetch_ended(name, repo.name)                    # under the name it has now, if that changed
 
     def note_changes(self, name: str, before: RepoPulls | None, got: RepoPulls) -> None:
         """Compare this reading with the one before: the pull requests that changed wash on
@@ -1211,12 +1389,24 @@ class Frolic(App):
         self.say(f"{name}: pull requests not read: {note}", INK)
         self.fetch_ended(name)
 
-    def fetch_ended(self, name: str) -> None:
+    def fetch_ended(self, name: str, now_named: str = "") -> None:
+        """A read of a repository is over, whether it worked or not, and whatever asked for
+        it: its timer starts again from here. One that failed is tried again when the timer
+        runs out, not at once.
+
+        `name` is what the read was asked for under. `now_named` is the repository's name
+        when the read found it renamed on GitHub: the timer is that name's, and so is a
+        read that was asked for while this one was under way. Left under the old name,
+        the timer would be nobody's, and the repository would never be read by the clock.
+        A repository that left the list while it was read gets no timer at all."""
         key = name.lower()
         self.fetching.discard(key)
-        if key in self.stale:                                # it changed while we were reading it
-            self.stale.discard(key)
-            if self.store.get(name) is not None:
+        again = key in self.stale                            # it changed while we were reading it
+        self.stale.discard(key)
+        name = now_named or name
+        if self.store.get(name) is not None and self.token_state != "none":
+            self.read_at[name.lower()] = time.time()         # not for one removed, or a token forgotten,
+            if again:                                        # while it was read: there is nothing to time
                 self.update_pulls([name], "again")
         self.draw()
 
