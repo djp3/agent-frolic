@@ -1737,6 +1737,41 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
 
 
 @drive
+async def test_after_the_mac_has_slept_a_repository_that_relies_on_its_webhook_is_read_at_once(isolated, monkeypatch):
+    """What GitHub sent meanwhile reached nobody, and GitHub does not send it again."""
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.covered(app.store.get("djp3/agent-frolic"))
+        now = a_clock(monkeypatch)
+        for key in app.read_at:
+            app.read_at[key] = now[0]                                 # both just read
+        app.tick()
+        FakePulls.asked.clear()
+        now[0] += 30                                                  # a slow moment is not a sleep
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == []
+        now[0] += 3 * 60                                              # three minutes with the lid shut: the one
+        app.tick()                                                    # on the short timer is not due yet, and the
+        await settle(app, pilot)                                      # other would not be for half an hour
+        assert FakePulls.asked == ["djp3/agent-frolic"]
+        assert "the Mac was asleep: reading again the repositories GitHub sends webhooks for" in said(app)
+        now[0] += 1
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == ["djp3/agent-frolic"]               # once
+
+        now[0] += 20 * 60                                             # a long sleep: both, and each once
+        app.tick()
+        await settle(app, pilot)
+        assert sorted(FakePulls.asked) == ["Acme/ledger-api", "djp3/agent-frolic", "djp3/agent-frolic"]
+
+
+@drive
 async def test_u_reads_every_shown_repository_now_and_every_timer_starts_again(isolated):
     three_repos()
     app = main.Frolic()

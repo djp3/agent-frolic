@@ -286,6 +286,7 @@ class Frolic(App):
     WEBHOOK_SOONEST_S = 10.0      # the least time between two of them for one repository: a burst is read once
     SAFETY_POLLS = 6              # a repository GitHub sends webhooks for is read on its timer this many times
                                   # less often than one it does not: every 30 minutes at the usual five
+    ASLEEP_S = 60.0               # the clock ticks every second: this long between two ticks, and the Mac slept
     OPEN_AGAIN_S = 2.0            # o on the same pull request sooner than this after the last o is the key repeating
     NOTICE_S = 3.0                # how long a word about what the user just did takes the ticker's line,
     NOTICE_FAILED_S = 10.0        # and how long when it says that it failed
@@ -362,6 +363,7 @@ class Frolic(App):
         self.read_at: dict[str, float] = {}       # repository (lower case) -> when a read of it last ended,
                                                   # whether it worked or not: its timer runs from then
         self.teams_tried_at = 0.0                 # when the viewer's teams were last asked for
+        self.ticked_at = 0.0                      # when the clock last ticked
         self.agents: dict = {}                    # (repository, number) -> the agents on it; nothing reports them yet
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
@@ -394,12 +396,24 @@ class Frolic(App):
         """Once a second: each shown repository whose timer has run out is read again (and,
         at the pace of the poll, another try at the viewer's teams while a read of them has
         failed and none are known), another try at checking a stored token GitHub could not
-        be reached for, and the ages ("3s ago") move on."""
+        be reached for, and the ages ("3s ago") move on. A tick that comes long after the
+        one before says the Mac slept (ASLEEP_S)."""
         now = time.time()
+        slept, self.ticked_at = bool(self.ticked_at) and now - self.ticked_at > self.ASLEEP_S, now
         if self.token_state == "ok":
-            due = [repo.name for repo in self.store.shown() if self.due(repo, now)]
-            if due:
-                self.update_pulls(due, "poll")
+            shown = self.store.shown()
+            due = [repo for repo in shown if self.due(repo, now)]
+            missed = []
+            if slept:
+                # While the Mac slept, what GitHub sent reached nobody, and GitHub does not send
+                # it again. A repository that relies on its webhook is read now, not when its
+                # slow timer says. (The others are overdue by now, or soon will be.)
+                missed = [repo for repo in shown
+                          if repo not in due and repo.name.lower() not in self.fetching and self.covered(repo)]
+                if missed:
+                    self.say("the Mac was asleep: reading again the repositories GitHub sends webhooks for")
+            if due or missed:
+                self.update_pulls([repo.name for repo in due + missed], "woke" if missed else "poll")
             if self.teams_retry and now >= self.teams_tried_at + self.settings.poll_minutes * 60:
                 self.start_teams_read()                    # a read of the teams that failed, with none
                                                            # known: until it works. Known ones are left be
