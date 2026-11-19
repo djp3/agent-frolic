@@ -16,7 +16,7 @@ board: see [below](#made-to-work-with-agent-farm-and-agent-grange).
 **[Download for Mac](https://github.com/djp3/agent-frolic/releases/latest)** · macOS 27+ on
 Apple silicon · free and open source
 
-![agent-frolic showing the open pull requests of two repositories: a card for each person and team something waits on, the pull requests drawn as stacks, what needs effort, and the drawer for the selected one](docs/screenshot.png)
+![agent-frolic showing the open pull requests of two repositories: a card for each person and team something waits on, the pull requests drawn as stacks, each with its age as a bar and a figure, each repository's line ending in the countdown to its next read, what needs effort, and the drawer for the selected one](docs/screenshot.png)
 
 ### What is yours to move is yellow
 
