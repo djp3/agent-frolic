@@ -211,7 +211,7 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
         row = line(app, "acme-platform/")
         assert "…  0 open" in row and long not in row                              # the name is cut, the count kept
         assert "acme-platform/regional-ledger" in row
-        assert "djp3/agent-frolic  ●1  ○2  4 open" in screen(app)                  # where there is room, as it was
+        assert "djp3/agent-frolic  4 open ═" in screen(app)                        # ●n ○n go before its timer does
 
         await pilot.resize_terminal(82, 46)
         await pilot.pause()
@@ -232,9 +232,12 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
         app.draw()
         await pilot.pause()
         assert "djp3/agent-frolic  ●1  ○2  240 open, the 4 most recent shown" in screen(app)
-        await pilot.resize_terminal(100, 46)
+        await pilot.resize_terminal(130, 46)
         await pilot.pause()
         assert "djp3/agent-frolic  ●1  ○2  240 open ═" in screen(app)
+        await pilot.resize_terminal(100, 46)                                       # then ●n ○n, before its timer
+        await pilot.pause()
+        assert "djp3/agent-frolic  240 open ═" in screen(app)
 
 
 @drive
@@ -1455,7 +1458,8 @@ async def test_each_repositorys_line_ends_in_its_own_timer(isolated):
 
 
 @drive
-async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_timer(isolated):
+async def test_in_a_narrow_window_a_repositorys_name_and_count_come_before_its_timer(isolated):
+    """And its timer before ●n ○n, which the top line has too."""
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(100, 40)) as pilot:
@@ -1463,7 +1467,7 @@ async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_
         app.draw()
         await pilot.pause()
         assert timer(app, "╪ djp3/agent-frolic") == (0, 0, "-5m")            # no room for a bar: the figure alone,
-        assert "djp3/agent-frolic  ●1  ○2  4 open ═" in line(app, "╪ djp3/agent-frolic")   # after all of the line
+        assert "djp3/agent-frolic  4 open ═" in line(app, "╪ djp3/agent-frolic")           # after the name and count
     async with main.Frolic().run_test(size=(82, 40)) as pilot:               # narrower still: the figure goes
         app = pilot.app                                                      # too, where the line is full
         await settle(app, pilot)
@@ -1532,3 +1536,30 @@ async def test_an_age_is_said_one_way_in_the_list_the_drawer_what_needs_effort_a
         assert said == {(True, False), (False, True)}                        # the drawer, for each in turn
         listed = sorted(main.pull_line(pull, "main", 150).plain[-9:] for pull in app.pulls["djp3/app"].pulls)
         assert listed == ["       0h", "   4d 07h"]                            # and the setup's list
+
+
+@drive
+async def test_what_a_repositorys_line_gives_up_as_the_window_narrows_does_not_come_back(isolated):
+    """The "most recent shown", then ●n ○n, then the timer's bar, then its countdown: each for
+    good before the next. The bar used to go while the others were there, and come back when
+    one of them went. How many are open stays to the last."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        app.pulls["djp3/agent-frolic"] = replace(app.pulls["djp3/agent-frolic"], total=240)     # more than were read
+        seen = []
+        for wide in range(170, 75, -1):
+            await pilot.resize_terminal(wide, 46)
+            await pilot.pause()
+            row = line(app, "╪ djp3/a")
+            cells, figure = timer(app, "╪ djp3/a")[1:]
+            seen.append(("most recent shown" in row, "●1" in row, cells > 0, bool(figure), "240 open" in row))
+        assert seen[0] == (True, True, True, True, True) and seen[-1][:4] == (False, False, False, False)
+        assert all(step[4] for step in seen)                                 # how many are open: at every width
+        went = []
+        for part in range(4):
+            there = [step[part] for step in seen]
+            assert there == sorted(there, reverse=True), part                # there, then gone, and never back
+            went.append(there.index(False))
+        assert went == sorted(went) and len(set(went)) == 4                  # and in that order, one at a time
