@@ -1412,11 +1412,13 @@ async def test_each_repositorys_line_ends_in_its_own_timer(isolated):
         assert its.rindex("━") == under.index("━") + full - 1 and its.index("─") == under.index("━")
         assert len(its) == len(under)
 
-        age(app, only=["acme/web-console"])                                  # its five minutes are up: the
-        app.draw()                                                           # white is gone, and the figure
-        await pilot.pause()                                                  # is nought
-        assert timer(app, theirs) == (0, full, "0m")
-        app.tick()                                                           # it is read, and both start again
+        told, app.timer = app.timer, lambda name: (1.0, 0.0)                 # a timer that is up, whatever the
+        app.draw()                                                           # app's own tick reads meanwhile:
+        await pilot.pause()                                                  # the white is gone, and the
+        assert timer(app, theirs) == (0, full, "0m")                         # figure is nought
+        app.timer = told
+        age(app, only=["acme/web-console"])                                  # its five minutes are up: it is
+        app.tick()                                                           # read, and both start again
         await settle(app, pilot)
         app.draw()
         await pilot.pause()
