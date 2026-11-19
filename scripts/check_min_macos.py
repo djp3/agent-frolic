@@ -138,8 +138,30 @@ class Found:
     own: str | None = None                                    # the minimum that one records: Package.swift's platform
 
 
+class Undeclared(Exception):
+    """The bundle does not say what it needs, so there is nothing to hold it to: (why)."""
+
+
+def declaration(app: Path) -> dict:
+    """The bundle's Info.plist, which must declare a minimum macOS."""
+    plist = app / "Contents" / "Info.plist"
+    try:
+        info = plistlib.loads(plist.read_bytes())
+    except FileNotFoundError:
+        raise Undeclared(f"There is no {plist}: is {app} an app bundle?") from None
+    except Exception as e:                      # whatever a file that is not a property list raises
+        raise Undeclared(f"{plist} can't be read as a property list ({e}).") from None
+    declared = info.get("LSMinimumSystemVersion") if isinstance(info, dict) else None
+    try:
+        version(declared)
+    except (AttributeError, TypeError, ValueError):
+        raise Undeclared(f"{plist} declares no minimum macOS: its LSMinimumSystemVersion is "
+                         f"{'missing' if declared is None else repr(declared)}.") from None
+    return info
+
+
 def check(app: Path) -> Found:
-    info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
+    info = declaration(app)
     found = Found(info["LSMinimumSystemVersion"])
     declared = found.declared
     if info.get("CFBundleExecutable"):
@@ -173,6 +195,9 @@ def main(argv: list[str]) -> int:
     try:
         found = check(app)
         declared, newest, too_new, n = found.declared, found.newest, found.too_new, found.checked
+    except Undeclared as e:
+        print(e.args[0], file=sys.stderr)       # with no minimum declared there is nothing to hold the binaries to
+        return 1
     except Unreadable as e:
         path, why = e.args
         print(f"{path} starts like a Mach-O binary (so does a Java class file) and can't be read "

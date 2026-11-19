@@ -217,6 +217,22 @@ def test_the_wrong_arguments_print_how_to_run_it(capsys):
     assert capsys.readouterr().err.startswith("usage: scripts/check_min_macos.py <app bundle>")
 
 
+def test_a_bundle_that_does_not_say_what_it_needs_is_refused_in_a_line(tmp_path, capsys):
+    """Not in a traceback: a path mistyped, an Info.plist that is not one, or one with no minimum."""
+    assert check_min_macos.main(["check", str(tmp_path / "no-such.app")]) == 1
+    assert "is " + str(tmp_path / "no-such.app") + " an app bundle?" in capsys.readouterr().err
+    app = _fake_bundle(tmp_path, "27.0", {"AgentFrolic": thin(build_version("27.0"))}, executable="AgentFrolic")
+    plist = app / "Contents" / "Info.plist"
+    for held, said in ((b"not a property list", "can't be read as a property list"),
+                       (plistlib.dumps({"CFBundleExecutable": "AgentFrolic"}), "LSMinimumSystemVersion is missing"),
+                       (plistlib.dumps({"LSMinimumSystemVersion": "soon"}), "LSMinimumSystemVersion is 'soon'"),
+                       (plistlib.dumps({"LSMinimumSystemVersion": 27}), "LSMinimumSystemVersion is 27")):
+        plist.write_bytes(held)
+        assert check_min_macos.main(["check", str(app)]) == 1
+        err = capsys.readouterr().err
+        assert said in err and "Traceback" not in err and len(err.strip().splitlines()) == 1, said
+
+
 def test_every_mach_o_header_is_recognized_and_nothing_else(tmp_path):
     heads = {"thin64": b"\xcf\xfa\xed\xfe", "thin32": b"\xce\xfa\xed\xfe", "fat": b"\xca\xfe\xba\xbe",
              "fat64": b"\xca\xfe\xba\xbf", "fat64-swapped": b"\xbf\xba\xfe\xca", "text": b"#!/b"}
