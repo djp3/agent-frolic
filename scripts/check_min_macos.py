@@ -225,10 +225,8 @@ def main(argv: list[str]) -> int:
     if too_new:
         print(f"Info.plist declares macOS {declared} (LSMinimumSystemVersion), but {len(too_new)} "
               f"of {n} binaries need a newer macOS:", file=sys.stderr)
-        for path, v in too_new[:10]:
+        for path, v in too_new:                 # every one: which libraries they are says what was upgraded
             print(f"  {path}: macOS {v}", file=sys.stderr)
-        if len(too_new) > 10:
-            print(f"  ... and {len(too_new) - 10} more", file=sys.stderr)
         print("Build them for an older macOS, or raise the minimum: LSMinimumSystemVersion in "
               "macos/Info.plist, the platform in macos/Package.swift, and the README.", file=sys.stderr)
         failed = True

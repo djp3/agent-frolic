@@ -150,6 +150,17 @@ def test_a_universal_binary_is_reported_with_its_neediest_slice(tmp_path):
     assert found.too_new == [(Path("Contents/MacOS/uni"), "28.0")] and found.newest == "28.0"   # not 27.1, the first
 
 
+def test_every_file_that_needs_more_is_named(tmp_path, capsys):
+    """After an upgrade of the libraries dozens need more at once, and which they are says what
+    was upgraded. Only the first ten were named."""
+    files = {f"lib{n:02d}.dylib": thin(build_version("28.0")) for n in range(25)}
+    app = _fake_bundle(tmp_path, "27.0", files | {"AgentFrolic": thin(build_version("27.0"))}, executable="AgentFrolic")
+    assert check_min_macos.main(["check", str(app)]) == 1
+    err = capsys.readouterr().err
+    assert "25 of 26 binaries need a newer macOS" in err and "... and" not in err
+    assert all(f"Contents/MacOS/lib{n:02d}.dylib: macOS 28.0" in err for n in range(25))
+
+
 def test_an_intel_file_that_needs_more_is_no_reason_to_stop_a_build(tmp_path):
     intel = thin(build_version("28.0"), cputype=X86_64)
     files = {"intel": intel, "both": universal(intel, thin(build_version("26.0"))), "ours": thin(build_version("26.0"))}
