@@ -350,9 +350,7 @@ class ListBar(Static):
 class Board(Screen):
     CSS = f"""
     Board {{ background: {PLANE}; color: {INK}; layers: base overlay; }}
-    #topline {{ height: 1; margin: 0 2; }}
-    #tabs {{ width: 1fr; height: 1; text-wrap: nowrap; text-overflow: ellipsis; }}
-    Tooltip {{ background: {RAISED}; color: {INK2}; }}
+    #tabs {{ height: 1; margin: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }}
     #toprule {{ height: 1; margin: 0 1; }}
     #strip {{ height: 1; max-height: {STRIP}; margin: 0 1; }}
     #striprule {{ height: 1; margin: 0 1; }}
@@ -415,8 +413,7 @@ class Board(Screen):
         self.entered: dict[Key, float] = {}       # what just joined the needs-effort list
 
     def compose(self):
-        with Horizontal(id="topline"):
-            yield Static(id="tabs")
+        yield Static(id="tabs")
         yield Static(id="toprule")
         yield Static(id="strip")
         yield Static(id="striprule")
@@ -947,7 +944,7 @@ class Board(Screen):
         """The column headings: column 1 (owner, state, waits on), the rule, column 2."""
         box = self.query_one("#head", Static).size
         width = max(70, box.width or self.size.width - 2)
-        x_review, x_ci, x_prog, names, x_quiet = cols = columns(width)
+        x_review, x_ci, x_prog, names, _ = cols = columns(width)
         end = title_end(cols)                                  # where column 2's own heading must stop
         canvas = Canvas(width, 1)
         canvas.put(X_OWNER + 2, 0, "owner", MUTED)
