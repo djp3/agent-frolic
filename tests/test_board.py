@@ -263,7 +263,7 @@ async def test_as_the_window_narrows_progress_goes_then_the_ages_bar_then_its_fi
     its figure throughout: its room is its own."""
     a_board()
     seen = {}
-    for wide in (150, 130, 118):
+    for wide in (162, 150, 130, 118):
         app = main.Frolic()
         async with app.run_test(size=(wide, 46)) as pilot:
             await settle(app, pilot)
@@ -277,7 +277,8 @@ async def test_as_the_window_narrows_progress_goes_then_the_ages_bar_then_its_fi
             if seen[wide][2]:                                                         # a figure, with its bar or alone,
                 assert len(row) == len(selected) == len(head), wide                   # ends where "age" does: on the
                 assert re.search(r" \d+d \d\dh$", selected) and ("━" in selected) == seen[wide][1], wide    # selected row too
-    assert seen[150][:4] == (False, True, True, True)                                 # progress has gone
+    assert seen[162][:4] == (True, True, True, True)                                  # all of it is there;
+    assert seen[150][:4] == (False, True, True, True)                                 # progress goes first,
     assert seen[130][:4] == (False, False, True, True)                                # then the age's bar
     assert seen[118][:4] == (False, False, False, False)                              # then its figure, and its heading
     for wide in seen:                                                                 # each repository's line
