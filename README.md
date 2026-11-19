@@ -191,7 +191,8 @@ and hours (`128d 11h`, `21h`, and `0h` within the hour). The bar's white grows f
 quarter of the bar each for minutes, hours, days and weeks, and is whole at three months.
 Within the hour, where the figure is `0h` throughout, the bar still tells roughly how long:
 none of it is white for the first four minutes, one cell until a quarter of an hour, two
-until the hour. A narrow window keeps the figure and gives up the bar.
+until the hour. The age is the first thing a narrowing window gives up: its bar, then its
+figure, before progress or any other column goes.
 
 The column is time from an event or to one, and a bar's white is anchored at the event. A pull
 request's starts at its last change, at the left, and grows away from it. A repository's ends

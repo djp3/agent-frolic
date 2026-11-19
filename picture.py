@@ -561,22 +561,19 @@ def quiet(pull: PullRequest, now: datetime | None = None) -> str:
 
 AGE_BAR = 12                      # cells in the bar of an age, and in the bar of a repository's timer
 AGE_FIGURE = 8                    # cells the figure after a bar takes at the most: "128d 11h"
-AGE_SHORT = 4                     # cells of the figure cut down to its larger unit: "128d"
 QUIET = AGE_BAR + 1 + AGE_FIGURE + 1             # the age column: the bar, the figure, a cell before the edge
 _SPANS = ((60, 3600), (3600, 86400), (86400, 7 * 86400), (7 * 86400, 90 * 86400))   # minutes, hours, days, weeks
 
 
-def age_said(seconds: float, short: bool = False) -> str:
+def age_said(seconds: float) -> str:
     """An age in days and hours, and nothing finer: "128d 11h". Under a day it is the hours
-    alone ("21h"), and under an hour that is "0h". `short`, only the larger of the two
-    ("128d"), for a window with room for no more. Past 999 days it is the days alone
-    either way ("1000d"): the hours would not fit in AGE_FIGURE cells, and say nothing
-    by then."""
+    alone ("21h"), and under an hour that is "0h". Past 999 days it is the days alone
+    ("1000d"): the hours would not fit in AGE_FIGURE cells, and say nothing by then."""
     hours = max(0, int(seconds // 3600))
     if hours < 24:
         return f"{hours}h"
     days = hours // 24
-    return f"{days}d" if short or days > 999 else f"{days}d {hours % 24:02d}h"
+    return f"{days}d" if days > 999 else f"{days}d {hours % 24:02d}h"
 
 
 def age_reach(seconds: float) -> float:

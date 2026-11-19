@@ -67,7 +67,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from canvas import Canvas, Segments, cut, plain, seg_len, wash, write
-from picture import (AGE_BAR, AGE_FIGURE, AGE_SHORT, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
+from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
                      Person, Picture, Row, cells, counts, focuses, humans, in_focus, key_of, labels,
                      age_reach, age_said, line_agents, mark, move_words, needs_effort, progress, quiet,
                      review_cell, reviewers, reviewing, silence, tree)
@@ -101,38 +101,36 @@ TREE_ROOM = 16                   # the tree's least: its connectors, the icon, t
 
 def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
     """Where review, checks, progress and the age start in a list this wide, and whether
-    reviewers are named. Column 1 and the tree never move; a narrow window gives up
-    progress first, then the age's bar (its figure stays), then the reviewers' names, then
-    the review column, then the checks (the drawer still shows both) and with them the
-    hours of an age past a day, so that no column is ever drawn over the tree. None is a
-    column given up. What the age column holds follows from the room it is left: age_form."""
-    x_quiet = width - QUIET
-    x_prog: int | None = x_quiet - 22
-    x_ci: int | None = x_prog - 4
-    x_review: int | None = x_ci - 24
+    reviewers are named. Column 1 and the tree never move. The age is the least of them, so
+    a narrow window gives it up first: its bar, then its figure, and with that the whole
+    column. Then progress, then the reviewers' names, then the review column, then the
+    checks (the drawer still shows both), so that no column is ever drawn over the tree.
+    None is a column given up; the age has none to give, so given up it starts at the
+    list's edge and has no room. What it holds follows from the room it is left: age_form."""
+    def beside(x_quiet: int) -> tuple[int, int, int]:
+        x_prog = x_quiet - 22
+        return x_prog - 28, x_prog - 4, x_prog
+
     names = True
+    x_quiet = next((x for x in (width - QUIET, width - (AGE_FIGURE + 1)) if beside(x)[0] - X_TREE >= 32), width)
+    x_review, x_ci, x_prog = beside(x_quiet)
     if x_review - X_TREE < 32:
         x_prog, x_ci = None, x_quiet - 5
         x_review = x_ci - 24
         if x_review - X_TREE < 30:
-            x_quiet = width - (AGE_FIGURE + 1)
-            x_ci = x_quiet - 5
-            x_review = x_ci - 24
-            if x_review - X_TREE < 30:
-                names, x_ci = False, x_quiet - 4
-                x_review = x_ci - 9
-                if x_review - X_TREE < TREE_ROOM:
-                    x_review = None
-                    if x_ci - X_TREE < TREE_ROOM:
-                        x_ci, x_quiet = None, width - (AGE_SHORT + 1)
+            names, x_ci = False, x_quiet - 4
+            x_review = x_ci - 9
+            if x_review - X_TREE < TREE_ROOM:
+                x_review = None
+                if x_ci - X_TREE < TREE_ROOM:
+                    x_ci = None
     return x_review, x_ci, x_prog, names, x_quiet
 
 
 def age_form(room: int) -> tuple[bool, bool]:
-    """What the age column holds in the `room` cells columns() leaves it, each with a cell
-    before the edge: (its bar, its figure in full). All of it in QUIET cells, the figure
-    alone in AGE_FIGURE and one, and in less only the figure's larger unit."""
-    return room >= QUIET, room > AGE_SHORT + 1
+    """What the age column holds in the `room` cells columns() leaves it: (its bar, its
+    figure). Both in QUIET cells, the figure alone in less, and nothing in none."""
+    return room >= QUIET, room > 0
 
 
 def title_end(cols: tuple) -> int:
@@ -312,12 +310,12 @@ def time_cells(bar: Segments | None, figure: str) -> Segments:
 
 
 def age_cells(seconds: float | None, room: int) -> Segments:
-    """An age in the `room` cells the age column has (age_form): its bar and its figure,
-    the figure alone, or only its larger unit ("128d"). Nothing for an age not known."""
-    if seconds is None:
+    """An age in the `room` cells the age column has (age_form): its bar and its figure, or
+    the figure alone. Nothing where the column is given up, or for an age not known."""
+    bar, figure = age_form(room)
+    if seconds is None or not figure:
         return []
-    bar, full = age_form(room)
-    return time_cells(thin_bar(age_reach(seconds)) if bar else None, age_said(seconds, short=not full))
+    return time_cells(thin_bar(age_reach(seconds)) if bar else None, age_said(seconds))
 
 
 class ListBar(Static):
@@ -881,7 +879,9 @@ class Board(Screen):
         white the time left until the next read, and after it the minutes left, counted up
         to nought, so that the figure reaches nought as the white runs out. `after` is where
         the name and the counts end: they come first, so where there is no room for the bar
-        the figure is there alone, and where there is none for that either, nothing is."""
+        the figure is there alone, and where there is none for that either, nothing is. The
+        figure does not go with the age column in a narrow window: this line's room is its
+        own, and what the figure takes of it no other column wants."""
         ran, left = self.app.timer(repo)
         figure = f"-{-int(-left // 60)}m" if left > 0 else "0m"
         bars = (thin_bar(1 - ran, until=True), None) if age_form(width - x_quiet)[0] else (None,)
@@ -974,7 +974,8 @@ class Board(Screen):
             canvas.put(x_ci, 0, "ci", MUTED)
         if x_prog is not None:
             canvas.put(x_prog, 0, "progress", MUTED)
-        canvas.put(width - 4, 0, "age", MUTED)                  # over the figures, which end there too
+        if age_form(width - cols[4])[1]:
+            canvas.put(width - 4, 0, "age", MUTED)              # over the figures, which end there too
         return canvas.text()
 
     def effort(self) -> Text:

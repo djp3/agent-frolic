@@ -134,22 +134,25 @@ async def test_the_board_is_the_first_screen_once_there_is_a_token_and_draws_wha
             assert secret not in shown
 
 
-def test_a_narrow_list_gives_up_progress_then_the_ages_bar_then_the_names():
+def test_a_narrow_list_gives_up_the_age_first_then_progress_then_the_names():
     x_review, x_ci, x_prog, names, x_quiet = board.columns(160)
     assert (x_review, x_ci, x_prog, names, x_quiet) == (88, 112, 116, True, 138)
-    assert board.columns(157)[2] is not None and board.columns(156)[2] is None       # progress goes first
-    x_review, x_ci, x_prog, names, x_quiet = board.columns(140)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (89, 113, None, True, 118)     # the bar stays
-    assert board.columns(134)[3:] == (True, 134 - board.QUIET)                        # then the bar goes: the
-    assert board.columns(133)[3:] == (True, 133 - board.AGE_FIGURE - 1)               # figure has the column
-    assert board.columns(121)[3] and not board.columns(120)[3]                        # then the names
+    assert board.columns(157)[4] == 157 - board.QUIET                                 # the age is the least of
+    assert board.columns(156)[4] == 156 - (board.AGE_FIGURE + 1)                      # them: its bar goes first,
+    x_review, x_ci, x_prog, names, x_quiet = board.columns(150)
+    assert (x_review, x_ci, x_prog, names, x_quiet) == (91, 115, 119, True, 141)      # and progress stays
+    assert board.columns(144)[4] == 144 - (board.AGE_FIGURE + 1)                      # then its figure: the
+    assert board.columns(143) == (93, 117, 121, True, 143)                            # column has no room at all
+    assert board.columns(135)[2] is not None and board.columns(134)[2] is None        # then progress
+    x_review, x_ci, x_prog, names, x_quiet = board.columns(130)
+    assert (x_review, x_ci, x_prog, names, x_quiet) == (101, 125, None, True, 130)
+    assert board.columns(112)[3] and not board.columns(111)[3]                        # then the names
     x_review, x_ci, x_prog, names, x_quiet = board.columns(100)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (78, 87, None, False, 91)
-    assert board.columns(91)[0] is not None and board.columns(90)[0] is None          # then the review column
-    assert board.columns(90)[1:] == (77, None, False, 81)
-    assert board.columns(82)[1] is not None and board.columns(81)[1] is None          # then the checks, and the
-    assert board.columns(81) == (None, None, None, False, 76)                         # hours of an age past a day
-    assert board.columns(74) == (None, None, None, False, 69)
+    assert (x_review, x_ci, x_prog, names, x_quiet) == (87, 96, None, False, 100)
+    assert board.columns(82)[0] is not None and board.columns(81)[0] is None          # then the review column
+    assert board.columns(81)[1:] == (77, None, False, 81)
+    assert board.columns(73)[1] is not None and board.columns(72)[1] is None          # then the checks
+    assert board.columns(72) == (None, None, None, False, 72)
 
 
 def test_no_column_is_ever_drawn_over_the_tree():
@@ -169,10 +172,10 @@ async def test_in_a_narrow_window_every_row_keeps_its_number_and_the_headings_ke
         shown = screen(app)
         for number in ("#12 ", "#13 ", "#9 ", "#16 "):
             assert any(number in row for row in shown.splitlines()), number
-        head = next(row for row in shown.splitlines() if "pull request" in row and row.endswith(" age"))
-        assert "review" not in head and head.index("pull request") < head.index(" age")
+        head = next(row for row in shown.splitlines() if "pull request" in row)
+        assert "review" not in head and " age" not in head and head.endswith(" ci")
         row = next(r for r in shown.splitlines() if "#16 " in r)
-        assert re.search(r" \d+d$", row) and len(row) == len(head) and "━" not in row     # an age's larger unit
+        assert not re.search(r"\d+[dh]$", row) and "━" not in row              # no age: it was the first to go
 
 
 @drive
@@ -221,17 +224,25 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
 
 
 @drive
-async def test_in_a_narrow_window_an_age_is_its_figure_alone(isolated):
+async def test_in_a_narrower_window_an_age_is_its_figure_alone_and_narrower_still_it_is_gone(isolated):
+    """The age goes before progress does: it is the least of the columns."""
     a_board()
     app = main.Frolic()
-    async with app.run_test(size=(104, 46)) as pilot:
+    async with app.run_test(size=(150, 46)) as pilot:
         await settle(app, pilot)
         shown = screen(app)
         head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
-        assert head.endswith(" age")
+        assert head.endswith(" age") and "progress" in head
         for number in ("#12 GraphQL", "#16 Transcript"):
             row = next(r for r in shown.splitlines() if number in r)
             assert re.search(r" \d+d \d\dh$", row) and len(row) == len(head) and "━" not in row     # no bar
+    app = main.Frolic()
+    async with app.run_test(size=(140, 46)) as pilot:
+        await settle(app, pilot)
+        shown = screen(app)
+        head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
+        assert head.endswith(" progress")                                             # no age, and still progress
+        assert not any(re.search(r" \d+d \d\dh$", row) for row in shown.split("needs effort")[0].splitlines())
 
 
 @drive
@@ -1342,9 +1353,8 @@ def test_an_age_is_drawn_in_the_room_its_column_has():
     assert said(board.QUIET, 128 * 86400 + 11 * 3600) == "━━━━━━━━━━━━ 128d 11h"
     assert said(board.QUIET, 20) == "────────────       0h"
     assert said(board.AGE_FIGURE + 1) == "4d 07h"                             # less room: the figure alone
-    assert said(5) == "4d" and said(5, 21 * 3600) == "21h"                    # the least: its larger unit
-    assert said(board.QUIET, 1000 * 86400) == "━━━━━━━━━━━━    1000d"             # past 999 days: the days alone,
-    assert said(5, 1000 * 86400) == "1000d"                                   # a cell more than that column has
+    assert said(0) == ""                                                      # none: the column is given up
+    assert said(board.QUIET, 1000 * 86400) == "━━━━━━━━━━━━    1000d"             # past 999 days: the days alone
     assert len(said(board.QUIET)) == board.QUIET - 1                          # a cell is left before the edge
     # within the hour the figure is "0h" throughout, and the bar has three steps and no more
     within = [said(board.QUIET, seconds) for seconds in (5, 3 * 60, 5 * 60, 14 * 60, 16 * 60, 59 * 60)]
@@ -1353,11 +1363,11 @@ def test_an_age_is_drawn_in_the_room_its_column_has():
 
 
 def test_what_the_age_column_holds_follows_from_the_room_the_columns_leave_it():
-    """(its bar, its figure in full): what is drawn there and where the columns stand cannot
-    come apart."""
-    forms = {wide: board.age_form(wide - board.columns(wide)[4]) for wide in (160, 134, 133, 82, 81, 74)}
-    assert forms == {160: (True, True), 134: (True, True), 133: (False, True), 82: (False, True),
-                     81: (False, False), 74: (False, False)}
+    """(its bar, its figure): what is drawn there and where the columns stand cannot come
+    apart."""
+    forms = {wide: board.age_form(wide - board.columns(wide)[4]) for wide in (160, 157, 156, 144, 143, 100)}
+    assert forms == {160: (True, True), 157: (True, True), 156: (False, True), 144: (False, True),
+                     143: (False, False), 100: (False, False)}
 
 
 def timer(app, needle):
@@ -1389,7 +1399,7 @@ async def test_each_repositorys_line_ends_in_its_own_timer(isolated):
     keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
     Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
     app = main.Frolic()
-    async with app.run_test(size=(150, 46)) as pilot:
+    async with app.run_test(size=(160, 46)) as pilot:
         await settle(app, pilot)
         app.draw()
         await pilot.pause()
@@ -1461,20 +1471,20 @@ async def test_a_long_countdown_is_whole_in_the_narrowest_window(isolated):
         await pilot.pause()
         head = next(row for row in screen(app).splitlines() if "pull request" in row)
         its = line(app, "╪ djp3/app")
-        assert its.endswith("═ -1440m") and len(its) == len(head)           # all of it, a cell before the edge
+        assert " age" not in head                                            # the age column is given up there;
+        assert its.endswith("═ -1440m") and len(its) == 82 - 2               # the figure is whole, a cell from the edge
 
 
 @drive
 async def test_however_old_a_pull_request_its_age_ends_where_the_others_do(isolated):
-    """Past 999 days the figure is the days alone, and in the narrowest window, where even
-    that is a cell too long, it starts a cell sooner."""
+    """Past 999 days the figure is the days alone, with its bar or without it."""
     keychain.put(keychain.GITHUB_TOKEN, TOKEN)
     RepoStore().add("djp3/app", admin=True)
     long_ago, lately = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
                         for seconds in (1001 * 86400 + 3 * 3600, 90000))
     FakePulls.open_ = {"djp3/app": [node(7, "old", author={"login": "mira"}, title="Old", updatedAt=long_ago),
                                     node(8, "new", author={"login": "mira"}, title="New", updatedAt=lately)]}
-    for wide, old, new in ((160, " 1001d", " 1d 01h"), (104, " 1001d", " 1d 01h"), (78, " 1001d", " 1d")):
+    for wide, old, new in ((160, " 1001d", " 1d 01h"), (150, " 1001d", " 1d 01h")):
         app = main.Frolic()
         async with app.run_test(size=(wide, 46)) as pilot:
             await settle(app, pilot)
