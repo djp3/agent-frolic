@@ -1885,7 +1885,7 @@ async def test_a_repository_github_sends_webhooks_for_is_read_on_a_slow_timer(is
         await turn_webhooks_off(app, pilot)                           # no more deliveries will come:
         await settle(app, pilot)
         assert not app.covered(ours) and app.period(ours) == 5 * 60   # it is back on the short timer
-        assert app.timer("djp3/agent-frolic")[1] <= 5 * 60            # and counts from five minutes
+        assert 4 * 60 < app.timer("djp3/agent-frolic")[1] <= 5 * 60   # and counts from five minutes
         age(app)
         app.tick()
         await settle(app, pilot)
