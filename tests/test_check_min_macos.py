@@ -133,6 +133,19 @@ def test_the_declared_minimum_matches_the_swift_package():
     assert v(declared) == v(swift), f"Info.plist declares {declared}, Package.swift {swift}"
 
 
+def test_the_readme_says_the_minimum_that_is_declared():
+    """It is the third place that says it, and the one a person reads: what is needed, and from
+    which macOS back the app does not open."""
+    declared = plistlib.loads((ROOT / "macos" / "Info.plist").read_bytes())["LSMinimumSystemVersion"]
+    major = check_min_macos.version(declared)[0]
+    readme = " ".join((ROOT / "README.md").read_text().split())
+    for said in (f"macOS {major}+", f"You need macOS {major} or later", f"On macOS {major - 1} or earlier",
+                 f"built for macOS {major}"):
+        assert said in readme, said
+    others = set(re.findall(r"macOS (\d+)", readme)) - {str(major), str(major - 1)}
+    assert not others, f"the README names macOS {sorted(others)} too"
+
+
 def _fake_bundle(tmp_path, declared, files, executable=None):
     """A bundle of these files (name -> what it holds), declaring this minimum."""
     app = tmp_path / "fake.app"
