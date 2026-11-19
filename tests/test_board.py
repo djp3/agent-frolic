@@ -152,6 +152,23 @@ def test_a_narrow_list_gives_up_progress_first_then_the_ages_bar_then_its_figure
     assert board.columns(72) == (None, None, None, False, 72)
 
 
+def test_progress_fits_its_column_and_leaves_a_cell_before_the_age():
+    """The age's bar starts where the progress column ends: what ran on was drawn over, and
+    "10/12" read "10/1"."""
+    def said(word, done, total):
+        return "".join(text for text, _ in board.progress_cells(word, done, total))
+
+    assert said("stalled", 1, 3) == "stalled ▰▱▱ 1/3" and said("in progress", 2, 3) == "in progress ▰▰▱ 2/3"
+    assert said("resolved", 8, 8) == "resolved ▰▰▰▰▰ 8/8"                              # five blocks at the most
+    assert said("in progress", 9, 12) == "in progress ▰▰▰▱ 9/12"                      # the longest word and a count
+    assert said("in progress", 10, 12) == "in progress ▰▰▱ 10/12"                     # of two figures: fewer blocks
+    for done, total in ((9, 12), (10, 12), (99, 99), (100, 120)):
+        assert len(said("in progress", done, total)) <= board.PROGRESS - 1, (done, total)
+    assert said("not started", 0, 0) == "not started" and said("ready to merge", 0, 0) == "ready to merge"
+    x_review, x_ci, x_prog, names, x_quiet = board.columns(160)
+    assert x_quiet - x_prog == board.PROGRESS                                         # that is the column it has
+
+
 def test_no_column_is_ever_drawn_over_the_tree():
     for width in range(70, 200):
         x_review, x_ci, x_prog, names, x_quiet = cols = board.columns(width)

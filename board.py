@@ -74,6 +74,7 @@ from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, A
 from pulls import PullRequest, span
 from theme import (AXIS, CRIT, DIVIDER, INK, INK2, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN, darker)
 
+PROGRESS = 22                    # cells of the progress column, the blank one before the age among them
 BAR_INK = INK2                   # the part of a bar that time has filled: one color, for every bar
 BAR_TRACK = AXIS                 # the part it has yet to fill
 FLASH = ["#4a4a46", "#444441", "#3d3d3a", "#363633", "#2f2f2d", "#292927"]   # a wash, fading
@@ -111,7 +112,7 @@ def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
     This is for a pull request's row. A repository's line keeps its bar and its figure for
     as long as its own room allows (draw_timer)."""
     x_quiet = width - QUIET
-    x_prog: int | None = x_quiet - 22
+    x_prog: int | None = x_quiet - PROGRESS
     x_ci: int | None = x_prog - 4
     x_review: int | None = x_ci - 24
     names = True
@@ -285,6 +286,21 @@ class Line:
     part: int = 0                                # which line of its pull request this is
     cells: tuple[Segments, Segments, Segments] | None = None      # owner, state, waits on
     lead: str = ""                               # the tree connectors on this line
+
+
+def progress_cells(word: str, done: int, total: int) -> Segments:
+    """Progress as it stands in its column: the word and, where there is a count, a block for
+    each thing to do and the count ("stalled ▰▱▱ 1/3"). Five blocks at the most, and fewer
+    where the word and the count leave no room for five: it takes no more than the column
+    has, less the blank cell before the age, whose bar would be drawn over what ran on."""
+    ink = INK2 if word != "not started" else MUTED
+    if not total or word == "not started":
+        return [(word, ink)]
+    count = f"{done}/{total}"
+    size = max(0, min(total, 5, PROGRESS - 1 - len(word) - len(count) - 2))
+    filled = min(size, round(size * done / total))
+    blocks: Segments = [(mark * n, color) for mark, n, color in (("▰", filled, INK2), ("▱", size - filled, AXIS)) if n]
+    return [(word + " ", ink), *blocks, (" " if size else "", ""), (count, INK2)]
 
 
 def thin_bar(part: float, until: bool = False) -> Segments:
@@ -933,15 +949,7 @@ class Board(Screen):
             ci_icon, ci_color = CHECK_MARK[pull.checks]
             canvas.put(x_ci, y, ci_icon, ci_color)
         if x_prog is not None:
-            word, done, total = progress(self.pic, pull)
-            canvas.put(x_prog, y, word, INK2 if word != "not started" else MUTED)
-            if total and word != "not started":
-                at = x_prog + len(word) + 1
-                size = min(total, 5)
-                filled = min(size, round(size * done / total))
-                canvas.put(at, y, "▰" * filled, INK2)
-                canvas.put(at + filled, y, "▱" * (size - filled), AXIS)
-                canvas.put(at + size + 1, y, f"{done}/{total}", INK2)
+            write(canvas, x_prog, y, progress_cells(*progress(self.pic, pull)), PROGRESS - 1)
         age = age_cells(silence(pull), width - x_quiet)        # by its right end, a cell before the edge: a
         write(canvas, width - 1 - seg_len(age), y, age, seg_len(age))      # figure too long for its column starts sooner
 
