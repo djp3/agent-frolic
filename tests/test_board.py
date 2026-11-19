@@ -1367,21 +1367,27 @@ async def test_a_click_where_it_needs_effort_picks_that_pull_request_and_the_lis
 
 # ---- the bars: each repository's timer, and an age -----------------------------------------
 
-def test_a_thin_bars_white_is_anchored_at_the_event_the_time_is_from_or_to():
-    ink, track, full = board.BAR_INK, board.BAR_TRACK, board.AGE_BAR
-    # time since: the white starts at the left and grows, whole only when all of it has gone by
+def test_a_thin_bar_is_anchored_at_the_event_the_time_is_from_or_to_and_colored_by_which():
+    age, timer, track, full = board.AGE_INK, board.TIMER_INK, board.BAR_TRACK, board.AGE_BAR
+    # time since: the filled part starts at the left and grows, whole only when all of it has gone by
     assert board.thin_bar(0) == [("─" * full, track)]
-    assert board.thin_bar(1) == [("━" * full, ink)]
-    assert board.thin_bar(0.5) == [("━" * (full // 2), ink), ("─" * (full // 2), track)]
-    assert board.thin_bar(0.99) == [("━" * (full - 1), ink), ("─", track)]
-    # time until: the white is what is left, ends at the right, and is gone only when the time is up
-    assert board.thin_bar(1, until=True) == [("━" * full, ink)]
+    assert board.thin_bar(1) == [("━" * full, age)]
+    assert board.thin_bar(0.5) == [("━" * (full // 2), age), ("─" * (full // 2), track)]
+    assert board.thin_bar(0.99) == [("━" * (full - 1), age), ("─", track)]
+    # time until: it is what is left, ends at the right, and is gone only when the time is up
+    assert board.thin_bar(1, until=True) == [("━" * full, timer)]
     assert board.thin_bar(0, until=True) == [("─" * full, track)]
-    assert board.thin_bar(0.5, until=True) == [("─" * (full // 2), track), ("━" * (full // 2), ink)]
-    assert board.thin_bar(0.01, until=True) == [("─" * (full - 1), track), ("━", ink)]
+    assert board.thin_bar(0.5, until=True) == [("─" * (full // 2), track), ("━" * (full // 2), timer)]
+    assert board.thin_bar(0.01, until=True) == [("─" * (full - 1), track), ("━", timer)]
     for part in (0.01, 0.3, 2, -1):                                           # always that many cells
         assert sum(len(text) for text, _ in board.thin_bar(part)) == full
         assert sum(len(text) for text, _ in board.thin_bar(part, until=True)) == full
+    # the two time different things, one over the other: they are not one color, nor any other
+    # color on the board that means something
+    import theme
+    assert age != timer and age == theme.AGE and timer == theme.INK2
+    meaning = (theme.GOOD, theme.WARN, theme.SERIOUS, theme.CRIT, theme.WAITING, theme.DIVIDER, theme.INK, theme.MUTED)
+    assert age not in meaning
 
 
 def test_an_age_is_drawn_in_the_room_its_column_has():
@@ -1422,7 +1428,7 @@ def timer(app, needle):
         for segment in strip:
             text, style = segment.text, segment.style
             ink = style.color.get_truecolor().hex.lower() if style is not None and style.color else ""
-            if text and set(text) <= {"━"} and ink == board.BAR_INK.lower():
+            if text and set(text) <= {"━"} and ink == board.TIMER_INK.lower():
                 filled, cells = filled + len(text), cells + len(text)
             elif text and set(text) <= {"─"} and ink == board.BAR_TRACK.lower():
                 cells += len(text)
@@ -1587,3 +1593,28 @@ async def test_what_a_repositorys_line_gives_up_as_the_window_narrows_does_not_c
             assert there == sorted(there, reverse=True), part                # there, then gone, and never back
             went.append(there.index(False))
         assert went == sorted(went) and len(set(went)) == 4                  # and in that order, one at a time
+
+
+@drive
+async def test_an_ages_bar_and_a_repositorys_timer_are_not_one_color(isolated):
+    """A repository's timer counts down to its next read; an age counts up from a pull
+    request's last change. One stands over the others, so each has its own color."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(160, 46)) as pilot:
+        await settle(app, pilot)
+        age, timer_ = board.AGE_INK.lower(), board.TIMER_INK.lower()
+
+        def bars(needle):
+            """The colors of the filled cells of the bar on the line that holds `needle`."""
+            for strip in app.screen._compositor.render_strips():
+                if needle in strip.text:
+                    return {segment.style.color.get_truecolor().hex.lower() for segment in strip
+                            if "━" in segment.text and segment.style and segment.style.color}
+            raise AssertionError(needle)
+
+        assert bars("#12 GraphQL") == {age} and bars("#16 Transcript") == {age}
+        assert bars("╪ djp3/agent-frolic") == {timer_} and bars("╪ acme/web-console") == {timer_}
+        await pilot.press("tab", "tab", "tab")                               # bob's: the others dim, their bars too
+        await pilot.pause()
+        assert bars("#16 Transcript") == {board.DIM.lower()} and bars("╪ djp3/agent-frolic") == {timer_}

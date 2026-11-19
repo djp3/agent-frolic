@@ -20,17 +20,17 @@ Top to bottom:
     base branch, the commit a pull request stands on, then the pull requests in stack
     order, with review (each reviewer's latest word, ◇ comments to resolve), checks,
     progress and its age: how long since it last changed. The age is a thin bar and, after
-    it, a figure in days and hours ("128d 11h", "21h"). The bar's white starts at the
-    left and grows, a quarter of the bar each for minutes, hours, days and weeks: it is
-    whole at three months.
+    it, a figure in days and hours ("128d 11h", "21h"). The bar fills from the left, a
+    quarter of it each for minutes, hours, days and weeks: it is full at three months.
     A double rule starts a repository, a heavy one a base branch, a light one a commit.
     A repository's rule ends in its timer, over its pull requests' ages: the same thin
     bar, whose white is the time left until its next read, and after it the minutes
     left, counted up to nought ("-4m"). The white ends at the right and leaves from the
     left: when it is gone, the repository is read again.
-    All of that is time from an event or to one, and a bar's white is anchored at the
-    event: at the left for a pull request's last change, which it grows away from, at
-    the right for a repository's next read, which it shrinks toward.
+    All of that is time from an event or to one, and the filled part of a bar is anchored
+    at the event: at the left for a pull request's last change, which it grows away from,
+    at the right for a repository's next read, which it shrinks toward. They time
+    different things, so they are not one color: an age's is violet, a timer's white.
     A narrowing window gives a pull request's row up in this order (LAYOUTS): progress,
     the age's bar, its figure, the reviewers' names, the review column, the checks. A
     repository's line has room of its own, so its timer does not go with the age: it
@@ -78,11 +78,12 @@ from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, A
                      age_reach, age_said, line_agents, mark, move_words, needs_effort, progress, quiet,
                      review_cell, reviewers, reviewing, silence, tree)
 from pulls import PullRequest, span
-from theme import (AXIS, CRIT, DIVIDER, INK, INK2, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN, darker)
+from theme import (AGE, AXIS, CRIT, DIVIDER, INK, INK2, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN, darker)
 
 PROGRESS = 22                    # cells of the progress column, the blank one before the age among them
-BAR_INK = INK2                   # the part of a bar that time has filled: one color, for every bar
-BAR_TRACK = AXIS                 # the part it has yet to fill
+TIMER_INK = INK2                 # the filled part of a repository's timer: the time left until its next read
+AGE_INK = AGE                    # the filled part of an age's bar: the time since a pull request last changed
+BAR_TRACK = AXIS                 # the part of either that is not filled
 FLASH = ["#4a4a46", "#444441", "#3d3d3a", "#363633", "#2f2f2d", "#292927"]   # a wash, fading
 FLASH_STEP = 0.17                # seconds each shade of the wash lasts
 MARK_KEPT_S = 60.0               # how long a "this just changed" record is kept: far past the
@@ -328,20 +329,23 @@ def progress_cells(word: str, done: int, total: int) -> Segments:
 
 
 def thin_bar(part: float, until: bool = False) -> Segments:
-    """A thin bar of AGE_BAR cells, `part` of it white, from 0 to 1. The white is anchored at
-    the event the time is counted from or to.
+    """A thin bar of AGE_BAR cells, `part` of it filled, from 0 to 1. The filled part is
+    anchored at the event the time is counted from or to, and its color says which.
 
-    Time since (an age): the white starts at the left and grows away from the event, a cell
-    when all of that cell's time has gone by, so it is whole only at the end of its scale.
-    Time `until` (a repository's timer): the white is what is left, it ends at the right
-    and leaves from the left, a cell when none of that cell's time is left, so it is gone
-    only when the time is up."""
+    Time since (an age): it starts at the left and grows away from the event, a cell when
+    all of that cell's time has gone by, so it is whole only at the end of its scale. It
+    is AGE_INK.
+    Time `until` (a repository's timer): it is what is left, it ends at the right and
+    leaves from the left, a cell when none of that cell's time is left, so it is gone only
+    when the time is up. It is TIMER_INK.
+
+    The two stand one over the other and time different things, so they are not one color."""
     if until:
         left = max(0, min(AGE_BAR, -int(-part * AGE_BAR // 1)))
-        runs = (("─", AGE_BAR - left, BAR_TRACK), ("━", left, BAR_INK))
+        runs = (("─", AGE_BAR - left, BAR_TRACK), ("━", left, TIMER_INK))
     else:
         done = max(0, min(AGE_BAR, int(part * AGE_BAR)))
-        runs = (("━", done, BAR_INK), ("─", AGE_BAR - done, BAR_TRACK))
+        runs = (("━", done, AGE_INK), ("─", AGE_BAR - done, BAR_TRACK))
     return [(mark * n, ink) for mark, n, ink in runs if n]
 
 

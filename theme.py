@@ -6,7 +6,11 @@ The colors, in one place. They are the ones the chosen mock-up (mockup/optionx.p
   • text wears the ink tokens, lightest to faintest: INK, INK2, MUTED;
   • the four status colors go on state marks only, never on words;
   • WAITING (agent farm's golden yellow) means one thing: idle, and you can fix it;
-  • DIVIDER (agent farm's divider blue) is every rule and line, and nothing else.
+  • DIVIDER (agent farm's divider blue) is every rule and line, and nothing else;
+  • AGE is the filled part of an age's bar, and nothing else. A repository's timer has the
+    same bar in INK2, so the two are told apart: time since something, and time until it.
+    It was measured, not picked by eye: the gentlest violet that stays apart from INK2 for
+    full and for color-blind vision, and from the status colors, the yellow and the blue.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ INK, INK2, MUTED, AXIS = "#f0efec", "#c3c2b7", "#898781", "#383835"
 GOOD, WARN, SERIOUS, CRIT = "#0ca30c", "#fab219", "#ec835a", "#d03b3b"
 WAITING = "#ffd75f"
 DIVIDER = "#0053AA"
+AGE = "#9f90e6"
 
 
 def _parts(color: str) -> tuple[int, int, int]:
