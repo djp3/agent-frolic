@@ -193,10 +193,12 @@ def main(argv: list[str]) -> int:
         failed = True
     elif found.own is None or version(found.own) != version(declared):
         # The two places that state the minimum must agree; what the binaries need alone
-        # only gives away Package.swift being the higher one.
+        # only gives away Package.swift being the higher one. Which of the two was meant
+        # is not the check's to say: either may be the one that was changed on purpose.
         print(f"Info.plist declares macOS {declared} (LSMinimumSystemVersion), but the app's own "
-              f"executable ({found.executable}) records macOS {found.own or '(none)'}. Set the platform in "
-              f"macos/Package.swift to {declared} too.", file=sys.stderr)
+              f"executable ({found.executable}) records macOS {found.own or '(none)'}, which is the "
+              "platform in macos/Package.swift. The two must say the same: change the one that was "
+              "left behind.", file=sys.stderr)
         failed = True
     if too_new:
         print(f"Info.plist declares macOS {declared} (LSMinimumSystemVersion), but {len(too_new)} "
