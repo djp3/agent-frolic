@@ -271,9 +271,12 @@ async def test_as_the_window_narrows_progress_goes_then_the_ages_bar_then_its_fi
             await pilot.pause()
             shown = screen(app)
             head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
-            row = next(r for r in shown.splitlines() if "#16 Transcript" in r)
+            selected, row = (next(r for r in shown.splitlines() if number in r) for number in ("#12 GraphQL", "#16 Transcript"))
             seen[wide] = ("progress" in head, "━" in row, bool(re.search(r" \d+d \d\dh$", row)), head.endswith(" age"),
                           timer(app, "╪ djp3/quiet-one")[1:], timer(app, "╪ djp3/agent-frolic")[1:])
+            if seen[wide][2]:                                                         # a figure, with its bar or alone,
+                assert len(row) == len(selected) == len(head), wide                   # ends where "age" does: on the
+                assert re.search(r" \d+d \d\dh$", selected) and ("━" in selected) == seen[wide][1], wide    # selected row too
     assert seen[150][:4] == (False, True, True, True)                                 # progress has gone
     assert seen[130][:4] == (False, False, True, True)                                # then the age's bar
     assert seen[118][:4] == (False, False, False, False)                              # then its figure, and its heading
