@@ -24,13 +24,18 @@ Top to bottom:
     left and grows, a quarter of the bar each for minutes, hours, days and weeks: it is
     whole at three months.
     A double rule starts a repository, a heavy one a base branch, a light one a commit.
-    A repository's rule ends in its timer, in the age column: the same thin bar, whose
-    white is the time left until its next read, and after it the minutes left, counted
-    up to nought ("-4m"). The white ends at the right and leaves from the left: when it
-    is gone, the repository is read again.
-    The column is time from an event or to one, and a bar's white is anchored at the
+    A repository's rule ends in its timer, over its pull requests' ages: the same thin
+    bar, whose white is the time left until its next read, and after it the minutes
+    left, counted up to nought ("-4m"). The white ends at the right and leaves from the
+    left: when it is gone, the repository is read again.
+    All of that is time from an event or to one, and a bar's white is anchored at the
     event: at the left for a pull request's last change, which it grows away from, at
     the right for a repository's next read, which it shrinks toward.
+    A narrowing window gives a pull request's row up in this order (LAYOUTS): progress,
+    the age's bar, its figure, the reviewers' names, the review column, the checks. A
+    repository's line has room of its own, so its timer does not go with the age: it
+    gives up what it says of its counts first, then the timer's bar, then its figure
+    (repo_cells).
     A list longer than its box scrolls: it follows the selected pull request, and the
     wheel, the page keys and the bar at its right edge move it freely, to every
     repository on screen, the ones with nothing open included.

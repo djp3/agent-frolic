@@ -1501,7 +1501,8 @@ async def test_in_a_narrow_window_a_repositorys_name_and_count_come_before_its_t
 
 @drive
 async def test_a_long_countdown_is_whole_in_the_narrowest_window(isolated):
-    """The longest timer counts from -1440m: six cells, where the age column there has five."""
+    """The longest timer counts from -1440m: six cells, drawn whole wherever the repository's
+    line has room for them, however narrow the window."""
     keychain.put(keychain.GITHUB_TOKEN, TOKEN)
     RepoStore().add("djp3/app", admin=True)
     FakePulls.open_ = {"djp3/app": []}
