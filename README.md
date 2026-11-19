@@ -121,15 +121,14 @@ From top to bottom:
 
 - **The top line**: every repository in your list, the ones on screen underlined, each with
   `●n` (what you can get moving there) and `○n` (other people and teams something there waits
-  on). At the right, the key to the two bars on each repository's line.
+  on).
 - **The cards**: you, then the teams you are on, then everyone else something waits on, the
   longest wait first. A yellow dot on a card means something on it is yours to act on.
 - **The list**, in two columns. On the left, who: owner, state, and who it waits on. On the
   right, the tree: repository, base branch, commit, then the pull requests in stack order, each
-  with its reviews, checks, progress and how long it has been quiet. Each repository's line
-  ends in two thin bars of its own: the upper one empties until that repository is next read
-  on its timer, the lower one since GitHub last sent a webhook about it (empty where it sends
-  none).
+  with its reviews, checks, progress and age. Each repository's line ends in its own timer:
+  a thin bar whose white is the time left until that repository is next read, and after it
+  the minutes left, counted up to nought (`-4m`).
 - **The band**: what needs effort, and the drawer for the selected pull request.
 - **The ticker**: the last thing that happened.
 
@@ -187,8 +186,18 @@ The **ci** column is `✓` when the checks pass, `✗` when they fail, `…` whi
 when there are none, and `$` when GitHub did not run them because the account could not pay
 for them, which is nobody's to fix in the code.
 
-**Quiet** is a bar under `m h d w`: two cells each for minutes, hours, days and weeks, in the
-color of the unit the silence has reached.
+**Age** is how long since the pull request last changed: a thin bar, then the figure in days
+and hours (`128d 11h`, `21h`, and `0h` within the hour). The bar's white grows from the left, a
+quarter of the bar each for minutes, hours, days and weeks, and is whole at three months.
+Within the hour, where the figure is `0h` throughout, the bar still tells roughly how long:
+none of it is white for the first four minutes, one cell until a quarter of an hour, two
+until the hour. The age is the first thing a narrowing window gives up: its bar, then its
+figure, before progress or any other column goes.
+
+The column is time from an event or to one, and a bar's white is anchored at the event. A pull
+request's starts at its last change, at the left, and grows away from it. A repository's ends
+at its next read, at the right, and shrinks toward it: when the white is gone and the figure
+is `0m`, the repository is read again.
 
 ### Teams
 

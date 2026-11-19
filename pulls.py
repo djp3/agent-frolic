@@ -569,7 +569,9 @@ def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
 
 def span(seconds: float, fine: bool = False) -> str:
     """A stretch of time, shortly: "40m", "3h", "9d", "5w". Under a minute it is "now", or,
-    `fine`, the seconds: "12s". Every "how long ago" in the app is said this way."""
+    `fine`, the seconds: "12s". This is how the app says how long ago something happened:
+    in the ticker and on the setup screen. A pull request's age is not said this way: it
+    is in days and hours wherever it is said (picture.age_said)."""
     seconds = max(0, int(seconds))
     if seconds < 60:
         return f"{seconds}s" if fine else "now"
@@ -580,10 +582,3 @@ def span(seconds: float, fine: bool = False) -> str:
     if seconds < 14 * 86400:
         return f"{seconds // 86400}d"
     return f"{seconds // (7 * 86400)}w"
-
-
-def ago(then: datetime | None, now: datetime | None = None) -> str:
-    """How long since: "now", "40m", "3h", "9d", "5w"."""
-    if then is None:
-        return ""
-    return span(((now or datetime.now(timezone.utc)) - then).total_seconds())

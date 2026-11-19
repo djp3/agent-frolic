@@ -9,8 +9,7 @@ Top to bottom:
 
   • THE TOP LINE. Every repository in the list, the ones on screen bold and underlined,
     each with ●n (what you can get moving there) and ○n (other people something there
-    waits on). At the right, the key to the two thin bars each repository's line ends in
-    (below). Resting the pointer on it says what they are.
+    waits on).
   • THE CARDS. One per human: you, then everyone something waits on. A yellow dot on yours
     means things wait on you. The agents a human operates sit beneath their name. The
     background shows the focus. A team a review was asked of has a card too; a team you
@@ -20,14 +19,18 @@ Top to bottom:
     waits on, as many lines as a pull request needs. Column 2 is the tree: repository,
     base branch, the commit a pull request stands on, then the pull requests in stack
     order, with review (each reviewer's latest word, ◇ comments to resolve), checks,
-    progress and how long it has been quiet: a bar under "m h d w", two cells to each of
-    minutes, hours, days and weeks. The whole bar has the color of the unit the silence
-    has reached, the color of that unit's letter. Only the weeks' color fades: at three
-    months the bar is full and grey.
+    progress and its age: how long since it last changed. The age is a thin bar and, after
+    it, a figure in days and hours ("128d 11h", "21h"). The bar's white starts at the
+    left and grows, a quarter of the bar each for minutes, hours, days and weeks: it is
+    whole at three months.
     A double rule starts a repository, a heavy one a base branch, a light one a commit.
-    A repository's rule ends in two thin bars that share one row, for that repository
-    alone: the upper one empties until it is next read on its timer, the lower one since
-    GitHub last sent a webhook delivery about it (empty where it sends none).
+    A repository's rule ends in its timer, in the age column: the same thin bar, whose
+    white is the time left until its next read, and after it the minutes left, counted
+    up to nought ("-4m"). The white ends at the right and leaves from the left: when it
+    is gone, the repository is read again.
+    The column is time from an event or to one, and a bar's white is anchored at the
+    event: at the left for a pull request's last change, which it grows away from, at
+    the right for a repository's next read, which it shrinks toward.
     A list longer than its box scrolls: it follows the selected pull request, and the
     wheel, the page keys and the bar at its right edge move it freely, to every
     repository on screen, the ones with nothing open included.
@@ -64,17 +67,15 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from canvas import Canvas, Segments, cut, plain, seg_len, wash, write
-from picture import (CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
+from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
                      Person, Picture, Row, cells, counts, focuses, humans, in_focus, key_of, labels,
-                     line_agents, mark, move_words, needs_effort, progress, quiet, quiet_bar, quiet_block,
-                     quiet_scale, review_cell, reviewers, reviewing, tree)
+                     age_reach, age_said, line_agents, mark, move_words, needs_effort, progress, quiet,
+                     review_cell, reviewers, reviewing, silence, tree)
 from pulls import PullRequest, span
 from theme import (AXIS, CRIT, DIVIDER, INK, INK2, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN, darker)
 
-BAR = 16                         # cells in each repository's two freshness bars
-POLL_INK = INK2                  # the poll bar: neutral, it is the steady one
-HOOK = "#199e70"                 # the webhook bar
-TRACK = AXIS                     # the part of a bar that has drained
+BAR_INK = INK2                   # the part of a bar that time has filled: one color, for every bar
+BAR_TRACK = AXIS                 # the part it has yet to fill
 FLASH = ["#4a4a46", "#444441", "#3d3d3a", "#363633", "#2f2f2d", "#292927"]   # a wash, fading
 FLASH_STEP = 0.17                # seconds each shade of the wash lasts
 MARK_KEPT_S = 60.0               # how long a "this just changed" record is kept: far past the
@@ -99,28 +100,37 @@ TREE_ROOM = 16                   # the tree's least: its connectors, the icon, t
 
 
 def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
-    """Where review, checks, progress and quiet start in a list this wide, and whether
-    reviewers are named. Column 1 and the tree never move; a narrow window gives up
-    progress first, then the reviewers' names, and with the names the quiet bar, which
-    becomes a single block; then the review column, then the checks (the drawer still
-    shows both), so that no column is ever drawn over the tree. None is a column given up."""
-    x_quiet = width - QUIET
-    x_prog: int | None = x_quiet - 22
-    x_ci: int | None = x_prog - 4
-    x_review: int | None = x_ci - 24
+    """Where review, checks, progress and the age start in a list this wide, and whether
+    reviewers are named. Column 1 and the tree never move. The age is the least of them, so
+    a narrow window gives it up first: its bar, then its figure, and with that the whole
+    column. Then progress, then the reviewers' names, then the review column, then the
+    checks (the drawer still shows both), so that no column is ever drawn over the tree.
+    None is a column given up; the age has none to give, so given up it starts at the
+    list's edge and has no room. What it holds follows from the room it is left: age_form."""
+    def beside(x_quiet: int) -> tuple[int, int, int]:
+        x_prog = x_quiet - 22
+        return x_prog - 28, x_prog - 4, x_prog
+
     names = True
+    x_quiet = next((x for x in (width - QUIET, width - (AGE_FIGURE + 1)) if beside(x)[0] - X_TREE >= 32), width)
+    x_review, x_ci, x_prog = beside(x_quiet)
     if x_review - X_TREE < 32:
         x_prog, x_ci = None, x_quiet - 5
         x_review = x_ci - 24
         if x_review - X_TREE < 30:
-            names, x_quiet = False, width - 5
-            x_ci = x_quiet - 4
+            names, x_ci = False, x_quiet - 4
             x_review = x_ci - 9
             if x_review - X_TREE < TREE_ROOM:
                 x_review = None
                 if x_ci - X_TREE < TREE_ROOM:
                     x_ci = None
     return x_review, x_ci, x_prog, names, x_quiet
+
+
+def age_form(room: int) -> tuple[bool, bool]:
+    """What the age column holds in the `room` cells columns() leaves it: (its bar, its
+    figure). Both in QUIET cells, the figure alone in less, and nothing in none."""
+    return room >= QUIET, room > 0
 
 
 def title_end(cols: tuple) -> int:
@@ -274,44 +284,38 @@ class Line:
     lead: str = ""                               # the tree connectors on this line
 
 
-def fresh_key() -> Text:
-    """The key to the two bars at the end of each repository's line, for the top line."""
-    return (Text().append("▀", style=POLL_INK).append(" read  ", style=MUTED)
-            .append("▄", style=HOOK).append(" webhook", style=MUTED))
+def thin_bar(part: float, until: bool = False) -> Segments:
+    """A thin bar of AGE_BAR cells, `part` of it white, from 0 to 1. The white is anchored at
+    the event the time is counted from or to.
+
+    Time since (an age): the white starts at the left and grows away from the event, a cell
+    when all of that cell's time has gone by, so it is whole only at the end of its scale.
+    Time `until` (a repository's timer): the white is what is left, it ends at the right
+    and leaves from the left, a cell when none of that cell's time is left, so it is gone
+    only when the time is up."""
+    if until:
+        left = max(0, min(AGE_BAR, -int(-part * AGE_BAR // 1)))
+        runs = (("─", AGE_BAR - left, BAR_TRACK), ("━", left, BAR_INK))
+    else:
+        done = max(0, min(AGE_BAR, int(part * AGE_BAR)))
+        runs = (("━", done, BAR_INK), ("─", AGE_BAR - done, BAR_TRACK))
+    return [(mark * n, ink) for mark, n, ink in runs if n]
 
 
-FRESH_KEY_W = len(fresh_key().plain)
+def time_cells(bar: Segments | None, figure: str) -> Segments:
+    """A stretch of time as it stands in the age column: its bar, when it has one, and its
+    figure, which ends where every figure after a bar does. Whoever draws it puts its last
+    cell a cell before the edge, so a figure longer than its column starts sooner."""
+    return (bar + [(" " * (1 + max(0, AGE_FIGURE - len(figure))), "")] if bar else []) + [(figure, INK2)]
 
 
-def fresh_tip() -> Text:
-    """What the two freshness bars are, for the pointer resting on their key."""
-    tip = Text()
-    tip.append("Each repository's line ends in two thin bars.\n\n", style=INK2)
-    tip.append("▀", style=POLL_INK).append(" upper · the next read\n", style=f"bold {INK}")
-    tip.append("Empties at a steady pace. When it is empty, that repository is read again. Any "
-               "read of it fills the bar: a webhook's, u, or the timer's own. Where GitHub sends "
-               "webhooks, the timer is a slow one.\n\n", style=INK2)
-    tip.append("▄", style=HOOK).append(" lower · webhooks\n", style=f"bold {INK}")
-    tip.append("Refills each time GitHub sends a change there. If it keeps emptying, the "
-               "webhooks have gone quiet. Empty for a repository GitHub sends none for.", style=INK2)
-    return tip
-
-
-def fresh_bar(read: float, hook: float) -> Segments:
-    """Two thin bars in one row of BAR cells, for one repository: `read` and `hook` are how
-    much of each is left, from 1 down to 0 (Frolic.freshness). Each cell is an upper half
-    block: its ink is the read bar, its background the webhook bar. What is left sits
-    against the right edge, and blocks leave from the left. So the row is at most three runs
-    of like cells, from the left: where neither bar reaches, where only the longer one
-    does, and where both do."""
-    def cells(part: float) -> int:
-        return max(0, min(BAR, -int(-part * BAR // 1)))       # rounded up: full until a block's time is gone
-
-    r, h = cells(read), cells(hook)
-    runs = [(BAR - max(r, h), TRACK, TRACK),
-            (abs(r - h), POLL_INK if r > h else TRACK, HOOK if h > r else TRACK),
-            (min(r, h), POLL_INK, HOOK)]
-    return [("▀" * n, f"{ink} on {back}") for n, ink, back in runs if n]
+def age_cells(seconds: float | None, room: int) -> Segments:
+    """An age in the `room` cells the age column has (age_form): its bar and its figure, or
+    the figure alone. Nothing where the column is given up, or for an age not known."""
+    bar, figure = age_form(room)
+    if seconds is None or not figure:
+        return []
+    return time_cells(thin_bar(age_reach(seconds)) if bar else None, age_said(seconds))
 
 
 class ListBar(Static):
@@ -344,10 +348,7 @@ class ListBar(Static):
 class Board(Screen):
     CSS = f"""
     Board {{ background: {PLANE}; color: {INK}; layers: base overlay; }}
-    #topline {{ height: 1; margin: 0 2; }}
-    #tabs {{ width: 1fr; height: 1; text-wrap: nowrap; text-overflow: ellipsis; }}
-    #fresh {{ width: {FRESH_KEY_W}; height: 1; margin: 0 0 0 2; }}
-    Tooltip {{ background: {RAISED}; color: {INK2}; }}
+    #tabs {{ height: 1; margin: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }}
     #toprule {{ height: 1; margin: 0 1; }}
     #strip {{ height: 1; max-height: {STRIP}; margin: 0 1; }}
     #striprule {{ height: 1; margin: 0 1; }}
@@ -410,9 +411,7 @@ class Board(Screen):
         self.entered: dict[Key, float] = {}       # what just joined the needs-effort list
 
     def compose(self):
-        with Horizontal(id="topline"):
-            yield Static(id="tabs")
-            yield Static(fresh_key(), id="fresh")     # the key to each repository's two bars
+        yield Static(id="tabs")
         yield Static(id="toprule")
         yield Static(id="strip")
         yield Static(id="striprule")
@@ -428,9 +427,8 @@ class Board(Screen):
         yield Static(id="menu")
 
     def on_mount(self) -> None:
-        self.query_one("#fresh", Static).tooltip = fresh_tip()
         self.fit()
-        self.set_interval(0.25, self.animate_tick)      # washes fade and the bars drain between the app's ticks
+        self.set_interval(0.25, self.animate_tick)      # washes fade and the timers run between the app's ticks
         self.draw()
         self.call_after_refresh(self.draw)
 
@@ -746,7 +744,7 @@ class Board(Screen):
                 self.draw_note(canvas, y, row, width)
                 continue
             if pull is None:
-                self.draw_rule(canvas, y, row, width)
+                self.draw_rule(canvas, y, row, cols, width)
                 continue
             self.draw_pull(canvas, y, line, cols, width)
             chosen = key_of(pull) == self.sel
@@ -754,7 +752,7 @@ class Board(Screen):
                 for x in range(width):                         # out of focus: dimmed where it stands
                     if x != X_RULE:
                         ink = canvas.cells[y][x][1].split(" ")[-1]
-                        faded = x >= cols[4] and ink.startswith("#")       # a quiet bar is not made lighter
+                        faded = x >= cols[4] and ink.startswith("#")       # what is left of a bar is not made lighter
                         canvas.cells[y][x] = (canvas.cells[y][x][0], darker(ink, DIM) if faded else DIM)
             if chosen:
                 wash(canvas, y, 0, width, RAISED)
@@ -839,7 +837,7 @@ class Board(Screen):
             self.scroll(-max(1, round(self.app.scroll_sensitivity_y)))
             event.stop()
 
-    def draw_rule(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
+    def draw_rule(self, canvas: Canvas, y: int, row: Row, cols: tuple, width: int) -> None:
         """A rule across both columns, carrying its name: double at a repo, heavy at a base,
         light at a commit (with its short hash). It crosses the rule between the columns.
 
@@ -871,10 +869,28 @@ class Board(Screen):
             if row.label:
                 parts += [(" " + row.label, MUTED)]
         parts += [(" ", "")]
-        write(canvas, X_TREE - 1, y, parts, room)
-        at = width - BAR - 2                                   # the repository's two bars, at the rule's end
-        if row.kind == "repo" and at >= X_TREE - 1 + seg_len(parts):
-            write(canvas, at, y, [(" ", ""), *fresh_bar(*self.app.freshness(row.repo)), (" ", "")], BAR + 2)
+        used = write(canvas, X_TREE - 1, y, parts, room)
+        if row.kind == "repo":
+            self.draw_timer(canvas, y, row.repo, X_TREE - 1 + used, cols[4], width)
+
+    def draw_timer(self, canvas: Canvas, y: int, repo: str, after: int, x_quiet: int, width: int) -> None:
+        """A repository's timer, at the end of its rule, which stops a cell before it. It is
+        in the age column, where its pull requests have their bars: the same thin bar, its
+        white the time left until the next read, and after it the minutes left, counted up
+        to nought, so that the figure reaches nought as the white runs out. `after` is where
+        the name and the counts end: they come first, so where there is no room for the bar
+        the figure is there alone, and where there is none for that either, nothing is. The
+        figure does not go with the age column in a narrow window: this line's room is its
+        own, and what the figure takes of it no other column wants."""
+        ran, left = self.app.timer(repo)
+        figure = f"-{-int(-left // 60)}m" if left > 0 else "0m"
+        bars = (thin_bar(1 - ran, until=True), None) if age_form(width - x_quiet)[0] else (None,)
+        for drawn in (time_cells(bar, figure) for bar in bars):
+            x = width - 1 - seg_len(drawn)
+            if x - 1 >= after:
+                canvas.put(x - 1, y, " " * (width - x + 1))
+                write(canvas, x, y, drawn, seg_len(drawn))
+                return
 
     def draw_note(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A line under a repository saying why it has no pull requests to show."""
@@ -921,13 +937,14 @@ class Board(Screen):
                 canvas.put(at, y, "▰" * filled, INK2)
                 canvas.put(at + filled, y, "▱" * (size - filled), AXIS)
                 canvas.put(at + size + 1, y, f"{done}/{total}", INK2)
-        canvas.put(x_quiet, y, *(quiet_bar if names else quiet_block)(pull))
+        age = age_cells(silence(pull), width - x_quiet)        # by its right end, a cell before the edge: a
+        write(canvas, width - 1 - seg_len(age), y, age, seg_len(age))      # figure too long for its column starts sooner
 
     def head(self) -> Text:
         """The column headings: column 1 (owner, state, waits on), the rule, column 2."""
         box = self.query_one("#head", Static).size
         width = max(70, box.width or self.size.width - 2)
-        x_review, x_ci, x_prog, names, x_quiet = cols = columns(width)
+        x_review, x_ci, x_prog, names, _ = cols = columns(width)
         end = title_end(cols)                                  # where column 2's own heading must stop
         canvas = Canvas(width, 1)
         canvas.put(X_OWNER + 2, 0, "owner", MUTED)
@@ -957,10 +974,8 @@ class Board(Screen):
             canvas.put(x_ci, 0, "ci", MUTED)
         if x_prog is not None:
             canvas.put(x_prog, 0, "progress", MUTED)
-        if names:
-            write(canvas, x_quiet, 0, quiet_scale(), QUIET)
-        else:
-            canvas.put(x_quiet, 0, "quiet", MUTED)
+        if age_form(width - cols[4])[1]:
+            canvas.put(width - 4, 0, "age", MUTED)              # over the figures, which end there too
         return canvas.text()
 
     def effort(self) -> Text:
@@ -1094,8 +1109,8 @@ class Board(Screen):
         out.append(f"{CHECK_SAID[pull.checks]} · {merge}",
                    style=INK if pull.checks == "fail" or pull.mergeable == "conflict" else INK2)
         age = quiet(pull)
-        if age:                                                # the figure the quiet bar stands for
-            out.append(" · changed just now" if age == "now" else f" · last changed {age} ago", style=MUTED)
+        if age:                                                # the figure the list has, in days and hours
+            out.append(" · changed within the hour" if age == "0h" else f" · last changed {age} ago", style=MUTED)
         out.append("\n")
         agents = pic.on(pull)
         if agents:
