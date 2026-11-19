@@ -101,21 +101,24 @@ TREE_ROOM = 16                   # the tree's least: its connectors, the icon, t
 
 def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
     """Where review, checks, progress and the age start in a list this wide, and whether
-    reviewers are named. Column 1 and the tree never move. The age is the least of them, so
-    a narrow window gives it up first: its bar, then its figure, and with that the whole
-    column. Then progress, then the reviewers' names, then the review column, then the
-    checks (the drawer still shows both), so that no column is ever drawn over the tree.
-    None is a column given up; the age has none to give, so given up it starts at the
-    list's edge and has no room. What it holds follows from the room it is left: age_form."""
-    def beside(x_quiet: int) -> tuple[int, int, int]:
-        x_prog = x_quiet - 22
-        return x_prog - 28, x_prog - 4, x_prog
+    reviewers are named. Column 1 and the tree never move. A narrow window gives up
+    progress first; then the age, its bar before its figure, and with the figure the whole
+    column; then the reviewers' names, then the review column, then the checks (the drawer
+    still shows both), so that no column is ever drawn over the tree. None is a column
+    given up; the age has none to give, so given up it starts at the list's edge and has no
+    room. What it holds follows from the room it is left: age_form.
 
+    This is for a pull request's row. A repository's line keeps its bar and its figure for
+    as long as its own room allows (draw_timer)."""
+    x_quiet = width - QUIET
+    x_prog: int | None = x_quiet - 22
+    x_ci: int | None = x_prog - 4
+    x_review: int | None = x_ci - 24
     names = True
-    x_quiet = next((x for x in (width - QUIET, width - (AGE_FIGURE + 1)) if beside(x)[0] - X_TREE >= 32), width)
-    x_review, x_ci, x_prog = beside(x_quiet)
     if x_review - X_TREE < 32:
-        x_prog, x_ci = None, x_quiet - 5
+        x_prog = None
+        x_quiet = next((x for x in (width - QUIET, width - (AGE_FIGURE + 1)) if x - 29 - X_TREE >= 30), width)
+        x_ci = x_quiet - 5
         x_review = x_ci - 24
         if x_review - X_TREE < 30:
             names, x_ci = False, x_quiet - 4
@@ -744,7 +747,7 @@ class Board(Screen):
                 self.draw_note(canvas, y, row, width)
                 continue
             if pull is None:
-                self.draw_rule(canvas, y, row, cols, width)
+                self.draw_rule(canvas, y, row, width)
                 continue
             self.draw_pull(canvas, y, line, cols, width)
             chosen = key_of(pull) == self.sel
@@ -837,7 +840,7 @@ class Board(Screen):
             self.scroll(-max(1, round(self.app.scroll_sensitivity_y)))
             event.stop()
 
-    def draw_rule(self, canvas: Canvas, y: int, row: Row, cols: tuple, width: int) -> None:
+    def draw_rule(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A rule across both columns, carrying its name: double at a repo, heavy at a base,
         light at a commit (with its short hash). It crosses the rule between the columns.
 
@@ -871,21 +874,23 @@ class Board(Screen):
         parts += [(" ", "")]
         used = write(canvas, X_TREE - 1, y, parts, room)
         if row.kind == "repo":
-            self.draw_timer(canvas, y, row.repo, X_TREE - 1 + used, cols[4], width)
+            self.draw_timer(canvas, y, row.repo, X_TREE - 1 + used, width)
 
-    def draw_timer(self, canvas: Canvas, y: int, repo: str, after: int, x_quiet: int, width: int) -> None:
-        """A repository's timer, at the end of its rule, which stops a cell before it. It is
-        in the age column, where its pull requests have their bars: the same thin bar, its
-        white the time left until the next read, and after it the minutes left, counted up
-        to nought, so that the figure reaches nought as the white runs out. `after` is where
-        the name and the counts end: they come first, so where there is no room for the bar
-        the figure is there alone, and where there is none for that either, nothing is. The
-        figure does not go with the age column in a narrow window: this line's room is its
-        own, and what the figure takes of it no other column wants."""
+    def draw_timer(self, canvas: Canvas, y: int, repo: str, after: int, width: int) -> None:
+        """A repository's timer, at the end of its rule, which stops a cell before it. It
+        stands where the age column does when that has all its room, over its pull requests'
+        bars: the same thin bar, its white the time left until the next read, and after it
+        the minutes left, counted up to nought, so that the figure reaches nought as the
+        white runs out.
+
+        It does not go with the age column as the window narrows: this line's room is its
+        own, and what the timer takes of it no other column wants. So it keeps its bar and
+        its figure for as long as they fit after the name and the counts, which come first:
+        `after` is where those end. Where the bar does not fit the figure is there alone,
+        and where that does not either, nothing is."""
         ran, left = self.app.timer(repo)
         figure = f"-{-int(-left // 60)}m" if left > 0 else "0m"
-        bars = (thin_bar(1 - ran, until=True), None) if age_form(width - x_quiet)[0] else (None,)
-        for drawn in (time_cells(bar, figure) for bar in bars):
+        for drawn in (time_cells(bar, figure) for bar in (thin_bar(1 - ran, until=True), None)):
             x = width - 1 - seg_len(drawn)
             if x - 1 >= after:
                 canvas.put(x - 1, y, " " * (width - x + 1))

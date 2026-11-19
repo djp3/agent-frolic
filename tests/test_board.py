@@ -134,18 +134,15 @@ async def test_the_board_is_the_first_screen_once_there_is_a_token_and_draws_wha
             assert secret not in shown
 
 
-def test_a_narrow_list_gives_up_the_age_first_then_progress_then_the_names():
+def test_a_narrow_list_gives_up_progress_first_then_the_ages_bar_then_its_figure_then_the_names():
     x_review, x_ci, x_prog, names, x_quiet = board.columns(160)
     assert (x_review, x_ci, x_prog, names, x_quiet) == (88, 112, 116, True, 138)
-    assert board.columns(157)[4] == 157 - board.QUIET                                 # the age is the least of
-    assert board.columns(156)[4] == 156 - (board.AGE_FIGURE + 1)                      # them: its bar goes first,
-    x_review, x_ci, x_prog, names, x_quiet = board.columns(150)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (91, 115, 119, True, 141)      # and progress stays
-    assert board.columns(144)[4] == 144 - (board.AGE_FIGURE + 1)                      # then its figure: the
-    assert board.columns(143) == (93, 117, 121, True, 143)                            # column has no room at all
-    assert board.columns(135)[2] is not None and board.columns(134)[2] is None        # then progress
-    x_review, x_ci, x_prog, names, x_quiet = board.columns(130)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (101, 125, None, True, 130)
+    assert board.columns(157)[2] is not None                                          # progress goes first,
+    assert board.columns(156) == (105, 129, None, True, 156 - board.QUIET)            # and the age keeps its bar
+    assert board.columns(134)[4] == 134 - board.QUIET                                 # then the age's bar: its
+    assert board.columns(133) == (95, 119, None, True, 133 - (board.AGE_FIGURE + 1))  # figure has the column
+    assert board.columns(121)[4] == 121 - (board.AGE_FIGURE + 1)                      # then its figure: the
+    assert board.columns(120) == (91, 115, None, True, 120)                           # column has no room at all
     assert board.columns(112)[3] and not board.columns(111)[3]                        # then the names
     x_review, x_ci, x_prog, names, x_quiet = board.columns(100)
     assert (x_review, x_ci, x_prog, names, x_quiet) == (87, 96, None, False, 100)
@@ -224,25 +221,27 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
 
 
 @drive
-async def test_in_a_narrower_window_an_age_is_its_figure_alone_and_narrower_still_it_is_gone(isolated):
-    """The age goes before progress does: it is the least of the columns."""
+async def test_as_the_window_narrows_progress_goes_then_the_ages_bar_then_its_figure(isolated):
+    """A pull request's row gives them up in that order. A repository's line keeps its bar and
+    its figure throughout: its room is its own."""
     a_board()
-    app = main.Frolic()
-    async with app.run_test(size=(150, 46)) as pilot:
-        await settle(app, pilot)
-        shown = screen(app)
-        head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
-        assert head.endswith(" age") and "progress" in head
-        for number in ("#12 GraphQL", "#16 Transcript"):
-            row = next(r for r in shown.splitlines() if number in r)
-            assert re.search(r" \d+d \d\dh$", row) and len(row) == len(head) and "━" not in row     # no bar
-    app = main.Frolic()
-    async with app.run_test(size=(140, 46)) as pilot:
-        await settle(app, pilot)
-        shown = screen(app)
-        head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
-        assert head.endswith(" progress")                                             # no age, and still progress
-        assert not any(re.search(r" \d+d \d\dh$", row) for row in shown.split("needs effort")[0].splitlines())
+    seen = {}
+    for wide in (150, 130, 118):
+        app = main.Frolic()
+        async with app.run_test(size=(wide, 46)) as pilot:
+            await settle(app, pilot)
+            app.draw()
+            await pilot.pause()
+            shown = screen(app)
+            head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
+            row = next(r for r in shown.splitlines() if "#16 Transcript" in r)
+            seen[wide] = ("progress" in head, "━" in row, bool(re.search(r" \d+d \d\dh$", row)), head.endswith(" age"),
+                          timer(app, "╪ djp3/quiet-one")[1:], timer(app, "╪ djp3/agent-frolic")[1:])
+    assert seen[150][:4] == (False, True, True, True)                                 # progress has gone
+    assert seen[130][:4] == (False, False, True, True)                                # then the age's bar
+    assert seen[118][:4] == (False, False, False, False)                              # then its figure, and its heading
+    for wide in seen:                                                                 # each repository's line
+        assert seen[wide][4:] == ((board.AGE_BAR, "-5m"), (board.AGE_BAR, "-5m")), wide     # has both all the while
 
 
 @drive
@@ -1365,9 +1364,9 @@ def test_an_age_is_drawn_in_the_room_its_column_has():
 def test_what_the_age_column_holds_follows_from_the_room_the_columns_leave_it():
     """(its bar, its figure): what is drawn there and where the columns stand cannot come
     apart."""
-    forms = {wide: board.age_form(wide - board.columns(wide)[4]) for wide in (160, 157, 156, 144, 143, 100)}
-    assert forms == {160: (True, True), 157: (True, True), 156: (False, True), 144: (False, True),
-                     143: (False, False), 100: (False, False)}
+    forms = {wide: board.age_form(wide - board.columns(wide)[4]) for wide in (160, 156, 134, 133, 121, 120, 100)}
+    assert forms == {160: (True, True), 156: (True, True), 134: (True, True), 133: (False, True),
+                     121: (False, True), 120: (False, False), 100: (False, False)}
 
 
 def timer(app, needle):
