@@ -1521,14 +1521,15 @@ async def test_however_old_a_pull_request_its_age_ends_where_the_others_do(isola
                         for seconds in (1001 * 86400 + 3 * 3600, 90000))
     FakePulls.open_ = {"djp3/app": [node(7, "old", author={"login": "mira"}, title="Old", updatedAt=long_ago),
                                     node(8, "new", author={"login": "mira"}, title="New", updatedAt=lately)]}
-    for wide, old, new in ((160, " 1001d", " 1d 01h"), (150, " 1001d", " 1d 01h")):
+    for wide, bar in ((160, True), (130, False)):                             # with its bar, and without it
         app = main.Frolic()
         async with app.run_test(size=(wide, 46)) as pilot:
             await settle(app, pilot)
             rows = screen(app).splitlines()
             head = next(row for row in rows if "pull request" in row)
             its, other = next(row for row in rows if "#7 " in row), next(row for row in rows if "#8 " in row)
-            assert its.endswith(old) and other.endswith(new) and len(its) == len(other) == len(head), wide
+            assert its.endswith(" 1001d") and other.endswith(" 1d 01h") and len(its) == len(other) == len(head), wide
+            assert ("━" in its, "━" in other) == (bar, bar), wide
 
 
 @drive
