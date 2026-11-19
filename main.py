@@ -518,10 +518,10 @@ class Frolic(App):
     def timer(self, name: str) -> tuple[float, float]:
         """What a repository's line shows of its timer: how far it has run toward its next
         read, from 0 (just read) to 1 (due), and how many seconds are left until then. One
-        that has not been read yet is due."""
+        that has not been read yet is due, and so is one that is not in the list."""
         repo = self.store.get(name)
         if repo is None:
-            return 0.0, 0.0
+            return 1.0, 0.0
         span, read = self.period(repo), self.read_at.get(repo.name.lower(), 0.0)
         gone = min(span, max(0.0, time.time() - read)) if read else span
         return gone / span, span - gone

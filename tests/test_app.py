@@ -2204,6 +2204,20 @@ async def test_the_log_says_what_asked_for_each_read(isolated, caplog):
 
 
 @drive
+async def test_a_repository_not_read_yet_or_not_in_the_list_is_due(isolated):
+    """What the app says of its timer agrees with itself: all of it has run, none is left."""
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        ran, left = app.timer("djp3/agent-frolic")
+        assert ran < 0.05 and 4 * 60 < left <= 5 * 60                 # just read
+        assert app.timer("nobody/nothing") == (1.0, 0.0)              # not in the list
+        app.read_at.pop("djp3/agent-frolic")
+        assert app.timer("djp3/agent-frolic") == (1.0, 0.0)           # in it, and not read yet
+
+
+@drive
 async def test_a_timer_is_never_shorter_than_a_minute_whatever_the_setting_holds(isolated):
     """Settings.load keeps the poll's minutes from 1 up. A setting that reached the app some
     other way, at 0, would make a timer of no length: every repository read every second,
