@@ -1482,3 +1482,27 @@ async def test_however_old_a_pull_request_its_age_ends_where_the_others_do(isola
             head = next(row for row in rows if "pull request" in row)
             its, other = next(row for row in rows if "#7 " in row), next(row for row in rows if "#8 " in row)
             assert its.endswith(old) and other.endswith(new) and len(its) == len(other) == len(head), wide
+
+
+@drive
+async def test_an_age_is_said_one_way_in_the_list_the_drawer_what_needs_effort_and_the_setup(isolated):
+    """In days and hours. The drawer and what needs effort said "4d", and the setup's list too."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add("djp3/app", admin=True)
+    long_ago, lately = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
+                        for seconds in (4 * 86400 + 7 * 3600 + 60, 20 * 60))
+    FakePulls.open_ = {"djp3/app": [
+        node(7, "old", author={"login": "mira"}, title="Old", reviewRequests=ask("djp3"), updatedAt=long_ago),
+        node(8, "new", author={"login": "mira"}, title="New", reviewRequests=ask("djp3"), updatedAt=lately)]}
+    app = main.Frolic()
+    async with app.run_test(size=(160, 46)) as pilot:
+        await settle(app, pilot)
+        one = screen(app)
+        assert line(app, "#7 Old").endswith(" 4d 07h") and line(app, "#8 New").endswith(" 0h")     # the list
+        assert "quiet 4d 07h" in one and "quiet 0h" in one                   # what needs effort
+        await pilot.press("down")
+        await pilot.pause()
+        said = {("last changed 4d 07h ago" in shown, "changed within the hour" in shown) for shown in (one, screen(app))}
+        assert said == {(True, False), (False, True)}                        # the drawer, for each in turn
+        listed = sorted(main.pull_line(pull, "main", 150).plain[-9:] for pull in app.pulls["djp3/app"].pulls)
+        assert listed == ["       0h", "   4d 07h"]                            # and the setup's list

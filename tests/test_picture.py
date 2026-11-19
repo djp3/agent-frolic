@@ -120,13 +120,13 @@ def test_the_move_in_words_and_where_it_waits():
 def test_what_needs_effort_is_ordered_by_how_long_it_has_been_quiet():
     found = needs_effort(picture(), NOW)
     assert [(e.pull.number, e.who, e.standing.what, e.mine, e.quiet) for e in found] == [
-        (16, "tobias", "resolve the conflict", False, "4d"),
-        (9, "you, kenji", "review", True, "3d"),
-        (12, "bob", "review", False, "1d"),
+        (16, "tobias", "resolve the conflict", False, "4d 00h"),      # in days and hours, as the list's
+        (9, "you, kenji", "review", True, "3d 00h"),                  # age column says it
+        (12, "bob", "review", False, "1d 00h"),
         (20, "you", "merge", True, "2h"),
         (15, "you", "finish the draft", True, "1h"),
     ]                                                             # 13 is queued; 24 waits on nobody
-    assert [p.number for p in found[2].behind] == [13] and found[2].urgency == "quiet 1d"
+    assert [p.number for p in found[2].behind] == [13] and found[2].urgency == "quiet 1d 00h"
 
 
 def test_an_idle_agent_makes_its_pull_request_more_urgent_and_a_working_one_takes_it_off_the_list():

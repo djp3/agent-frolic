@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pull requests are read from GitHub's reply as it is documented, and stacked by branch."""
 import itertools
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
 from githubapi import GitHubError
 from picture import Picture, mark
-from pulls import (PAGE, QUERY, THREADS_QUERY, RepoPulls, ago, fetch_pulls, is_team, judge, known_as, parse_pull,
+from pulls import (PAGE, QUERY, THREADS_QUERY, RepoPulls, fetch_pulls, is_team, judge, known_as, parse_pull,
                    span, stack, when)
 
 
@@ -504,10 +504,6 @@ def test_every_how_long_is_said_one_way(seconds, plain, fine):
     assert (span(seconds), span(seconds, fine=True)) == (plain, fine)
 
 
-def test_when_and_ago():
+def test_when():
     now = datetime(2026, 11, 14, 16, 0, tzinfo=timezone.utc)
     assert when("2026-11-14T16:00:00Z") == now and when(None) is None and when("nonsense") is None
-    for back, said in ((timedelta(seconds=20), "now"), (timedelta(minutes=40), "40m"), (timedelta(hours=3), "3h"),
-                       (timedelta(days=9), "9d"), (timedelta(days=35), "5w")):
-        assert ago(now - back, now) == said
-    assert ago(None, now) == ""

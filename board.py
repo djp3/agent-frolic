@@ -1108,8 +1108,8 @@ class Board(Screen):
         out.append(f"{CHECK_SAID[pull.checks]} · {merge}",
                    style=INK if pull.checks == "fail" or pull.mergeable == "conflict" else INK2)
         age = quiet(pull)
-        if age:                                                # the list has it in days and hours
-            out.append(" · changed just now" if age == "now" else f" · last changed {age} ago", style=MUTED)
+        if age:                                                # the figure the list has, in days and hours
+            out.append(" · changed within the hour" if age == "0h" else f" · last changed {age} ago", style=MUTED)
         out.append("\n")
         agents = pic.on(pull)
         if agents:

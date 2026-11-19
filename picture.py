@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from typing import Mapping
 
 from canvas import Segments, cell_len, cut, seg_len
-from pulls import PullRequest, RepoPulls, Review, Step, ago, is_team, known_as, team_slug
+from pulls import PullRequest, RepoPulls, Review, Step, is_team, known_as, team_slug
 from standing import Standing, settle
 from theme import AXIS, CRIT, GOOD, INK, INK2, MUTED, SERIOUS, WAITING, WARN
 
@@ -552,7 +552,11 @@ def progress(picture: Picture, pull: PullRequest) -> tuple[str, int, int]:
 
 
 def quiet(pull: PullRequest, now: datetime | None = None) -> str:
-    return ago(pull.updated, now)
+    """How long the pull request has been quiet, as the app says it wherever it does: the
+    figure of its age, in days and hours ("128d 11h", "21h", "0h" within the hour). Nothing
+    when GitHub did not say when it last changed."""
+    seconds = silence(pull, now)
+    return "" if seconds is None else age_said(seconds)
 
 
 AGE_BAR = 12                      # cells in the bar of an age, and in the bar of a repository's timer

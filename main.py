@@ -79,8 +79,8 @@ from apppaths import app_version, log_dir
 from board import Board, remember_change
 from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
-from picture import CHECK_MARK, Picture, changes, labels, review_marks
-from pulls import PullRequest, RepoPulls, ago, fetch_pulls, is_team, span, stack, team_of, team_slug
+from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, quiet, review_marks
+from pulls import PullRequest, RepoPulls, fetch_pulls, is_team, span, stack, team_of, team_slug
 from repos import Repo, RepoStore, parse
 from settings import Settings
 from theme import (AXIS, CRIT, DIVIDER, GOOD, INK, INK2, MUTED, PLANE, RAISED, SURFACE,
@@ -1744,7 +1744,7 @@ def pull_line(pull: PullRequest, default_branch: str, width: int) -> Text:
     said.append("  ").append_text(facts)
 
     mark, color = CHECK_MARK[pull.checks]
-    tail = Text(mark, style=color).append(f" {ago(pull.updated):>4}", style=MUTED)
+    tail = Text(mark, style=color).append(f" {quiet(pull):>{AGE_FIGURE}}", style=MUTED)
     room = width - tail.cell_len - 1
     if said.cell_len > room:
         said.truncate(room - 1)
