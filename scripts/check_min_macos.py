@@ -17,18 +17,24 @@ and the platform in macos/Package.swift, which the Swift executable records as i
 binary that needs less than the declared minimum is fine (most that are not Homebrew's do);
 the app's own executable needing less, or more, is one of the two places left behind.
 
-The same check as agent-farm's, which the two apps keep alike.
+The rules are agent-farm's check's, which the two apps keep alike. What each file needs is
+read from the file itself: a Mach-O file says which processor each of its slices is for and
+which macOS the slice needs, in a header of fixed shape.
 """
 from __future__ import annotations
 
 import plistlib
-import subprocess
+import struct
 import sys
 from pathlib import Path
 
-MACHO_MAGIC = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
-               b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",          # 64- and 32-bit, both byte orders, universal
-               b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}          # universal with 64-bit offsets (lipo -fat64)
+THIN = {b"\xcf\xfa\xed\xfe": ("<", 32), b"\xce\xfa\xed\xfe": ("<", 28),     # 64- and 32-bit, as on disk: the
+        b"\xfe\xed\xfa\xcf": (">", 32), b"\xfe\xed\xfa\xce": (">", 28)}     # byte order, the header's length
+UNIVERSAL = {b"\xca\xfe\xba\xbe": (">iiIII", 20), b"\xca\xfe\xba\xbf": (">iiQQII", 32),   # each slice's entry;
+             b"\xbe\xba\xfe\xca": None, b"\xbf\xba\xfe\xca": None}          # 64-bit offsets (lipo -fat64)
+MACHO_MAGIC = set(THIN) | set(UNIVERSAL)
+ARM64 = 0x0100000C                       # the processor every slice that runs on this app's Macs is for
+LC_VERSION_MIN_MACOSX, LC_BUILD_VERSION, MACOS = 0x24, 0x32, 1
 
 
 def version(v: str) -> tuple[int, ...]:
@@ -37,32 +43,76 @@ def version(v: str) -> tuple[int, ...]:
     return tuple(parts + [0] * (3 - len(parts)))
 
 
-MACOS_PLATFORM = {"1", "MACOS", "macos"}       # LC_BUILD_VERSION's platform for macOS (6 is Mac Catalyst)
+def dotted(v: int) -> str:
+    """A version as a Mach-O file packs it (xxxx.yy.zz): 0x001B0000 -> '27.0'."""
+    patch = v & 0xFF
+    return f"{v >> 16}.{(v >> 8) & 0xFF}" + (f".{patch}" if patch else "")
 
 
-def min_versions(otool_l: str) -> list[str]:
-    """The oldest macOS each slice that runs here records in `otool -l` output: LC_BUILD_VERSION's
-    minos for the macOS platform, or the older LC_VERSION_MIN_MACOSX's version. The app is
-    Apple-silicon only, so Intel slices never run, and neither do other platforms' records (the
-    Mac Catalyst one in a zippered library); their minimums don't count."""
-    out, cmd, platform, arch = [], None, None, None
-    for line in otool_l.splitlines():
-        words = line.split()
-        if line.endswith(":") and not line[:1].isspace():      # "path (architecture arm64):", or "path:"
-            _, named, rest = line.rpartition(" (architecture ")
-            arch, cmd = (rest[:-2] if named else None), None
-        elif len(words) >= 2 and words[0] == "cmd":
-            cmd, platform = words[1], None
-        elif len(words) >= 2 and cmd == "LC_BUILD_VERSION" and words[0] == "platform":
-            platform = words[1]
-        elif len(words) >= 2 and (cmd, words[0]) in (("LC_BUILD_VERSION", "minos"),
-                                                     ("LC_VERSION_MIN_MACOSX", "version")):
-            runs_here = arch is None or arch.startswith("arm64")    # a thin file names no architecture
-            macos = cmd == "LC_VERSION_MIN_MACOSX" or platform in MACOS_PLATFORM
-            if runs_here and macos:
-                out.append(words[1])
-            cmd = None
-    return out
+class Unreadable(Exception):
+    """A file that starts like a Mach-O one and cannot be read as one: (path, why)."""
+
+
+def _need(data: bytes, size: int, what: str) -> bytes:
+    if len(data) < size:
+        raise ValueError(f"it ends inside {what}")
+    return data
+
+
+def _slice(fh, start: int) -> list[str] | None:
+    """The macOS minimums one slice records, starting at `start` in the file: LC_BUILD_VERSION's
+    minos where its platform is macOS (not the Mac Catalyst record of a library built for
+    both), or the older LC_VERSION_MIN_MACOSX's version. None for a slice that is not for
+    Apple silicon: an Intel one never runs on this app's Macs, so what it needs does not count."""
+    fh.seek(start)
+    head = fh.read(32)
+    if head[:4] not in THIN:
+        raise ValueError("a slice of it does not start like a Mach-O file")
+    order, length = THIN[head[:4]]
+    cputype, _, _, ncmds, sizeofcmds = struct.unpack(order + "IIIII", _need(head, 24, "its header")[4:24])
+    if cputype != ARM64:
+        return None
+    fh.seek(start + length)
+    commands = _need(fh.read(sizeofcmds), sizeofcmds, "its load commands")
+    found, at = [], 0
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from(order + "II", _need(commands[at:], 8, "a load command"))
+        if size < 8 or at + size > len(commands):
+            raise ValueError("a load command in it has an impossible size")
+        if cmd == LC_BUILD_VERSION:
+            platform, minos = struct.unpack_from(order + "II", _need(commands[at + 8:at + size], 8, "a load command"))
+            if platform == MACOS:
+                found.append(dotted(minos))
+        elif cmd == LC_VERSION_MIN_MACOSX:
+            (oldest,) = struct.unpack_from(order + "I", _need(commands[at + 8:at + size], 4, "a load command"))
+            found.append(dotted(oldest))
+        at += size
+    return found
+
+
+def minimums(f: Path) -> tuple[bool, list[str]]:
+    """(whether the file has a slice that runs on Apple silicon, the macOS minimums those
+    slices record). A universal file is every one of its slices."""
+    try:
+        with open(f, "rb") as fh:
+            head = fh.read(8)
+            if head[:4] in THIN:
+                found = [_slice(fh, 0)]
+            else:
+                entry = UNIVERSAL.get(head[:4])
+                if entry is None:
+                    raise ValueError("its first bytes are a universal file's, in the byte order none is written in")
+                (count,) = struct.unpack(">I", _need(head, 8, "its header")[4:8])
+                if count > 32:                                  # a Java class file starts 0xcafebabe too, and
+                    raise ValueError(f"it says it holds {count} slices")    # this is its version number
+                layout, width = entry
+                table = _need(fh.read(count * width), count * width, "its table of slices")
+                starts = [struct.unpack_from(layout, table, i * width)[2] for i in range(count)]
+                found = [_slice(fh, start) for start in starts]
+    except (ValueError, struct.error, OSError) as e:
+        raise Unreadable(f, str(e)) from None
+    here = [slice_ for slice_ in found if slice_ is not None]
+    return bool(here), [v for slice_ in here for v in slice_]
 
 
 def binaries(app: Path):
@@ -73,18 +123,6 @@ def binaries(app: Path):
                     yield f
 
 
-class Unreadable(Exception):
-    """otool couldn't read a file that starts like a Mach-O one: (path, otool's reason)."""
-
-
-def load_commands(f: Path) -> str:
-    """`otool -l` for every architecture in the file."""
-    run = subprocess.run(["otool", "-arch", "all", "-l", str(f)], capture_output=True, text=True)
-    if run.returncode != 0:
-        raise Unreadable(f, (run.stderr.strip().splitlines() or [f"otool exited {run.returncode}"])[-1])
-    return run.stdout
-
-
 def check(app: Path) -> tuple[str, str, list[tuple[Path, str]], int]:
     """(declared minimum, newest minimum any binary needs, binaries that need more than
     declared with the most each needs, binaries checked)."""
@@ -92,7 +130,7 @@ def check(app: Path) -> tuple[str, str, list[tuple[Path, str]], int]:
     newest, too_new, n = "0", [], 0
     for f in binaries(app):
         n += 1
-        found = min_versions(load_commands(f))
+        _, found = minimums(f)
         if not found:
             continue
         need = max(found, key=version)          # a universal binary needs what its neediest slice needs
@@ -110,7 +148,7 @@ def executable_minimum(app: Path) -> tuple[Path, str | None] | None:
     if not name:
         return None
     exe = app / "Contents" / "MacOS" / name
-    found = min_versions(load_commands(exe))
+    _, found = minimums(exe)
     return exe.relative_to(app), (max(found, key=version) if found else None)
 
 
@@ -124,8 +162,8 @@ def main(argv: list[str]) -> int:
         own = executable_minimum(app)
     except Unreadable as e:
         path, why = e.args
-        print(f"otool can't read {path}, which starts like a Mach-O binary (so does a Java class "
-              f"file): {why}. The check can't tell what macOS it needs; find out what it is "
+        print(f"{path} starts like a Mach-O binary (so does a Java class file) and can't be read "
+              f"as one: {why}. The check can't tell what macOS it needs; find out what it is "
               "before shipping it.", file=sys.stderr)
         return 1
     failed = False
