@@ -1340,12 +1340,20 @@ def test_an_age_is_drawn_in_the_room_its_column_has():
     assert said(board.QUIET) == "━━━━━━━━────   4d 07h"                        # its bar and its figure
     assert said(board.QUIET, 128 * 86400 + 11 * 3600) == "━━━━━━━━━━━━ 128d 11h"
     assert said(board.QUIET, 20) == "────────────       0h"
-    assert said(board.AGE_FIGURE + 1) == "  4d 07h"                           # less room: the figure alone
-    assert said(5) == "  4d" and said(5, 21 * 3600) == " 21h"                 # the least: its larger unit
+    assert said(board.AGE_FIGURE + 1) == "4d 07h"                             # less room: the figure alone
+    assert said(5) == "4d" and said(5, 21 * 3600) == "21h"                    # the least: its larger unit
     assert said(board.QUIET, 1000 * 86400) == "━━━━━━━━━━━━    1000d"             # past 999 days: the days alone,
     assert said(5, 1000 * 86400) == "1000d"                                   # a cell more than that column has
     assert len(said(board.QUIET)) == board.QUIET - 1                          # a cell is left before the edge
     assert board.age_cells(None, board.QUIET) == []                           # an age nobody knows
+
+
+def test_what_the_age_column_holds_follows_from_the_room_the_columns_leave_it():
+    """(its bar, its figure in full): what is drawn there and where the columns stand cannot
+    come apart."""
+    forms = {wide: board.age_form(wide - board.columns(wide)[4]) for wide in (160, 134, 133, 82, 81, 74)}
+    assert forms == {160: (True, True), 134: (True, True), 133: (False, True), 82: (False, True),
+                     81: (False, False), 74: (False, False)}
 
 
 def timer(app, needle):

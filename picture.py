@@ -557,6 +557,7 @@ def quiet(pull: PullRequest, now: datetime | None = None) -> str:
 
 AGE_BAR = 12                      # cells in the bar of an age, and in the bar of a repository's timer
 AGE_FIGURE = 8                    # cells the figure after a bar takes at the most: "128d 11h"
+AGE_SHORT = 4                     # cells of the figure cut down to its larger unit: "128d"
 QUIET = AGE_BAR + 1 + AGE_FIGURE + 1             # the age column: the bar, the figure, a cell before the edge
 _SPANS = ((60, 3600), (3600, 86400), (86400, 7 * 86400), (7 * 86400, 90 * 86400))   # minutes, hours, days, weeks
 

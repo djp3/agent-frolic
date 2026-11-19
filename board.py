@@ -67,7 +67,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from canvas import Canvas, Segments, cut, plain, seg_len, wash, write
-from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
+from picture import (AGE_BAR, AGE_FIGURE, AGE_SHORT, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
                      Person, Picture, Row, cells, counts, focuses, humans, in_focus, key_of, labels,
                      age_reach, age_said, line_agents, mark, move_words, needs_effort, progress, quiet,
                      review_cell, reviewers, reviewing, silence, tree)
@@ -105,7 +105,7 @@ def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
     progress first, then the age's bar (its figure stays), then the reviewers' names, then
     the review column, then the checks (the drawer still shows both) and with them the
     hours of an age past a day, so that no column is ever drawn over the tree. None is a
-    column given up. What the age is drawn as follows from the room it is left: age_cells."""
+    column given up. What the age column holds follows from the room it is left: age_form."""
     x_quiet = width - QUIET
     x_prog: int | None = x_quiet - 22
     x_ci: int | None = x_prog - 4
@@ -115,7 +115,7 @@ def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
         x_prog, x_ci = None, x_quiet - 5
         x_review = x_ci - 24
         if x_review - X_TREE < 30:
-            x_quiet = width - AGE_FIGURE - 1
+            x_quiet = width - (AGE_FIGURE + 1)
             x_ci = x_quiet - 5
             x_review = x_ci - 24
             if x_review - X_TREE < 30:
@@ -124,8 +124,15 @@ def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
                 if x_review - X_TREE < TREE_ROOM:
                     x_review = None
                     if x_ci - X_TREE < TREE_ROOM:
-                        x_ci, x_quiet = None, width - 5
+                        x_ci, x_quiet = None, width - (AGE_SHORT + 1)
     return x_review, x_ci, x_prog, names, x_quiet
+
+
+def age_form(room: int) -> tuple[bool, bool]:
+    """What the age column holds in the `room` cells columns() leaves it, each with a cell
+    before the edge: (its bar, its figure in full). All of it in QUIET cells, the figure
+    alone in AGE_FIGURE and one, and in less only the figure's larger unit."""
+    return room >= QUIET, room > AGE_SHORT + 1
 
 
 def title_end(cols: tuple) -> int:
@@ -297,20 +304,20 @@ def thin_bar(part: float, until: bool = False) -> Segments:
     return [(mark * n, ink) for mark, n, ink in runs if n]
 
 
-def figure_cells(figure: str, room: int) -> Segments:
-    """A figure at the right of `room` cells, a cell before their end."""
-    return [(" " * max(0, room - 1 - len(figure)), ""), (figure, INK2)]
+def time_cells(bar: Segments | None, figure: str) -> Segments:
+    """A stretch of time as it stands in the age column: its bar, when it has one, and its
+    figure, which ends where every figure after a bar does. Whoever draws it puts its last
+    cell a cell before the edge, so a figure longer than its column starts sooner."""
+    return (bar + [(" " * (1 + max(0, AGE_FIGURE - len(figure))), "")] if bar else []) + [(figure, INK2)]
 
 
 def age_cells(seconds: float | None, room: int) -> Segments:
-    """An age in the `room` cells the age column has: its bar and its figure where there is
-    room for both, the figure alone in less, and in the least only its larger unit ("128d").
-    Nothing for an age that is not known."""
+    """An age in the `room` cells the age column has (age_form): its bar and its figure,
+    the figure alone, or only its larger unit ("128d"). Nothing for an age not known."""
     if seconds is None:
         return []
-    if room >= QUIET:
-        return thin_bar(age_reach(seconds)) + [(" ", "")] + figure_cells(age_said(seconds), room - AGE_BAR - 1)
-    return figure_cells(age_said(seconds, short=room <= AGE_FIGURE), room)
+    bar, full = age_form(room)
+    return time_cells(thin_bar(age_reach(seconds)) if bar else None, age_said(seconds, short=not full))
 
 
 class ListBar(Static):
@@ -742,7 +749,7 @@ class Board(Screen):
                 self.draw_note(canvas, y, row, width)
                 continue
             if pull is None:
-                self.draw_rule(canvas, y, row, width)
+                self.draw_rule(canvas, y, row, cols, width)
                 continue
             self.draw_pull(canvas, y, line, cols, width)
             chosen = key_of(pull) == self.sel
@@ -835,7 +842,7 @@ class Board(Screen):
             self.scroll(-max(1, round(self.app.scroll_sensitivity_y)))
             event.stop()
 
-    def draw_rule(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
+    def draw_rule(self, canvas: Canvas, y: int, row: Row, cols: tuple, width: int) -> None:
         """A rule across both columns, carrying its name: double at a repo, heavy at a base,
         light at a commit (with its short hash). It crosses the rule between the columns.
 
@@ -869,27 +876,24 @@ class Board(Screen):
         parts += [(" ", "")]
         used = write(canvas, X_TREE - 1, y, parts, room)
         if row.kind == "repo":
-            self.draw_timer(canvas, y, row.repo, X_TREE - 1 + used, width)
+            self.draw_timer(canvas, y, row.repo, X_TREE - 1 + used, cols[4], width)
 
-    def draw_timer(self, canvas: Canvas, y: int, repo: str, after: int, width: int) -> None:
+    def draw_timer(self, canvas: Canvas, y: int, repo: str, after: int, x_quiet: int, width: int) -> None:
         """A repository's timer, at the end of its rule, which stops a cell before it. It is
         in the age column, where its pull requests have their bars: the same thin bar, its
         white the time left until the next read, and after it the minutes left, counted up
         to nought, so that the figure reaches nought as the white runs out. `after` is where
         the name and the counts end: they come first, so where there is no room for the bar
         the figure is there alone, and where there is none for that either, nothing is."""
-        x_quiet = columns(width)[4]
         ran, left = self.app.timer(repo)
         figure = f"-{-int(-left // 60)}m" if left > 0 else "0m"
-        if width - x_quiet >= QUIET and x_quiet - 1 >= after:
-            cells = thin_bar(1 - ran, until=True) + [(" ", "")] + figure_cells(figure, width - x_quiet - AGE_BAR - 1)
-        else:
-            x_quiet = width - 1 - len(figure)                   # wherever it must start, to end before the edge
-            cells = figure_cells(figure, width - x_quiet)
-            if x_quiet - 1 < after:
+        bars = (thin_bar(1 - ran, until=True), None) if age_form(width - x_quiet)[0] else (None,)
+        for drawn in (time_cells(bar, figure) for bar in bars):
+            x = width - 1 - seg_len(drawn)
+            if x - 1 >= after:
+                canvas.put(x - 1, y, " " * (width - x + 1))
+                write(canvas, x, y, drawn, seg_len(drawn))
                 return
-        canvas.put(x_quiet - 1, y, " " * (width - x_quiet + 1))
-        write(canvas, x_quiet, y, cells, width - x_quiet)
 
     def draw_note(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A line under a repository saying why it has no pull requests to show."""
