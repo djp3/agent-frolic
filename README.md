@@ -187,17 +187,18 @@ when there are none, and `$` when GitHub did not run them because the account co
 for them, which is nobody's to fix in the code.
 
 **Age** is how long since the pull request last changed: a thin bar, then the figure in days
-and hours (`128d 11h`, `21h`, and `0h` within the hour). The bar's white grows from the left, a
-quarter of the bar each for minutes, hours, days and weeks, and is whole at three months.
+and hours (`128d 11h`, `21h`, and `0h` within the hour). The bar fills from the left, in
+violet, a quarter of it each for minutes, hours, days and weeks, and is full at three months.
 Within the hour, where the figure is `0h` throughout, the bar still tells roughly how long:
-none of it is white for the first four minutes, one cell until a quarter of an hour, two
+none of it is filled for the first four minutes, one cell until a quarter of an hour, two
 until the hour. A narrowing window gives up progress first, then the age's bar, then its
 figure. A repository's line keeps its bar and its countdown for as long as they fit there.
 
-The column is time from an event or to one, and a bar's white is anchored at the event. A pull
-request's starts at its last change, at the left, and grows away from it. A repository's ends
-at its next read, at the right, and shrinks toward it: when the white is gone and the figure
-is `0m`, the repository is read again.
+The column is time from an event or to one, and the filled part of a bar is anchored at the
+event. A pull request's starts at its last change, at the left, and grows away from it. A
+repository's ends at its next read, at the right, and shrinks toward it: when it is gone and the
+figure is `0m`, the repository is read again. The two time different things, so they are not
+one color: an age is violet, a repository's timer white.
 
 ### Teams
 
