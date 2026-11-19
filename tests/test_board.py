@@ -206,7 +206,7 @@ async def test_in_a_narrow_window_every_row_keeps_its_number_and_the_headings_ke
         head = next(row for row in shown.splitlines() if "pull request" in row)
         assert "review" not in head and " age" not in head and head.endswith(" ci")
         row = next(r for r in shown.splitlines() if "#16 " in r)
-        assert not re.search(r"\d+[dh]$", row) and "━" not in row              # no age: it was the first to go
+        assert not re.search(r"\d+[dh]$", row) and "━" not in row              # no age: it went after progress
 
 
 @drive
