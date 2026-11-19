@@ -5,7 +5,8 @@
 #   1. PyInstaller onedir of main.py            -> dist/python/agent-frolic-core
 #   2. SwiftPM release build of the host app     -> macos/.build/release/AgentFrolic
 #   3. assemble the bundle (binary, Sparkle.framework, the Python tree, icon, Info.plist),
-#      and check that nothing in it needs a newer macOS than Info.plist says
+#      and check the macOS minimum (scripts/check_min_macos.py): stop if anything in it needs
+#      a newer macOS than Info.plist says, or the Swift executable records another minimum
 #   4. sign it: with the Developer ID in the keychain, or ad-hoc with CODESIGN_IDENTITY=-
 #   5. ask the signed copy to check itself (it reads no secret and reaches no network)
 # Needs: .venv with requirements.txt + requirements-build.txt (or PYTHON=<the python of
@@ -85,8 +86,10 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 step "macOS minimum"
 # Nothing inside may need a newer macOS than Info.plist promises (Homebrew's libraries follow
-# the macOS they were built on), or the app would install there and fail to start.
-scripts/check_macos_minimum.sh "$APP"
+# the macOS they were built on), or the app would install there and fail to start. And the
+# Swift executable must record that same minimum: it is said twice, in Info.plist and in
+# Package.swift, and one raised without the other would pass otherwise.
+"$PY" scripts/check_min_macos.py "$APP"
 
 step "sign"
 scripts/sign_app.sh "$APP" "$IDENTITY"
