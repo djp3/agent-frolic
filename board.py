@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from rich.cells import cell_len
 from rich.text import Text
@@ -100,35 +101,53 @@ THUMB, TRACK_LINE = "┃", "│"     # the list's scroll bar: its thumb, and the
 TREE_ROOM = 16                   # the tree's least: its connectors, the icon, the number, a little title
 
 
+class Layout(NamedTuple):
+    """What a pull request's row holds after the tree, and the least the tree is left by it."""
+    age: int                      # cells of the age column: QUIET, its figure's alone, or none
+    progress: bool
+    names: bool                   # the reviewers are named
+    review: bool
+    checks: bool
+    tree: int                     # the cells the tree and the title must be left
+
+    def at(self, width: int) -> tuple[int | None, int | None, int | None, bool, int]:
+        """Where review, checks, progress and the age start in a list this wide, and whether
+        reviewers are named. None is a column this layout leaves out; the age has none to
+        give, so left out it starts at the list's edge and has no room."""
+        x_quiet = width - self.age
+        x_prog = x_quiet - PROGRESS if self.progress else None
+        x_ci = None
+        if self.checks:
+            x_ci = x_prog - 4 if x_prog is not None else x_quiet - (5 if self.names else 4)
+        x_review = x_ci - (24 if self.names else 9) if self.review and x_ci is not None else None
+        return x_review, x_ci, x_prog, self.names, x_quiet
+
+
+# The layouts, fullest first: this is the order a narrowing window gives things up in.
+LAYOUTS = (
+    Layout(QUIET, True, True, True, True, 32),
+    Layout(QUIET, False, True, True, True, 30),                # progress goes first,
+    Layout(AGE_FIGURE + 1, False, True, True, True, 30),       # then the age's bar,
+    Layout(0, False, True, True, True, 30),                    # then its figure, and with it the column,
+    Layout(0, False, False, True, True, TREE_ROOM),            # then the reviewers' names,
+    Layout(0, False, False, False, True, TREE_ROOM),           # then the review column,
+    Layout(0, False, False, False, False, 0),                  # then the checks: the drawer still shows both
+)
+
+
 def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
     """Where review, checks, progress and the age start in a list this wide, and whether
-    reviewers are named. Column 1 and the tree never move. A narrow window gives up
-    progress first; then the age, its bar before its figure, and with the figure the whole
-    column; then the reviewers' names, then the review column, then the checks (the drawer
-    still shows both), so that no column is ever drawn over the tree. None is a column
-    given up; the age has none to give, so given up it starts at the list's edge and has no
-    room. What it holds follows from the room it is left: age_form.
+    reviewers are named: the fullest of LAYOUTS that leaves the tree its room, so that no
+    column is ever drawn over it. Column 1 and the tree never move. What the age column
+    holds follows from the room it is left: age_form.
 
     This is for a pull request's row. A repository's line keeps its bar and its figure for
     as long as its own room allows (repo_cells)."""
-    x_quiet = width - QUIET
-    x_prog: int | None = x_quiet - PROGRESS
-    x_ci: int | None = x_prog - 4
-    x_review: int | None = x_ci - 24
-    names = True
-    if x_review - X_TREE < 32:
-        x_prog = None
-        x_quiet = next((x for x in (width - QUIET, width - (AGE_FIGURE + 1)) if x - 29 - X_TREE >= 30), width)
-        x_ci = x_quiet - 5
-        x_review = x_ci - 24
-        if x_review - X_TREE < 30:
-            names, x_ci = False, x_quiet - 4
-            x_review = x_ci - 9
-            if x_review - X_TREE < TREE_ROOM:
-                x_review = None
-                if x_ci - X_TREE < TREE_ROOM:
-                    x_ci = None
-    return x_review, x_ci, x_prog, names, x_quiet
+    for layout in LAYOUTS:
+        cols = layout.at(width)
+        if title_end(cols) - X_TREE >= layout.tree:
+            break
+    return cols
 
 
 def age_form(room: int) -> tuple[bool, bool]:

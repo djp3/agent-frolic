@@ -152,6 +152,23 @@ def test_a_narrow_list_gives_up_progress_first_then_the_ages_bar_then_its_figure
     assert board.columns(72) == (None, None, None, False, 72)
 
 
+def test_each_layout_gives_up_one_thing_more_than_the_one_before_it():
+    """The order a narrowing window gives things up in is the order of the layouts: progress,
+    the age's bar, its figure, the reviewers' names, the review column, the checks."""
+    held = [(layout.progress, layout.age >= board.QUIET, layout.age > 0, layout.names, layout.review, layout.checks)
+            for layout in board.LAYOUTS]
+    assert held[0] == (True,) * 6 and held[-1] == (False,) * 6
+    gone = []
+    for before, after in zip(held, held[1:]):
+        assert all(now <= was for was, now in zip(before, after))                     # nothing comes back,
+        gone.append([i for i, (was, now) in enumerate(zip(before, after)) if was and not now])
+    assert gone == [[0], [1], [2], [3], [4], [5]]                                     # and one thing goes at a time
+    for wide in range(60, 220):                                                       # the fullest that fits
+        chosen = next(layout for layout in board.LAYOUTS if layout.at(wide) == board.columns(wide))
+        fuller = board.LAYOUTS[:board.LAYOUTS.index(chosen)]
+        assert all(board.title_end(layout.at(wide)) - board.X_TREE < layout.tree for layout in fuller), wide
+
+
 def test_progress_fits_its_column_and_leaves_a_cell_before_the_age():
     """The age's bar starts where the progress column ends: what ran on was drawn over, and
     "10/12" read "10/1"."""
