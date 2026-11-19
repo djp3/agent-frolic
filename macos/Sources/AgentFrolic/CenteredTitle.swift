@@ -12,15 +12,15 @@ private final class TitleLabel: NSTextField {
 ///
 /// macOS puts a window's title at the leading edge of the bar, beside the buttons, and has
 /// no setting for where it goes. So the system's own title is hidden, and this label stands
-/// in for it: the title bar's font and colors, centered in the bar, dimmed while the window
-/// is not the one in use, cut short with an ellipsis before it would reach the buttons.
+/// in for it: the title bar's font and color, centered in the bar, cut short with an
+/// ellipsis before it would reach the buttons. That color is the system's for a title, and
+/// dims by itself while the window is not the one in use, as the buttons beside it do.
 ///
 /// The window keeps its title all the same. That is what the Dock, Mission Control, the
 /// Window menu and VoiceOver go by; the label only draws it.
 final class CenteredTitle {
     private let label = TitleLabel(labelWithString: "")
     private weak var window: NSWindow?
-    private var watching: [NSObjectProtocol] = []
 
     init(in window: NSWindow) {
         self.window = window
@@ -31,6 +31,7 @@ final class CenteredTitle {
               let frame = window.contentView?.superview, abs(bar.frame.width - frame.frame.width) < 1 else { return }
         window.titleVisibility = .hidden
         label.font = .titleBarFont(ofSize: 0)
+        label.textColor = .windowFrameTextColor
         label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1                // as the system's title is: see set
@@ -63,18 +64,7 @@ final class CenteredTitle {
             held.append(clear)
         }
         NSLayoutConstraint.activate(held)
-
-        let center = NotificationCenter.default
-        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
-                     NSWindow.didBecomeMainNotification, NSWindow.didResignMainNotification] {
-            watching.append(center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                self?.tint()
-            })
-        }
-        tint()
     }
-
-    deinit { watching.forEach(NotificationCenter.default.removeObserver) }
 
     /// The window's title, and what the label draws.
     func set(_ title: String) {
@@ -82,11 +72,5 @@ final class CenteredTitle {
         // One line, as the system's title is. Being told to keep to one line does not stop a
         // label breaking at a line or paragraph separator, so those are drawn as spaces.
         label.stringValue = title.components(separatedBy: .newlines).joined(separator: " ")
-    }
-
-    /// As the system's title is: full strength in the window in use, dimmed in the others.
-    private func tint() {
-        let inUse = window.map { $0.isKeyWindow || $0.isMainWindow } ?? false
-        label.textColor = inUse ? .windowFrameTextColor : .tertiaryLabelColor
     }
 }
