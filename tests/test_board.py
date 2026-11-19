@@ -318,8 +318,9 @@ async def test_focus_dims_what_is_not_theirs_and_escape_brings_everyone_back(iso
         await pilot.pause()
         assert app.board.focus == board.Focus("crew", "bob")
         # not bob's: dimmed, but for the rule, and what is left of its age's bar, darker than that already
+        # (nothing is left of it once the pull request is three months old: its date here is fixed)
         other = {ink for ink, _ in colors(app, "#16 Transcript")} - {dim, board.DIVIDER.lower()}
-        assert other == {board.BAR_TRACK.lower()} and all(light(ink) < light(dim) for ink in other)
+        assert other <= {board.BAR_TRACK.lower()} and light(board.BAR_TRACK) < light(dim)
         assert dim not in {ink for ink, _ in colors(app, "#13 Review")}       # queued behind what waits on bob
         await pilot.press("shift+tab")
         await pilot.pause()
