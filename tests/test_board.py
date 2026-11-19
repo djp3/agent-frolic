@@ -1342,6 +1342,8 @@ def test_an_age_is_drawn_in_the_room_its_column_has():
     assert said(board.QUIET, 20) == "────────────       0h"
     assert said(board.AGE_FIGURE + 1) == "  4d 07h"                           # less room: the figure alone
     assert said(5) == "  4d" and said(5, 21 * 3600) == " 21h"                 # the least: its larger unit
+    assert said(board.QUIET, 1000 * 86400) == "━━━━━━━━━━━━    1000d"             # past 999 days: the days alone,
+    assert said(5, 1000 * 86400) == "1000d"                                   # a cell more than that column has
     assert len(said(board.QUIET)) == board.QUIET - 1                          # a cell is left before the edge
     assert board.age_cells(None, board.QUIET) == []                           # an age nobody knows
 
@@ -1446,3 +1448,23 @@ async def test_a_long_countdown_is_whole_in_the_narrowest_window(isolated):
         head = next(row for row in screen(app).splitlines() if "pull request" in row)
         its = line(app, "╪ djp3/app")
         assert its.endswith("═ -1440m") and len(its) == len(head)           # all of it, a cell before the edge
+
+
+@drive
+async def test_however_old_a_pull_request_its_age_ends_where_the_others_do(isolated):
+    """Past 999 days the figure is the days alone, and in the narrowest window, where even
+    that is a cell too long, it starts a cell sooner."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add("djp3/app", admin=True)
+    long_ago, lately = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
+                        for seconds in (1001 * 86400 + 3 * 3600, 90000))
+    FakePulls.open_ = {"djp3/app": [node(7, "old", author={"login": "mira"}, title="Old", updatedAt=long_ago),
+                                    node(8, "new", author={"login": "mira"}, title="New", updatedAt=lately)]}
+    for wide, old, new in ((160, " 1001d", " 1d 01h"), (104, " 1001d", " 1d 01h"), (78, " 1001d", " 1d")):
+        app = main.Frolic()
+        async with app.run_test(size=(wide, 46)) as pilot:
+            await settle(app, pilot)
+            rows = screen(app).splitlines()
+            head = next(row for row in rows if "pull request" in row)
+            its, other = next(row for row in rows if "#7 " in row), next(row for row in rows if "#8 " in row)
+            assert its.endswith(old) and other.endswith(new) and len(its) == len(other) == len(head), wide

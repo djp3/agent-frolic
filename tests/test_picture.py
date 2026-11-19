@@ -298,7 +298,8 @@ def test_an_age_is_said_in_days_and_hours_and_its_bar_has_a_quarter_for_each_uni
     ages = (20, 59 * minute, hour, 21 * hour + 59 * minute, day, 4 * day + 7 * hour, 128 * day + 11 * hour)
     assert [age_said(s) for s in ages] == ["0h", "0h", "1h", "21h", "1d 00h", "4d 07h", "128d 11h"]   # nothing finer
     assert [age_said(s, short=True) for s in ages] == ["0h", "0h", "1h", "21h", "1d", "4d", "128d"]   # the larger unit
-    assert all(len(age_said(s)) <= AGE_FIGURE for s in (0, 999 * day + 23 * hour))
+    assert [age_said(999 * day + 23 * hour), age_said(1000 * day + 5 * hour)] == ["999d 23h", "1000d"]   # no room
+    assert all(len(age_said(s)) <= AGE_FIGURE for s in (0, 999 * day + 23 * hour, 1000 * day, 99999 * day))
     assert QUIET == AGE_BAR + 1 + AGE_FIGURE + 1                      # the bar, the figure, a cell before the edge
     # the bar: a quarter each for minutes, hours, days and weeks, full at three months
     assert [age_reach(s) for s in (5, minute, hour, day, 7 * day, 90 * day, 400 * day)] == [0, 0, 0.25, 0.5, 0.75, 1, 1]

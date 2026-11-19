@@ -936,7 +936,8 @@ class Board(Screen):
                 canvas.put(at, y, "▰" * filled, INK2)
                 canvas.put(at + filled, y, "▱" * (size - filled), AXIS)
                 canvas.put(at + size + 1, y, f"{done}/{total}", INK2)
-        write(canvas, x_quiet, y, age_cells(silence(pull), width - x_quiet), width - x_quiet)
+        age = age_cells(silence(pull), width - x_quiet)        # by its right end, a cell before the edge: a
+        write(canvas, width - 1 - seg_len(age), y, age, seg_len(age))      # figure too long for its column starts sooner
 
     def head(self) -> Text:
         """The column headings: column 1 (owner, state, waits on), the rule, column 2."""
