@@ -569,7 +569,9 @@ def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
 
 def span(seconds: float, fine: bool = False) -> str:
     """A stretch of time, shortly: "40m", "3h", "9d", "5w". Under a minute it is "now", or,
-    `fine`, the seconds: "12s". Every "how long ago" in the app is said this way."""
+    `fine`, the seconds: "12s". Every "how long ago" the app says among words is said this
+    way: in the ticker, the drawer and what needs effort. The list's age column is not:
+    its figure is in days and hours (picture.age_said)."""
     seconds = max(0, int(seconds))
     if seconds < 60:
         return f"{seconds}s" if fine else "now"
