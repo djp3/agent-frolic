@@ -182,6 +182,14 @@ def test_the_build_stops_when_info_plist_and_the_swift_executable_disagree(tmp_p
     assert "Contents/MacOS/AgentFrolic" in err and "records macOS 27.0" in err and "Package.swift" in err
 
 
+def test_the_build_stops_when_info_plist_names_no_executable(tmp_path, capsys):
+    """There is then nothing to set beside the declared minimum: it passed, by not being checked."""
+    app = _fake_bundle(tmp_path, "27.0", {"AgentFrolic": thin(build_version("26.0"))})
+    assert check_min_macos.main(["check", str(app)]) == 1
+    captured = capsys.readouterr()
+    assert "names no executable (CFBundleExecutable)" in captured.err and "same minimum" not in captured.out
+
+
 def test_the_build_goes_on_when_they_agree(tmp_path, capsys):
     app = _fake_bundle(tmp_path, "27", {"AgentFrolic": thin(build_version("27.0"))}, executable="AgentFrolic")
     assert check_min_macos.main(["check", str(app)]) == 0
@@ -201,10 +209,15 @@ def test_every_mach_o_header_is_recognized_and_nothing_else(tmp_path):
     assert sorted(f.name for f in check_min_macos.binaries(tmp_path)) == sorted(set(heads) - {"text"})
 
 
+LS = max(check_min_macos.minimums(Path("/bin/ls"))[1], key=check_min_macos.version)     # what a real program records
+
+
 def _bundle(tmp_path, declared):
+    """A bundle whose executable is a real program, /bin/ls, declaring this minimum."""
     app = tmp_path / "x.app"
     (app / "Contents" / "MacOS").mkdir(parents=True)
-    (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"LSMinimumSystemVersion": declared}))
+    info = {"LSMinimumSystemVersion": declared, "CFBundleExecutable": "ls"}
+    (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
     shutil.copy("/bin/ls", app / "Contents" / "MacOS" / "ls")              # a real Mach-O
     (app / "Contents" / "MacOS" / "notes.txt").write_text("not a binary")
     return app
@@ -230,8 +243,8 @@ def test_a_file_that_cannot_be_read_as_a_program_stops_the_build_with_its_name(t
 
 
 def test_a_bundle_within_its_declared_minimum_passes(tmp_path):
-    app = _bundle(tmp_path, "99.0")
+    app = _bundle(tmp_path, LS)
     found = check_min_macos.check(app)
     assert found.checked == 1 and found.too_new == [] and check_min_macos.version(found.newest) > (10, 0, 0)
     run = subprocess.run([sys.executable, ROOT / "scripts" / "check_min_macos.py", app], capture_output=True, text=True)
-    assert run.returncode == 0 and "none needs a macOS newer than 99.0" in run.stdout
+    assert run.returncode == 0 and f"none needs a macOS newer than {LS}" in run.stdout

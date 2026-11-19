@@ -177,7 +177,14 @@ def main(argv: list[str]) -> int:
               "before shipping it.", file=sys.stderr)
         return 1
     failed = False
-    if found.executable and (found.own is None or version(found.own) != version(declared)):
+    if found.executable is None:
+        # Without it there is nothing to set beside the declared minimum, and the check that
+        # the two places agree would pass by not being made.
+        print("Info.plist names no executable (CFBundleExecutable), so the check can't tell which "
+              "binary is the app's own, the one that records the platform in macos/Package.swift.",
+              file=sys.stderr)
+        failed = True
+    elif found.own is None or version(found.own) != version(declared):
         # The two places that state the minimum must agree; what the binaries need alone
         # only gives away Package.swift being the higher one.
         print(f"Info.plist declares macOS {declared} (LSMinimumSystemVersion), but the app's own "
