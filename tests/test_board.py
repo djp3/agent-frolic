@@ -134,18 +134,15 @@ async def test_the_board_is_the_first_screen_once_there_is_a_token_and_draws_wha
             assert secret not in shown
 
 
-def test_a_narrow_list_gives_up_the_age_first_then_progress_then_the_names():
+def test_a_narrow_list_gives_up_progress_first_then_the_ages_bar_then_its_figure_then_the_names():
     x_review, x_ci, x_prog, names, x_quiet = board.columns(160)
     assert (x_review, x_ci, x_prog, names, x_quiet) == (88, 112, 116, True, 138)
-    assert board.columns(157)[4] == 157 - board.QUIET                                 # the age is the least of
-    assert board.columns(156)[4] == 156 - (board.AGE_FIGURE + 1)                      # them: its bar goes first,
-    x_review, x_ci, x_prog, names, x_quiet = board.columns(150)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (91, 115, 119, True, 141)      # and progress stays
-    assert board.columns(144)[4] == 144 - (board.AGE_FIGURE + 1)                      # then its figure: the
-    assert board.columns(143) == (93, 117, 121, True, 143)                            # column has no room at all
-    assert board.columns(135)[2] is not None and board.columns(134)[2] is None        # then progress
-    x_review, x_ci, x_prog, names, x_quiet = board.columns(130)
-    assert (x_review, x_ci, x_prog, names, x_quiet) == (101, 125, None, True, 130)
+    assert board.columns(157)[2] is not None                                          # progress goes first,
+    assert board.columns(156) == (105, 129, None, True, 156 - board.QUIET)            # and the age keeps its bar
+    assert board.columns(134)[4] == 134 - board.QUIET                                 # then the age's bar: its
+    assert board.columns(133) == (95, 119, None, True, 133 - (board.AGE_FIGURE + 1))  # figure has the column
+    assert board.columns(121)[4] == 121 - (board.AGE_FIGURE + 1)                      # then its figure: the
+    assert board.columns(120) == (91, 115, None, True, 120)                           # column has no room at all
     assert board.columns(112)[3] and not board.columns(111)[3]                        # then the names
     x_review, x_ci, x_prog, names, x_quiet = board.columns(100)
     assert (x_review, x_ci, x_prog, names, x_quiet) == (87, 96, None, False, 100)
@@ -153,6 +150,40 @@ def test_a_narrow_list_gives_up_the_age_first_then_progress_then_the_names():
     assert board.columns(81)[1:] == (77, None, False, 81)
     assert board.columns(73)[1] is not None and board.columns(72)[1] is None          # then the checks
     assert board.columns(72) == (None, None, None, False, 72)
+
+
+def test_each_layout_gives_up_one_thing_more_than_the_one_before_it():
+    """The order a narrowing window gives things up in is the order of the layouts: progress,
+    the age's bar, its figure, the reviewers' names, the review column, the checks."""
+    held = [(layout.progress, layout.age >= board.QUIET, layout.age > 0, layout.names, layout.review, layout.checks)
+            for layout in board.LAYOUTS]
+    assert held[0] == (True,) * 6 and held[-1] == (False,) * 6
+    gone = []
+    for before, after in zip(held, held[1:]):
+        assert all(now <= was for was, now in zip(before, after))                     # nothing comes back,
+        gone.append([i for i, (was, now) in enumerate(zip(before, after)) if was and not now])
+    assert gone == [[0], [1], [2], [3], [4], [5]]                                     # and one thing goes at a time
+    for wide in range(60, 220):                                                       # the fullest that fits
+        chosen = next(layout for layout in board.LAYOUTS if layout.at(wide) == board.columns(wide))
+        fuller = board.LAYOUTS[:board.LAYOUTS.index(chosen)]
+        assert all(board.title_end(layout.at(wide)) - board.X_TREE < layout.tree for layout in fuller), wide
+
+
+def test_progress_fits_its_column_and_leaves_a_cell_before_the_age():
+    """The age's bar starts where the progress column ends: what ran on was drawn over, and
+    "10/12" read "10/1"."""
+    def said(word, done, total):
+        return "".join(text for text, _ in board.progress_cells(word, done, total))
+
+    assert said("stalled", 1, 3) == "stalled ▰▱▱ 1/3" and said("in progress", 2, 3) == "in progress ▰▰▱ 2/3"
+    assert said("resolved", 8, 8) == "resolved ▰▰▰▰▰ 8/8"                              # five blocks at the most
+    assert said("in progress", 9, 12) == "in progress ▰▰▰▱ 9/12"                      # the longest word and a count
+    assert said("in progress", 10, 12) == "in progress ▰▰▱ 10/12"                     # of two figures: fewer blocks
+    for done, total in ((9, 12), (10, 12), (99, 99), (100, 120)):
+        assert len(said("in progress", done, total)) <= board.PROGRESS - 1, (done, total)
+    assert said("not started", 0, 0) == "not started" and said("ready to merge", 0, 0) == "ready to merge"
+    x_review, x_ci, x_prog, names, x_quiet = board.columns(160)
+    assert x_quiet - x_prog == board.PROGRESS                                         # that is the column it has
 
 
 def test_no_column_is_ever_drawn_over_the_tree():
@@ -175,7 +206,7 @@ async def test_in_a_narrow_window_every_row_keeps_its_number_and_the_headings_ke
         head = next(row for row in shown.splitlines() if "pull request" in row)
         assert "review" not in head and " age" not in head and head.endswith(" ci")
         row = next(r for r in shown.splitlines() if "#16 " in r)
-        assert not re.search(r"\d+[dh]$", row) and "━" not in row              # no age: it was the first to go
+        assert not re.search(r"\d+[dh]$", row) and "━" not in row              # no age: it went after progress
 
 
 @drive
@@ -197,7 +228,7 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
         row = line(app, "acme-platform/")
         assert "…  0 open" in row and long not in row                              # the name is cut, the count kept
         assert "acme-platform/regional-ledger" in row
-        assert "djp3/agent-frolic  ●1  ○2  4 open" in screen(app)                  # where there is room, as it was
+        assert "djp3/agent-frolic  4 open ═" in screen(app)                        # ●n ○n go before its timer does
 
         await pilot.resize_terminal(82, 46)
         await pilot.pause()
@@ -218,31 +249,41 @@ async def test_however_narrow_the_window_a_repositorys_line_says_how_many_are_op
         app.draw()
         await pilot.pause()
         assert "djp3/agent-frolic  ●1  ○2  240 open, the 4 most recent shown" in screen(app)
-        await pilot.resize_terminal(100, 46)
+        await pilot.resize_terminal(130, 46)
         await pilot.pause()
         assert "djp3/agent-frolic  ●1  ○2  240 open ═" in screen(app)
+        await pilot.resize_terminal(100, 46)                                       # then ●n ○n, before its timer
+        await pilot.pause()
+        assert "djp3/agent-frolic  240 open ═" in screen(app)
 
 
 @drive
-async def test_in_a_narrower_window_an_age_is_its_figure_alone_and_narrower_still_it_is_gone(isolated):
-    """The age goes before progress does: it is the least of the columns."""
+async def test_as_the_window_narrows_progress_goes_then_the_ages_bar_then_its_figure(isolated):
+    """A pull request's row gives them up in that order. A repository's line keeps its bar and
+    its figure throughout: its room is its own."""
     a_board()
+    seen = {}
     app = main.Frolic()
-    async with app.run_test(size=(150, 46)) as pilot:
+    async with app.run_test(size=(162, 46)) as pilot:
         await settle(app, pilot)
-        shown = screen(app)
-        head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
-        assert head.endswith(" age") and "progress" in head
-        for number in ("#12 GraphQL", "#16 Transcript"):
-            row = next(r for r in shown.splitlines() if number in r)
-            assert re.search(r" \d+d \d\dh$", row) and len(row) == len(head) and "━" not in row     # no bar
-    app = main.Frolic()
-    async with app.run_test(size=(140, 46)) as pilot:
-        await settle(app, pilot)
-        shown = screen(app)
-        head = next(row for row in shown.splitlines() if "pull request" in row and "review" in row)
-        assert head.endswith(" progress")                                             # no age, and still progress
-        assert not any(re.search(r" \d+d \d\dh$", row) for row in shown.split("needs effort")[0].splitlines())
+        for wide in (162, 150, 130, 118):                                             # one window, narrowed
+            await pilot.resize_terminal(wide, 46)
+            await pilot.pause()
+            rows = screen(app).splitlines()
+            head = next(row for row in rows if "pull request" in row and "review" in row)
+            selected, row = (next(r for r in rows if number in r) for number in ("#12 GraphQL", "#16 Transcript"))
+            seen[wide] = ("progress" in head, "━" in row, bool(re.search(r" \d+d \d\dh$", row)), head.endswith(" age"),
+                          timer(app, "╪ djp3/quiet-one")[1:], timer(app, "╪ djp3/agent-frolic")[1:])
+            if seen[wide][2]:                                                         # a figure, with its bar or alone,
+                assert len(row) == len(selected) == len(head), wide                   # ends where "age" does: on the
+                assert re.search(r" \d+d \d\dh$", selected), wide                    # selected row too
+                assert ("━" in selected) == seen[wide][1], wide
+    assert seen[162][:4] == (True, True, True, True)                                  # all of it is there;
+    assert seen[150][:4] == (False, True, True, True)                                 # progress goes first,
+    assert seen[130][:4] == (False, False, True, True)                                # then the age's bar
+    assert seen[118][:4] == (False, False, False, False)                              # then its figure, and its heading
+    for wide in seen:                                                                 # each repository's line
+        assert seen[wide][4:] == ((board.AGE_BAR, "-5m"), (board.AGE_BAR, "-5m")), wide     # has both all the while
 
 
 @drive
@@ -1365,9 +1406,9 @@ def test_an_age_is_drawn_in_the_room_its_column_has():
 def test_what_the_age_column_holds_follows_from_the_room_the_columns_leave_it():
     """(its bar, its figure): what is drawn there and where the columns stand cannot come
     apart."""
-    forms = {wide: board.age_form(wide - board.columns(wide)[4]) for wide in (160, 157, 156, 144, 143, 100)}
-    assert forms == {160: (True, True), 157: (True, True), 156: (False, True), 144: (False, True),
-                     143: (False, False), 100: (False, False)}
+    forms = {wide: board.age_form(wide - board.columns(wide)[4]) for wide in (160, 156, 134, 133, 121, 120, 100)}
+    assert forms == {160: (True, True), 156: (True, True), 134: (True, True), 133: (False, True),
+                     121: (False, True), 120: (False, False), 100: (False, False)}
 
 
 def timer(app, needle):
@@ -1439,7 +1480,8 @@ async def test_each_repositorys_line_ends_in_its_own_timer(isolated):
 
 
 @drive
-async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_timer(isolated):
+async def test_in_a_narrow_window_a_repositorys_name_and_count_come_before_its_timer(isolated):
+    """And its timer before ●n ○n, which the top line has too."""
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(100, 40)) as pilot:
@@ -1447,7 +1489,7 @@ async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_
         app.draw()
         await pilot.pause()
         assert timer(app, "╪ djp3/agent-frolic") == (0, 0, "-5m")            # no room for a bar: the figure alone,
-        assert "djp3/agent-frolic  ●1  ○2  4 open ═" in line(app, "╪ djp3/agent-frolic")   # after all of the line
+        assert "djp3/agent-frolic  4 open ═" in line(app, "╪ djp3/agent-frolic")           # after the name and count
     async with main.Frolic().run_test(size=(82, 40)) as pilot:               # narrower still: the figure goes
         app = pilot.app                                                      # too, where the line is full
         await settle(app, pilot)
@@ -1459,7 +1501,8 @@ async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_
 
 @drive
 async def test_a_long_countdown_is_whole_in_the_narrowest_window(isolated):
-    """The longest timer counts from -1440m: six cells, where the age column there has five."""
+    """The longest timer counts from -1440m: six cells, drawn whole wherever the repository's
+    line has room for them, however narrow the window."""
     keychain.put(keychain.GITHUB_TOKEN, TOKEN)
     RepoStore().add("djp3/app", admin=True)
     FakePulls.open_ = {"djp3/app": []}
@@ -1484,14 +1527,15 @@ async def test_however_old_a_pull_request_its_age_ends_where_the_others_do(isola
                         for seconds in (1001 * 86400 + 3 * 3600, 90000))
     FakePulls.open_ = {"djp3/app": [node(7, "old", author={"login": "mira"}, title="Old", updatedAt=long_ago),
                                     node(8, "new", author={"login": "mira"}, title="New", updatedAt=lately)]}
-    for wide, old, new in ((160, " 1001d", " 1d 01h"), (150, " 1001d", " 1d 01h")):
+    for wide, bar in ((160, True), (130, False)):                             # with its bar, and without it
         app = main.Frolic()
         async with app.run_test(size=(wide, 46)) as pilot:
             await settle(app, pilot)
             rows = screen(app).splitlines()
             head = next(row for row in rows if "pull request" in row)
             its, other = next(row for row in rows if "#7 " in row), next(row for row in rows if "#8 " in row)
-            assert its.endswith(old) and other.endswith(new) and len(its) == len(other) == len(head), wide
+            assert its.endswith(" 1001d") and other.endswith(" 1d 01h") and len(its) == len(other) == len(head), wide
+            assert ("━" in its, "━" in other) == (bar, bar), wide
 
 
 @drive
@@ -1516,3 +1560,30 @@ async def test_an_age_is_said_one_way_in_the_list_the_drawer_what_needs_effort_a
         assert said == {(True, False), (False, True)}                        # the drawer, for each in turn
         listed = sorted(main.pull_line(pull, "main", 150).plain[-9:] for pull in app.pulls["djp3/app"].pulls)
         assert listed == ["       0h", "   4d 07h"]                            # and the setup's list
+
+
+@drive
+async def test_what_a_repositorys_line_gives_up_as_the_window_narrows_does_not_come_back(isolated):
+    """The "most recent shown", then ●n ○n, then the timer's bar, then its countdown: each for
+    good before the next. The bar used to go while the others were there, and come back when
+    one of them went. How many are open stays to the last."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        app.pulls["djp3/agent-frolic"] = replace(app.pulls["djp3/agent-frolic"], total=240)     # more than were read
+        seen = []
+        for wide in range(170, 75, -1):
+            await pilot.resize_terminal(wide, 46)
+            await pilot.pause()
+            row = line(app, "╪ djp3/a")
+            cells, figure = timer(app, "╪ djp3/a")[1:]
+            seen.append(("most recent shown" in row, "●1" in row, cells > 0, bool(figure), "240 open" in row))
+        assert seen[0] == (True, True, True, True, True) and seen[-1][:4] == (False, False, False, False)
+        assert all(step[4] for step in seen)                                 # how many are open: at every width
+        went = []
+        for part in range(4):
+            there = [step[part] for step in seen]
+            assert there == sorted(there, reverse=True), part                # there, then gone, and never back
+            went.append(there.index(False))
+        assert went == sorted(went) and len(set(went)) == 4                  # and in that order, one at a time

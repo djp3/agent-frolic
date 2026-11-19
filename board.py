@@ -24,13 +24,18 @@ Top to bottom:
     left and grows, a quarter of the bar each for minutes, hours, days and weeks: it is
     whole at three months.
     A double rule starts a repository, a heavy one a base branch, a light one a commit.
-    A repository's rule ends in its timer, in the age column: the same thin bar, whose
-    white is the time left until its next read, and after it the minutes left, counted
-    up to nought ("-4m"). The white ends at the right and leaves from the left: when it
-    is gone, the repository is read again.
-    The column is time from an event or to one, and a bar's white is anchored at the
+    A repository's rule ends in its timer, over its pull requests' ages: the same thin
+    bar, whose white is the time left until its next read, and after it the minutes
+    left, counted up to nought ("-4m"). The white ends at the right and leaves from the
+    left: when it is gone, the repository is read again.
+    All of that is time from an event or to one, and a bar's white is anchored at the
     event: at the left for a pull request's last change, which it grows away from, at
     the right for a repository's next read, which it shrinks toward.
+    A narrowing window gives a pull request's row up in this order (LAYOUTS): progress,
+    the age's bar, its figure, the reviewers' names, the review column, the checks. A
+    repository's line has room of its own, so its timer does not go with the age: it
+    gives up what it says of its counts first, then the timer's bar, then its figure
+    (repo_cells).
     A list longer than its box scrolls: it follows the selected pull request, and the
     wheel, the page keys and the bar at its right edge move it freely, to every
     repository on screen, the ones with nothing open included.
@@ -56,6 +61,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from rich.cells import cell_len
 from rich.text import Text
@@ -74,6 +80,7 @@ from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, A
 from pulls import PullRequest, span
 from theme import (AXIS, CRIT, DIVIDER, INK, INK2, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN, darker)
 
+PROGRESS = 22                    # cells of the progress column, the blank one before the age among them
 BAR_INK = INK2                   # the part of a bar that time has filled: one color, for every bar
 BAR_TRACK = AXIS                 # the part it has yet to fill
 FLASH = ["#4a4a46", "#444441", "#3d3d3a", "#363633", "#2f2f2d", "#292927"]   # a wash, fading
@@ -99,32 +106,53 @@ THUMB, TRACK_LINE = "┃", "│"     # the list's scroll bar: its thumb, and the
 TREE_ROOM = 16                   # the tree's least: its connectors, the icon, the number, a little title
 
 
+class Layout(NamedTuple):
+    """What a pull request's row holds after the tree, and the least the tree is left by it."""
+    age: int                      # cells of the age column: QUIET, its figure's alone, or none
+    progress: bool
+    names: bool                   # the reviewers are named
+    review: bool
+    checks: bool
+    tree: int                     # the cells the tree and the title must be left
+
+    def at(self, width: int) -> tuple[int | None, int | None, int | None, bool, int]:
+        """Where review, checks, progress and the age start in a list this wide, and whether
+        reviewers are named. None is a column this layout leaves out; the age has none to
+        give, so left out it starts at the list's edge and has no room."""
+        x_quiet = width - self.age
+        x_prog = x_quiet - PROGRESS if self.progress else None
+        x_ci = None
+        if self.checks:
+            x_ci = x_prog - 4 if x_prog is not None else x_quiet - (5 if self.names else 4)
+        x_review = x_ci - (24 if self.names else 9) if self.review and x_ci is not None else None
+        return x_review, x_ci, x_prog, self.names, x_quiet
+
+
+# The layouts, fullest first: this is the order a narrowing window gives things up in.
+LAYOUTS = (
+    Layout(QUIET, True, True, True, True, 32),
+    Layout(QUIET, False, True, True, True, 30),                # progress goes first,
+    Layout(AGE_FIGURE + 1, False, True, True, True, 30),       # then the age's bar,
+    Layout(0, False, True, True, True, 30),                    # then its figure, and with it the column,
+    Layout(0, False, False, True, True, TREE_ROOM),            # then the reviewers' names,
+    Layout(0, False, False, False, True, TREE_ROOM),           # then the review column,
+    Layout(0, False, False, False, False, 0),                  # then the checks: the drawer still shows both
+)
+
+
 def columns(width: int) -> tuple[int | None, int | None, int | None, bool, int]:
     """Where review, checks, progress and the age start in a list this wide, and whether
-    reviewers are named. Column 1 and the tree never move. The age is the least of them, so
-    a narrow window gives it up first: its bar, then its figure, and with that the whole
-    column. Then progress, then the reviewers' names, then the review column, then the
-    checks (the drawer still shows both), so that no column is ever drawn over the tree.
-    None is a column given up; the age has none to give, so given up it starts at the
-    list's edge and has no room. What it holds follows from the room it is left: age_form."""
-    def beside(x_quiet: int) -> tuple[int, int, int]:
-        x_prog = x_quiet - 22
-        return x_prog - 28, x_prog - 4, x_prog
+    reviewers are named: the fullest of LAYOUTS that leaves the tree its room, so that no
+    column is ever drawn over it. Column 1 and the tree never move. What the age column
+    holds follows from the room it is left: age_form.
 
-    names = True
-    x_quiet = next((x for x in (width - QUIET, width - (AGE_FIGURE + 1)) if beside(x)[0] - X_TREE >= 32), width)
-    x_review, x_ci, x_prog = beside(x_quiet)
-    if x_review - X_TREE < 32:
-        x_prog, x_ci = None, x_quiet - 5
-        x_review = x_ci - 24
-        if x_review - X_TREE < 30:
-            names, x_ci = False, x_quiet - 4
-            x_review = x_ci - 9
-            if x_review - X_TREE < TREE_ROOM:
-                x_review = None
-                if x_ci - X_TREE < TREE_ROOM:
-                    x_ci = None
-    return x_review, x_ci, x_prog, names, x_quiet
+    This is for a pull request's row. A repository's line keeps its bar and its figure for
+    as long as its own room allows (repo_cells)."""
+    for layout in LAYOUTS:
+        cols = layout.at(width)
+        if title_end(cols) - X_TREE >= layout.tree:
+            break
+    return cols
 
 
 def age_form(room: int) -> tuple[bool, bool]:
@@ -282,6 +310,21 @@ class Line:
     part: int = 0                                # which line of its pull request this is
     cells: tuple[Segments, Segments, Segments] | None = None      # owner, state, waits on
     lead: str = ""                               # the tree connectors on this line
+
+
+def progress_cells(word: str, done: int, total: int) -> Segments:
+    """Progress as it stands in its column: the word and, where there is a count, a block for
+    each thing to do and the count ("stalled ▰▱▱ 1/3"). Five blocks at the most, and fewer
+    where the word and the count leave no room for five: it takes no more than the column
+    has, less the blank cell before the age, whose bar would be drawn over what ran on."""
+    ink = INK2 if word != "not started" else MUTED
+    if not total or word == "not started":
+        return [(word, ink)]
+    count = f"{done}/{total}"
+    size = max(0, min(total, 5, PROGRESS - 1 - len(word) - len(count) - 2))
+    filled = min(size, round(size * done / total))
+    blocks: Segments = [(mark * n, color) for mark, n, color in (("▰", filled, INK2), ("▱", size - filled, AXIS)) if n]
+    return [(word + " ", ink), *blocks, (" " if size else "", ""), (count, INK2)]
 
 
 def thin_bar(part: float, until: bool = False) -> Segments:
@@ -744,7 +787,7 @@ class Board(Screen):
                 self.draw_note(canvas, y, row, width)
                 continue
             if pull is None:
-                self.draw_rule(canvas, y, row, cols, width)
+                self.draw_rule(canvas, y, row, width)
                 continue
             self.draw_pull(canvas, y, line, cols, width)
             chosen = key_of(pull) == self.sel
@@ -837,30 +880,23 @@ class Board(Screen):
             self.scroll(-max(1, round(self.app.scroll_sensitivity_y)))
             event.stop()
 
-    def draw_rule(self, canvas: Canvas, y: int, row: Row, cols: tuple, width: int) -> None:
+    def draw_rule(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A rule across both columns, carrying its name: double at a repo, heavy at a base,
         light at a commit (with its short hash). It crosses the rule between the columns.
 
-        A repository's rule says how many pull requests are open there (the row carries
-        the count), and for one with none that is the only place the board says so: tree()
-        gives it no line beneath. So in a window too narrow for all of it the count is what
-        stays: first the "most recent shown" goes, then ●n ○n (the top line has those too),
-        then the name is cut short."""
+        A repository's rule says how many pull requests are open there and ends in its
+        timer, which stands where the age column does when that has all its room, over its
+        pull requests' bars. What of that a narrow window keeps is repo_cells' to say; the
+        name is cut short only when everything that can give way has."""
         line, cross = {"repo": ("═", "╪"), "base": ("━", "┿"), "commit": ("─", "┼")}[row.kind]
         canvas.put(0, y, line * width, DIVIDER)
         canvas.put(X_RULE, y, cross, DIVIDER)
         room = max(0, width - X_TREE)
         parts: Segments = [(" ", "")]
+        timer: Segments = []
         if row.kind == "repo":
-            said: Segments = []
-            if row.total is not None:
-                marks = count_marks(*counts(self.pic, row.repo), gap="  ")
-                opened: Segments = [(f"  {row.total} open", MUTED)]
-                more: Segments = ([(f", the {row.listed} most recent shown", MUTED)]
-                                  if row.total > row.listed else [])
-                beside = room - 2 - cell_len(row.label)        # what the whole name leaves, between two spaces
-                said = next((all_ for all_ in (marks + opened + more, marks + opened) if seg_len(all_) <= beside),
-                            opened)
+            said, timer = self.repo_cells(row, room - 2 - cell_len(row.label))     # what the whole name leaves
+            room -= seg_len(timer) + 2 if timer else 0         # the timer, a blank before it, a cell before the edge
             parts += [(cut(row.label, room - 2 - seg_len(said)), f"bold {INK}")] + said
         elif row.kind == "base":
             parts += [(row.lead, AXIS), (row.label, f"bold {INK}")]
@@ -869,28 +905,39 @@ class Board(Screen):
             if row.label:
                 parts += [(" " + row.label, MUTED)]
         parts += [(" ", "")]
-        used = write(canvas, X_TREE - 1, y, parts, room)
-        if row.kind == "repo":
-            self.draw_timer(canvas, y, row.repo, X_TREE - 1 + used, cols[4], width)
+        write(canvas, X_TREE - 1, y, parts, room)
+        if timer:                                              # the rule stops a cell before it
+            x = width - 1 - seg_len(timer)
+            canvas.put(x - 1, y, " " * (width - x + 1))
+            write(canvas, x, y, timer, seg_len(timer))
 
-    def draw_timer(self, canvas: Canvas, y: int, repo: str, after: int, x_quiet: int, width: int) -> None:
-        """A repository's timer, at the end of its rule, which stops a cell before it. It is
-        in the age column, where its pull requests have their bars: the same thin bar, its
-        white the time left until the next read, and after it the minutes left, counted up
-        to nought, so that the figure reaches nought as the white runs out. `after` is where
-        the name and the counts end: they come first, so where there is no room for the bar
-        the figure is there alone, and where there is none for that either, nothing is. The
-        figure does not go with the age column in a narrow window: this line's room is its
-        own, and what the figure takes of it no other column wants."""
-        ran, left = self.app.timer(repo)
+    def repo_cells(self, row: Row, beside: int) -> tuple[Segments, Segments]:
+        """What a repository's rule says after its name, and the timer at the rule's end, in
+        the `beside` cells its whole name leaves: (the counts, the timer).
+
+        How many are open stays whatever the room: for a repository with none it is the only
+        place the board says so, since tree() gives it no line beneath. The timer is the thin
+        bar its pull requests' ages have, its white the time left until the next read, and
+        after it the minutes left, counted up to nought, so that the figure reaches nought as
+        the white runs out.
+
+        The rest gives way in one order as the window narrows, each for good before the
+        next, so that nothing goes and comes back: the "most recent shown", then ●n ○n (the
+        top line has those too), then the timer's bar, then its figure. The line's room is
+        its own, so the timer does not go with the age column."""
+        ran, left = self.app.timer(row.repo)
         figure = f"-{-int(-left // 60)}m" if left > 0 else "0m"
-        bars = (thin_bar(1 - ran, until=True), None) if age_form(width - x_quiet)[0] else (None,)
-        for drawn in (time_cells(bar, figure) for bar in bars):
-            x = width - 1 - seg_len(drawn)
-            if x - 1 >= after:
-                canvas.put(x - 1, y, " " * (width - x + 1))
-                write(canvas, x, y, drawn, seg_len(drawn))
-                return
+        whole, alone = time_cells(thin_bar(1 - ran, until=True), figure), time_cells(None, figure)
+        opened: Segments = []
+        fuller: list[Segments] = []
+        if row.total is not None:
+            marks = count_marks(*counts(self.pic, row.repo), gap="  ")
+            opened = [(f"  {row.total} open", MUTED)]
+            more: Segments = [(f", the {row.listed} most recent shown", MUTED)] if row.total > row.listed else []
+            fuller = [marks + opened + more, marks + opened]
+        ways = [(said, whole) for said in fuller + [opened]] + [(opened, alone), (opened, [])]
+        return next((way for way in ways if seg_len(way[0]) + (seg_len(way[1]) + 2 if way[1] else 0) <= beside),
+                    ways[-1])
 
     def draw_note(self, canvas: Canvas, y: int, row: Row, width: int) -> None:
         """A line under a repository saying why it has no pull requests to show."""
@@ -928,15 +975,7 @@ class Board(Screen):
             ci_icon, ci_color = CHECK_MARK[pull.checks]
             canvas.put(x_ci, y, ci_icon, ci_color)
         if x_prog is not None:
-            word, done, total = progress(self.pic, pull)
-            canvas.put(x_prog, y, word, INK2 if word != "not started" else MUTED)
-            if total and word != "not started":
-                at = x_prog + len(word) + 1
-                size = min(total, 5)
-                filled = min(size, round(size * done / total))
-                canvas.put(at, y, "▰" * filled, INK2)
-                canvas.put(at + filled, y, "▱" * (size - filled), AXIS)
-                canvas.put(at + size + 1, y, f"{done}/{total}", INK2)
+            write(canvas, x_prog, y, progress_cells(*progress(self.pic, pull)), PROGRESS - 1)
         age = age_cells(silence(pull), width - x_quiet)        # by its right end, a cell before the edge: a
         write(canvas, width - 1 - seg_len(age), y, age, seg_len(age))      # figure too long for its column starts sooner
 
