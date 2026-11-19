@@ -46,8 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         return "🐓 agent-frolic v\(v)"
     }
     private var window: NSWindow!
-    /// The window's title, drawn in the middle of its bar (CenteredTitle).
-    private var centeredTitle: CenteredTitle!
+    /// Draws the window's title in the middle of its bar, whenever it is set (CenteredTitle).
+    private var centeredTitle: CenteredTitle?
     private var terminal: LocalProcessTerminalView!
     private var updater: SPUStandardUpdaterController?
     private var coreRunning = false
@@ -107,8 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
+        w.title = defaultTitle
         centeredTitle = CenteredTitle(in: w)
-        centeredTitle.set(defaultTitle)
         w.minSize = NSSize(width: 600, height: 300)
         w.tabbingMode = .disallowed
         w.backgroundColor = Theme.background
@@ -185,9 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.centeredTitle.set(title.isEmpty ? self?.defaultTitle ?? "" : title)
-        }
+        DispatchQueue.main.async { [weak self] in self?.window.title = title.isEmpty ? self?.defaultTitle ?? "" : title }
     }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}

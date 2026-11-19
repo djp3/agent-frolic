@@ -17,13 +17,13 @@ private final class TitleLabel: NSTextField {
 /// dims by itself while the window is not the one in use, as the buttons beside it do.
 ///
 /// The window keeps its title all the same. That is what the Dock, Mission Control, the
-/// Window menu and VoiceOver go by; the label only draws it.
+/// Window menu and VoiceOver go by, and it is the one copy: the label watches it and draws
+/// what it says, so whoever sets the window's title has set what the bar shows.
 final class CenteredTitle {
     private let label = TitleLabel(labelWithString: "")
-    private weak var window: NSWindow?
+    private var titled: NSKeyValueObservation?
 
     init(in window: NSWindow) {
-        self.window = window
         // The bar is where the buttons are, and it runs the width of the window. Where that
         // is not so (no such window is made here, but macOS decides how a title bar is put
         // together) there is nowhere to center a title in, and the system's stays as it is.
@@ -34,7 +34,7 @@ final class CenteredTitle {
         label.textColor = .windowFrameTextColor
         label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1                // as the system's title is: see set
+        label.maximumNumberOfLines = 1                // as the system's title is: see where it is drawn
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         // Hiding the system's title leaves the window with nothing that shows its title, for
         // what finds things under the pointer (Hover Text, VoiceOver following the mouse).
@@ -64,13 +64,11 @@ final class CenteredTitle {
             held.append(clear)
         }
         NSLayoutConstraint.activate(held)
-    }
-
-    /// The window's title, and what the label draws.
-    func set(_ title: String) {
-        window?.title = title
-        // One line, as the system's title is. Being told to keep to one line does not stop a
-        // label breaking at a line or paragraph separator, so those are drawn as spaces.
-        label.stringValue = title.components(separatedBy: .newlines).joined(separator: " ")
+        titled = window.observe(\.title, options: [.initial, .new]) { [label] window, _ in
+            // One line, as the system's title is. Being told to keep to one line does not
+            // stop a label breaking at a line or paragraph separator, so those are drawn as
+            // spaces.
+            label.stringValue = window.title.components(separatedBy: .newlines).joined(separator: " ")
+        }
     }
 }
