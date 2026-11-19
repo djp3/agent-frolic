@@ -137,7 +137,7 @@ def test_the_declared_minimum_matches_the_swift_package():
 def _fake_bundle(tmp_path, declared, files, executable=None):
     """A bundle of these files (name -> what it holds), declaring this minimum."""
     app = tmp_path / "fake.app"
-    (app / "Contents" / "MacOS").mkdir(parents=True)
+    (app / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
     info = {"LSMinimumSystemVersion": declared} | ({"CFBundleExecutable": executable} if executable else {})
     (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
     for name, data in files.items():
@@ -188,6 +188,16 @@ def test_the_build_stops_when_info_plist_names_no_executable(tmp_path, capsys):
     assert check_min_macos.main(["check", str(app)]) == 1
     captured = capsys.readouterr()
     assert "names no executable (CFBundleExecutable)" in captured.err and "same minimum" not in captured.out
+
+
+def test_an_executable_that_is_not_in_the_bundle_is_said_to_be_missing(tmp_path, capsys):
+    """Not that it records no minimum, nor that Package.swift is to change: the name is wrong."""
+    files = {"AgentFrolic": thin(build_version("27.0")), "Notes": b"not a program at all"}
+    for named in ("AgentFrolik", "Notes"):                        # no such file; a file that is no program
+        app = _fake_bundle(tmp_path / named, "27.0", files, executable=named)
+        assert check_min_macos.main(["check", str(app)]) == 1
+        err = capsys.readouterr().err
+        assert f"holds no program at Contents/MacOS/{named}" in err and "Package.swift" not in err, named
 
 
 def test_the_build_goes_on_when_they_agree(tmp_path, capsys):

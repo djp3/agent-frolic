@@ -134,6 +134,7 @@ class Found:
     too_new: list[tuple[Path, str]] = field(default_factory=list)    # the ones that need more than declared, and what
     silent: list[Path] = field(default_factory=list)          # the ones that run here and record no minimum at all
     executable: Path | None = None                            # the app's own, as Info.plist names it
+    there: bool = False                                       # whether the bundle holds a program by that name
     own: str | None = None                                    # the minimum that one records: Package.swift's platform
 
 
@@ -145,6 +146,8 @@ def check(app: Path) -> Found:
         found.executable = Path("Contents") / "MacOS" / info["CFBundleExecutable"]
     for f in binaries(app):
         runs_here, needs = minimums(f)
+        if f.relative_to(app) == found.executable:
+            found.there = True
         if not runs_here:
             found.elsewhere += 1
             continue
@@ -183,6 +186,10 @@ def main(argv: list[str]) -> int:
         print("Info.plist names no executable (CFBundleExecutable), so the check can't tell which "
               "binary is the app's own, the one that records the platform in macos/Package.swift.",
               file=sys.stderr)
+        failed = True
+    elif not found.there:
+        print(f"Info.plist names {found.executable.name} as the app's executable (CFBundleExecutable), and "
+              f"the bundle holds no program at {found.executable}.", file=sys.stderr)
         failed = True
     elif found.own is None or version(found.own) != version(declared):
         # The two places that state the minimum must agree; what the binaries need alone
