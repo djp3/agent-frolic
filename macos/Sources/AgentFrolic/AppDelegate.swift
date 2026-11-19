@@ -46,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         return "🐓 agent-frolic v\(v)"
     }
     private var window: NSWindow!
+    /// Draws the window's title in the middle of its bar, whenever it is set (CenteredTitle).
+    private var centeredTitle: CenteredTitle?
     private var terminal: LocalProcessTerminalView!
     private var updater: SPUStandardUpdaterController?
     private var coreRunning = false
@@ -106,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = defaultTitle
+        centeredTitle = CenteredTitle(in: w)
         w.minSize = NSSize(width: 600, height: 300)
         w.tabbingMode = .disallowed
         w.backgroundColor = Theme.background
