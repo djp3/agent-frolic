@@ -88,8 +88,10 @@ step "macOS minimum"
 # Nothing inside may need a newer macOS than Info.plist promises (Homebrew's libraries follow
 # the macOS they were built on), or the app would install there and fail to start. And the
 # Swift executable must record that same minimum: it is said twice, in Info.plist and in
-# Package.swift, and one raised without the other would pass otherwise.
-"$PY" scripts/check_min_macos.py "$APP"
+# Package.swift, and one raised without the other would pass otherwise. The check runs by
+# itself: it needs no package, so a build that reuses the Python core (SKIP_PYTHON=1) needs
+# no venv for it either.
+scripts/check_min_macos.py "$APP"
 
 step "sign"
 scripts/sign_app.sh "$APP" "$IDENTITY"

@@ -181,7 +181,8 @@ def test_the_build_stops_when_info_plist_and_the_swift_executable_disagree(tmp_p
     err = capsys.readouterr().err
     assert "Contents/MacOS/AgentFrolic" in err and "records macOS 27.0" in err and "Package.swift" in err
     # the other way round, Package.swift raised and Info.plist left: it does not say to undo that
-    app = _fake_bundle(tmp_path / "other", "27.0", {"AgentFrolic": thin(build_version("29.0"))}, executable="AgentFrolic")
+    raised = {"AgentFrolic": thin(build_version("29.0"))}
+    app = _fake_bundle(tmp_path / "other", "27.0", raised, executable="AgentFrolic")
     assert check_min_macos.main(["check", str(app)]) == 1
     err = capsys.readouterr().err
     assert "declares macOS 27.0" in err and "records macOS 29.0" in err and "must say the same" in err
