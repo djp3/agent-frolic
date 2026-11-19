@@ -1429,3 +1429,20 @@ async def test_in_a_narrow_window_a_repositorys_name_and_counts_come_before_its_
         await pilot.pause()
         assert timer(app, "╪ djp3/agent-frolic") == (0, 0, "")
         assert "djp3/agent-frolic  4 open ═" in line(app, "╪ djp3/agent-frolic")           # and the count stays
+
+
+@drive
+async def test_a_long_countdown_is_whole_in_the_narrowest_window(isolated):
+    """The longest timer counts from -1440m: six cells, where the age column there has five."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add("djp3/app", admin=True)
+    FakePulls.open_ = {"djp3/app": []}
+    Settings(poll_minutes=Settings.POLL_MOST).save()
+    app = main.Frolic()
+    async with app.run_test(size=(82, 40)) as pilot:
+        await settle(app, pilot)
+        app.draw()
+        await pilot.pause()
+        head = next(row for row in screen(app).splitlines() if "pull request" in row)
+        its = line(app, "╪ djp3/app")
+        assert its.endswith("═ -1440m") and len(its) == len(head)           # all of it, a cell before the edge

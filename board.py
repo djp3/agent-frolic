@@ -884,7 +884,7 @@ class Board(Screen):
         if width - x_quiet >= QUIET and x_quiet - 1 >= after:
             cells = thin_bar(1 - ran, until=True) + [(" ", "")] + figure_cells(figure, width - x_quiet - AGE_BAR - 1)
         else:
-            x_quiet = max(x_quiet, width - 1 - len(figure))
+            x_quiet = width - 1 - len(figure)                   # wherever it must start, to end before the edge
             cells = figure_cells(figure, width - x_quiet)
             if x_quiet - 1 < after:
                 return
