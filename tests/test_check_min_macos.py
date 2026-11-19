@@ -212,6 +212,18 @@ def test_the_build_goes_on_when_they_agree(tmp_path, capsys):
     assert "the app's executable records the same minimum" in capsys.readouterr().out
 
 
+def test_the_build_runs_the_check_on_the_assembled_app_before_it_signs_it():
+    """After Info.plist is in the bundle, which the check reads, and before the signing, which
+    nothing may follow: a build that got past it would be a signed app that says the wrong thing."""
+    steps = [line.strip() for line in (ROOT / "scripts" / "build_app.sh").read_text().splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    assembled = next(i for i, line in enumerate(steps) if line.endswith('> "$APP/Contents/Info.plist"'))
+    checked = steps.index('scripts/check_min_macos.py "$APP"')            # by itself: no venv's Python before it
+    signed = next(i for i, line in enumerate(steps) if line.startswith("scripts/sign_app.sh "))
+    assert assembled < checked < signed
+    assert (ROOT / "scripts" / "check_min_macos.py").stat().st_mode & 0o111          # so it can run by itself
+
+
 def test_the_wrong_arguments_print_how_to_run_it(capsys):
     assert check_min_macos.main(["check"]) == 2
     assert capsys.readouterr().err.startswith("usage: scripts/check_min_macos.py <app bundle>")
