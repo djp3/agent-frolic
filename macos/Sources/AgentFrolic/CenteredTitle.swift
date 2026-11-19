@@ -38,9 +38,14 @@ final class CenteredTitle {
         var held = [label.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
                     label.centerYAnchor.constraint(equalTo: bar.centerYAnchor)]
         // In the middle, so what keeps it off the buttons on one side keeps it as far from
-        // the other edge.
+        // the other edge. Which side the buttons are on is the title bar's to say, not the
+        // app's: on a Mac set to a right-to-left language they are on the right, in an app
+        // like this one that is laid out left to right all the same. So the side is asked
+        // of the window and said in left and right, which do not turn with the app.
         if let last = window.standardWindowButton(.zoomButton) {
-            held.append(label.leadingAnchor.constraint(greaterThanOrEqualTo: last.trailingAnchor, constant: 8))
+            held.append(window.windowTitlebarLayoutDirection == .rightToLeft
+                ? label.rightAnchor.constraint(lessThanOrEqualTo: last.leftAnchor, constant: -8)
+                : label.leftAnchor.constraint(greaterThanOrEqualTo: last.rightAnchor, constant: 8))
         }
         NSLayoutConstraint.activate(held)
 
