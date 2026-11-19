@@ -31,8 +31,8 @@ from pathlib import Path
 
 THIN = {b"\xcf\xfa\xed\xfe": ("<", 32), b"\xce\xfa\xed\xfe": ("<", 28),     # 64- and 32-bit, as on disk: the
         b"\xfe\xed\xfa\xcf": (">", 32), b"\xfe\xed\xfa\xce": (">", 28)}     # byte order, the header's length
-UNIVERSAL = {b"\xca\xfe\xba\xbe": (">iiIII", 20), b"\xca\xfe\xba\xbf": (">iiQQII", 32),   # each slice's entry;
-             b"\xbe\xba\xfe\xca": None, b"\xbf\xba\xfe\xca": None}          # 64-bit offsets (lipo -fat64)
+UNIVERSAL = {b"\xca\xfe\xba\xbe": (">iiIII", 20),          # each slice's entry in its table, and that entry's length;
+             b"\xca\xfe\xba\xbf": (">iiQQII", 32)}         # with 64-bit offsets (lipo -fat64). Always in this byte order
 MACHO_MAGIC = set(THIN) | set(UNIVERSAL)
 ARM64 = 0x0100000C                       # the processor every slice that runs on this app's Macs is for
 LC_VERSION_MIN_MACOSX, LC_BUILD_VERSION, MACOS = 0x24, 0x32, 1
@@ -100,13 +100,10 @@ def minimums(f: Path) -> tuple[bool, list[str]]:
             if head[:4] in THIN:
                 found = [_slice(fh, 0)]
             else:
-                entry = UNIVERSAL.get(head[:4])
-                if entry is None:
-                    raise ValueError("its first bytes are a universal file's, in the byte order none is written in")
                 (count,) = struct.unpack(">I", _need(head, 8, "its header")[4:8])
                 if count > 32:                                  # a Java class file starts 0xcafebabe too, and
                     raise ValueError(f"it says it holds {count} slices")    # this is its version number
-                layout, width = entry
+                layout, width = UNIVERSAL[head[:4]]
                 table = _need(fh.read(count * width), count * width, "its table of slices")
                 starts = [struct.unpack_from(layout, table, i * width)[2] for i in range(count)]
                 found = [_slice(fh, start) for start in starts]

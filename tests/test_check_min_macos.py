@@ -93,7 +93,6 @@ def test_a_file_that_starts_like_a_program_and_is_not_one_is_refused_by_name(tmp
         "cut short": whole[:40],                                              # its load commands are not all there
         "a java class": b"\xca\xfe\xba\xbe\x00\x00\x00\x41" + b"\0" * 24,       # 0xcafebabe, then its version
         "a universal file with a slice past its end": universal(whole)[:30],
-        "a universal file, bytes swapped": b"\xbe\xba\xfe\xca" + b"\0" * 28,
         "a command of no size": thin(struct.pack("<II", 0x32, 0)),
         "a command past the end": thin(struct.pack("<II", 0x32, 4096) + b"\0" * 16),
         "a universal file of something else": (b"\xca\xfe\xba\xbe" + struct.pack(">IIIIII", 1, ARM64, 0, 28, 8, 0)
@@ -235,11 +234,17 @@ def test_a_bundle_that_does_not_say_what_it_needs_is_refused_in_a_line(tmp_path,
 
 
 def test_every_mach_o_header_is_recognized_and_nothing_else(tmp_path):
-    heads = {"thin64": b"\xcf\xfa\xed\xfe", "thin32": b"\xce\xfa\xed\xfe", "fat": b"\xca\xfe\xba\xbe",
-             "fat64": b"\xca\xfe\xba\xbf", "fat64-swapped": b"\xbf\xba\xfe\xca", "text": b"#!/b"}
-    for name, head in heads.items():
+    heads = {"thin64": b"\xcf\xfa\xed\xfe", "thin32": b"\xce\xfa\xed\xfe",
+             "thin64-big-endian": b"\xfe\xed\xfa\xcf", "thin32-big-endian": b"\xfe\xed\xfa\xce",
+             "universal": b"\xca\xfe\xba\xbe", "universal64": b"\xca\xfe\xba\xbf"}
+    others = {"text": b"#!/b", "universal-swapped": b"\xbe\xba\xfe\xca", "universal64-swapped": b"\xbf\xba\xfe\xca"}
+    assert set(heads.values()) == check_min_macos.MACHO_MAGIC         # every one the check knows, and no other
+    for name, head in (heads | others).items():                      # no file is written with the swapped ones
         (tmp_path / name).write_bytes(head + b"\0" * 28)
-    assert sorted(f.name for f in check_min_macos.binaries(tmp_path)) == sorted(set(heads) - {"text"})
+    assert sorted(f.name for f in check_min_macos.binaries(tmp_path)) == sorted(heads)
+    for name in ("thin64-big-endian", "thin32-big-endian"):           # read in their own byte order: not for arm64
+        whole = heads[name] + struct.pack(">IIIIII", 18, 0, 2, 0, 0, 0) + b"\0" * 8
+        assert check_min_macos.minimums(written(tmp_path, whole, name)) == (False, []), name
 
 
 LS = max(check_min_macos.minimums(Path("/bin/ls"))[1], key=check_min_macos.version)     # what a real program records
