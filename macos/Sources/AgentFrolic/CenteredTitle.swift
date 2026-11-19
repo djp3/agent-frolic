@@ -34,7 +34,10 @@ final class CenteredTitle {
         label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        label.setAccessibilityElement(false)          // VoiceOver has the window's own title
+        // Hiding the system's title leaves the window with nothing that shows its title, for
+        // what finds things under the pointer (Hover Text, VoiceOver following the mouse).
+        // The label is that now.
+        window.setAccessibilityTitleUIElement(label)
         label.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(label)
         // Nothing that holds the label is as strong as what holds the window to its size
