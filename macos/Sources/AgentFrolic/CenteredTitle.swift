@@ -33,6 +33,7 @@ final class CenteredTitle {
         label.font = .titleBarFont(ofSize: 0)
         label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1                // as the system's title is: see set
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         // Hiding the system's title leaves the window with nothing that shows its title, for
         // what finds things under the pointer (Hover Text, VoiceOver following the mouse).
@@ -78,7 +79,9 @@ final class CenteredTitle {
     /// The window's title, and what the label draws.
     func set(_ title: String) {
         window?.title = title
-        label.stringValue = title
+        // One line, as the system's title is. Being told to keep to one line does not stop a
+        // label breaking at a line or paragraph separator, so those are drawn as spaces.
+        label.stringValue = title.components(separatedBy: .newlines).joined(separator: " ")
     }
 
     /// As the system's title is: full strength in the window in use, dimmed in the others.
