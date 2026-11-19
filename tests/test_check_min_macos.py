@@ -17,6 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("check_min_macos", ROOT / "scripts" / "check_min_macos.py")
 check_min_macos = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = check_min_macos           # a dataclass looks its own module up by name
 _spec.loader.exec_module(check_min_macos)
 
 ARM64, X86_64 = check_min_macos.ARM64, 0x01000007
@@ -146,15 +147,30 @@ def _fake_bundle(tmp_path, declared, files, executable=None):
 
 def test_a_universal_binary_is_reported_with_its_neediest_slice(tmp_path):
     uni = universal(thin(build_version("27.1")), thin(build_version("28.0"), subtype=2))
-    declared, newest, too_new, n = check_min_macos.check(_fake_bundle(tmp_path, "27.0", {"uni": uni}))
-    assert too_new == [(Path("Contents/MacOS/uni"), "28.0")] and newest == "28.0"   # not 27.1, the first
+    found = check_min_macos.check(_fake_bundle(tmp_path, "27.0", {"uni": uni}))
+    assert found.too_new == [(Path("Contents/MacOS/uni"), "28.0")] and found.newest == "28.0"   # not 27.1, the first
 
 
 def test_an_intel_file_that_needs_more_is_no_reason_to_stop_a_build(tmp_path):
     intel = thin(build_version("28.0"), cputype=X86_64)
     files = {"intel": intel, "both": universal(intel, thin(build_version("26.0"))), "ours": thin(build_version("26.0"))}
-    declared, newest, too_new, n = check_min_macos.check(_fake_bundle(tmp_path, "26.0", files))
-    assert too_new == [] and newest == "26.0" and n == 3
+    found = check_min_macos.check(_fake_bundle(tmp_path, "26.0", files))
+    assert found.too_new == [] and found.newest == "26.0"
+    assert (found.checked, found.elsewhere) == (2, 1)             # the one for Intel alone is not among the checked
+
+
+def test_a_file_that_runs_here_and_records_no_minimum_stops_the_build(tmp_path, capsys):
+    """Nothing to judge it by is not the same as needing nothing. It was passed over, and counted as checked."""
+    files = {"AgentFrolic": thin(build_version("27.0")), "silent": thin(OTHER), "intel": thin(OTHER, cputype=X86_64)}
+    app = _fake_bundle(tmp_path, "27.0", files, executable="AgentFrolic")
+    found = check_min_macos.check(app)
+    assert found.silent == [Path("Contents/MacOS/silent")] and (found.checked, found.elsewhere) == (2, 1)
+    assert check_min_macos.main(["check", str(app)]) == 1
+    err = capsys.readouterr().err
+    assert "Contents/MacOS/silent" in err and "record no minimum macOS" in err and "intel" not in err
+    (app / "Contents" / "MacOS" / "silent").unlink()              # without it the build goes on, and says
+    assert check_min_macos.main(["check", str(app)]) == 0         # what it did not judge
+    assert "1 binaries checked (1 more are for other processors alone" in capsys.readouterr().out
 
 
 def test_the_build_stops_when_info_plist_and_the_swift_executable_disagree(tmp_path, capsys):
@@ -196,9 +212,9 @@ def _bundle(tmp_path, declared):
 
 def test_a_binary_that_needs_a_newer_macos_fails_the_build(tmp_path):
     app = _bundle(tmp_path, "10.0")
-    declared, newest, too_new, n = check_min_macos.check(app)
-    assert n == 1 and declared == "10.0"
-    assert [str(p) for p, _ in too_new] == ["Contents/MacOS/ls"]
+    found = check_min_macos.check(app)
+    assert found.checked == 1 and found.declared == "10.0"
+    assert [str(p) for p, _ in found.too_new] == ["Contents/MacOS/ls"]
     run = subprocess.run([sys.executable, ROOT / "scripts" / "check_min_macos.py", app], capture_output=True, text=True)
     assert run.returncode == 1 and "Contents/MacOS/ls" in run.stderr
 
@@ -215,7 +231,7 @@ def test_a_file_that_cannot_be_read_as_a_program_stops_the_build_with_its_name(t
 
 def test_a_bundle_within_its_declared_minimum_passes(tmp_path):
     app = _bundle(tmp_path, "99.0")
-    _, newest, too_new, n = check_min_macos.check(app)
-    assert n == 1 and too_new == [] and check_min_macos.version(newest) > (10, 0, 0)
+    found = check_min_macos.check(app)
+    assert found.checked == 1 and found.too_new == [] and check_min_macos.version(found.newest) > (10, 0, 0)
     run = subprocess.run([sys.executable, ROOT / "scripts" / "check_min_macos.py", app], capture_output=True, text=True)
     assert run.returncode == 0 and "none needs a macOS newer than 99.0" in run.stdout

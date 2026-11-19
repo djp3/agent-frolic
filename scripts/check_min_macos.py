@@ -26,6 +26,7 @@ from __future__ import annotations
 import plistlib
 import struct
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 THIN = {b"\xcf\xfa\xed\xfe": ("<", 32), b"\xce\xfa\xed\xfe": ("<", 28),     # 64- and 32-bit, as on disk: the
@@ -123,22 +124,35 @@ def binaries(app: Path):
                     yield f
 
 
-def check(app: Path) -> tuple[str, str, list[tuple[Path, str]], int]:
-    """(declared minimum, newest minimum any binary needs, binaries that need more than
-    declared with the most each needs, binaries checked)."""
+@dataclass
+class Found:
+    """What the binaries in a bundle need, beside what the bundle declares."""
+    declared: str                                             # LSMinimumSystemVersion
+    newest: str = "0"                                         # the most any of them needs
+    checked: int = 0                                          # the ones with a slice that runs on Apple silicon
+    elsewhere: int = 0                                        # the ones for other processors alone: never run here
+    too_new: list[tuple[Path, str]] = field(default_factory=list)    # the ones that need more than declared, and what
+    silent: list[Path] = field(default_factory=list)          # the ones that run here and record no minimum at all
+
+
+def check(app: Path) -> Found:
     declared = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())["LSMinimumSystemVersion"]
-    newest, too_new, n = "0", [], 0
+    found = Found(declared)
     for f in binaries(app):
-        n += 1
-        _, found = minimums(f)
-        if not found:
+        runs_here, needs = minimums(f)
+        if not runs_here:
+            found.elsewhere += 1
             continue
-        need = max(found, key=version)          # a universal binary needs what its neediest slice needs
-        if version(need) > version(newest):
-            newest = need
+        found.checked += 1
+        if not needs:                           # nothing to judge it by: that is not the same as needing nothing
+            found.silent.append(f.relative_to(app))
+            continue
+        need = max(needs, key=version)          # a universal binary needs what its neediest slice needs
+        if version(need) > version(found.newest):
+            found.newest = need
         if version(need) > version(declared):
-            too_new.append((f.relative_to(app), need))
-    return declared, newest, too_new, n
+            found.too_new.append((f.relative_to(app), need))
+    return found
 
 
 def executable_minimum(app: Path) -> tuple[Path, str | None] | None:
@@ -158,7 +172,8 @@ def main(argv: list[str]) -> int:
         return 2
     app = Path(argv[1])
     try:
-        declared, newest, too_new, n = check(app)
+        found = check(app)
+        declared, newest, too_new, n = found.declared, found.newest, found.too_new, found.checked
         own = executable_minimum(app)
     except Unreadable as e:
         path, why = e.args
@@ -184,10 +199,18 @@ def main(argv: list[str]) -> int:
         print("Build them for an older macOS, or raise the minimum: LSMinimumSystemVersion in "
               "macos/Info.plist, the platform in macos/Package.swift, and the README.", file=sys.stderr)
         failed = True
+    if found.silent:
+        print(f"{len(found.silent)} of {n} binaries run on Apple silicon and record no minimum macOS at "
+              "all, so the check can't tell what they need:", file=sys.stderr)
+        for path in found.silent:
+            print(f"  {path}", file=sys.stderr)
+        print("Find out what they are before shipping them.", file=sys.stderr)
+        failed = True
     if failed:
         return 1
-    print(f"{n} binaries checked: none needs a macOS newer than {declared}, the declared minimum "
-          f"(the newest any needs is {newest}), and the app's executable records the same minimum")
+    others = f" ({found.elsewhere} more are for other processors alone, and never run here)" if found.elsewhere else ""
+    print(f"{n} binaries checked{others}: none needs a macOS newer than {declared}, the declared "
+          f"minimum (the newest any needs is {newest}), and the app's executable records the same minimum")
     return 0
 
 
