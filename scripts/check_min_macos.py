@@ -133,11 +133,16 @@ class Found:
     elsewhere: int = 0                                        # the ones for other processors alone: never run here
     too_new: list[tuple[Path, str]] = field(default_factory=list)    # the ones that need more than declared, and what
     silent: list[Path] = field(default_factory=list)          # the ones that run here and record no minimum at all
+    executable: Path | None = None                            # the app's own, as Info.plist names it
+    own: str | None = None                                    # the minimum that one records: Package.swift's platform
 
 
 def check(app: Path) -> Found:
-    declared = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())["LSMinimumSystemVersion"]
-    found = Found(declared)
+    info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
+    found = Found(info["LSMinimumSystemVersion"])
+    declared = found.declared
+    if info.get("CFBundleExecutable"):
+        found.executable = Path("Contents") / "MacOS" / info["CFBundleExecutable"]
     for f in binaries(app):
         runs_here, needs = minimums(f)
         if not runs_here:
@@ -148,22 +153,13 @@ def check(app: Path) -> Found:
             found.silent.append(f.relative_to(app))
             continue
         need = max(needs, key=version)          # a universal binary needs what its neediest slice needs
+        if f.relative_to(app) == found.executable:
+            found.own = need
         if version(need) > version(found.newest):
             found.newest = need
         if version(need) > version(declared):
             found.too_new.append((f.relative_to(app), need))
     return found
-
-
-def executable_minimum(app: Path) -> tuple[Path, str | None] | None:
-    """The app's own executable and the minimum it records, which is the platform in
-    macos/Package.swift; None when Info.plist names no executable."""
-    name = plistlib.loads((app / "Contents" / "Info.plist").read_bytes()).get("CFBundleExecutable")
-    if not name:
-        return None
-    exe = app / "Contents" / "MacOS" / name
-    _, found = minimums(exe)
-    return exe.relative_to(app), (max(found, key=version) if found else None)
 
 
 def main(argv: list[str]) -> int:
@@ -174,7 +170,6 @@ def main(argv: list[str]) -> int:
     try:
         found = check(app)
         declared, newest, too_new, n = found.declared, found.newest, found.too_new, found.checked
-        own = executable_minimum(app)
     except Unreadable as e:
         path, why = e.args
         print(f"{path} starts like a Mach-O binary (so does a Java class file) and can't be read "
@@ -182,11 +177,11 @@ def main(argv: list[str]) -> int:
               "before shipping it.", file=sys.stderr)
         return 1
     failed = False
-    if own and (own[1] is None or version(own[1]) != version(declared)):
-        # The two places that state the minimum must agree; check() alone only notices
-        # Package.swift being the higher one.
+    if found.executable and (found.own is None or version(found.own) != version(declared)):
+        # The two places that state the minimum must agree; what the binaries need alone
+        # only gives away Package.swift being the higher one.
         print(f"Info.plist declares macOS {declared} (LSMinimumSystemVersion), but the app's own "
-              f"executable ({own[0]}) records macOS {own[1] or '(none)'}. Set the platform in "
+              f"executable ({found.executable}) records macOS {found.own or '(none)'}. Set the platform in "
               f"macos/Package.swift to {declared} too.", file=sys.stderr)
         failed = True
     if too_new:
