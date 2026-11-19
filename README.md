@@ -76,7 +76,9 @@ one. The only thing it writes on GitHub is its own webhook, on the repositories 
 Updates take care of themselves: the app checks GitHub once a day and offers each new release
 with its notes. **agent-frolic ▸ Check for Updates…** checks now.
 
-You need macOS 27 or later on Apple silicon, and a GitHub token.
+You need macOS 27 or later on Apple silicon, and a GitHub token. On macOS 26 or earlier the
+app does not open: macOS says it needs a newer system. The Python inside it is built for
+macOS 27, and the build holds the whole app to that.
 
 ## Setting up
 
