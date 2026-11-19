@@ -580,8 +580,10 @@ def age_reach(seconds: float) -> float:
     and weeks, and within each by the logarithm, so that its first doubling counts for as
     much as its last. A minute or less is 0, three months or more is 1.
 
-    The figure says nothing finer than the hour, so within the hour the bar is what tells
-    two ages apart."""
+    The figure says nothing finer than the hour, so within the hour the bar is all there is
+    to tell two ages apart, and it does so roughly: drawn in AGE_BAR cells it has three
+    steps to each unit, so none of it is white for some four minutes, a cell until a
+    quarter of an hour, two until the hour."""
     for unit, (low, high) in enumerate(_SPANS):
         if seconds < high:
             return (unit + math.log(max(seconds, low) / low) / math.log(high / low)) / len(_SPANS)

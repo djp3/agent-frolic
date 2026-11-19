@@ -1346,6 +1346,9 @@ def test_an_age_is_drawn_in_the_room_its_column_has():
     assert said(board.QUIET, 1000 * 86400) == "━━━━━━━━━━━━    1000d"             # past 999 days: the days alone,
     assert said(5, 1000 * 86400) == "1000d"                                   # a cell more than that column has
     assert len(said(board.QUIET)) == board.QUIET - 1                          # a cell is left before the edge
+    # within the hour the figure is "0h" throughout, and the bar has three steps and no more
+    within = [said(board.QUIET, seconds) for seconds in (5, 3 * 60, 5 * 60, 14 * 60, 16 * 60, 59 * 60)]
+    assert [drawn.count("━") for drawn in within] == [0, 0, 1, 1, 2, 2] and all(d.endswith(" 0h") for d in within)
     assert board.age_cells(None, board.QUIET) == []                           # an age nobody knows
 
 

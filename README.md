@@ -188,9 +188,10 @@ for them, which is nobody's to fix in the code.
 
 **Age** is how long since the pull request last changed: a thin bar, then the figure in days
 and hours (`128d 11h`, `21h`, and `0h` within the hour). The bar's white grows from the left, a
-quarter of the bar each for minutes, hours, days and weeks, and is whole at three months, so
-within the hour the bar is what tells two ages apart. A narrow window keeps the figure and
-gives up the bar.
+quarter of the bar each for minutes, hours, days and weeks, and is whole at three months.
+Within the hour, where the figure is `0h` throughout, the bar still tells roughly how long:
+none of it is white for the first four minutes, one cell until a quarter of an hour, two
+until the hour. A narrow window keeps the figure and gives up the bar.
 
 The column is time from an event or to one, and a bar's white is anchored at the event. A pull
 request's starts at its last change, at the left, and grows away from it. A repository's ends
