@@ -19,6 +19,7 @@ private final class TitleLabel: NSTextField {
 /// The window keeps its title all the same. That is what the Dock, Mission Control, the
 /// Window menu and VoiceOver go by, and it is the one copy: the label watches it and draws
 /// what it says, so whoever sets the window's title has set what the bar shows.
+@MainActor
 final class CenteredTitle {
     private let label = TitleLabel(labelWithString: "")
     private var titled: NSKeyValueObservation?
@@ -65,10 +66,13 @@ final class CenteredTitle {
         }
         NSLayoutConstraint.activate(held)
         titled = window.observe(\.title, options: [.initial, .new]) { [label] window, _ in
-            // One line, as the system's title is. Being told to keep to one line does not
-            // stop a label breaking at a line or paragraph separator, so those are drawn as
-            // spaces.
-            label.stringValue = window.title.components(separatedBy: .newlines).joined(separator: " ")
+            // A window's title is set on the main thread, and that is where this is told.
+            MainActor.assumeIsolated {
+                // One line, as the system's title is. Being told to keep to one line does
+                // not stop a label breaking at a line or paragraph separator, so those are
+                // drawn as spaces.
+                label.stringValue = window.title.components(separatedBy: .newlines).joined(separator: " ")
+            }
         }
     }
 }
