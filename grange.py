@@ -60,6 +60,7 @@ RETRY_DOWN = 60.0                 # after finding no grange, or one out of date 
 RETRY_MOST = 300.0                # and the longest wait a grange may ask for
 GRACE = 60.0                      # a grange that was answering and stops is given this long to be back
 RETRY_SOON = 5.0                  # (it may be restarting), and is asked this often meanwhile
+SPACING = 1.0                     # the least from one question to the next, however fast the answers come
 
 
 @dataclass(frozen=True)
@@ -254,7 +255,11 @@ class Watch(threading.Thread):
     and carries no cursor: whatever is there then is news. A grange that was answering and
     has stopped is asked sooner than that, every RETRY_SOON seconds for GRACE: it may be
     restarting, and the app keeps what it last said only that long. `stop` ends it at
-    once, a held question included."""
+    once, a held question included.
+
+    It is the grange that sets the pace, by holding a question until it has news. Should
+    whatever answers on its port not hold them (it need not be a grange at all), the
+    questions are still SPACING apart, not one on the heels of the last."""
 
     def __init__(self, grange: Grange, on_reading: Callable[[Reading], None],
                  on_error: Callable[[GrangeError], None]) -> None:
@@ -269,7 +274,7 @@ class Watch(threading.Thread):
         answering = False                 # its last try was answered
         lost_at: float | None = None      # when a grange that was answering first failed to
         while not self.stopped.is_set():
-            wait = 0.0
+            wait, asked_at = 0.0, time.monotonic()
             try:
                 try:
                     reading = self.ask(cursor)
@@ -287,6 +292,7 @@ class Watch(threading.Thread):
                     answering, lost_at = True, None
                     cursor = reading.cursor
                     self.on_reading(reading)
+                    wait = max(0.0, SPACING - (time.monotonic() - asked_at))
             except Exception:                       # a mistake in what was handed the news: it is
                 log.exception("watching the agent-grange failed")    # logged, and the watch goes on
                 cursor, wait = None, RETRY_DOWN

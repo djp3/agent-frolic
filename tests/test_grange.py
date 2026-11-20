@@ -414,6 +414,38 @@ def test_a_mac_that_never_had_a_grange_is_not_asked_often(monkeypatch):
     assert [e.kind for e in watched(there)[1]] == ["down"] and there.asked == [None]
 
 
+def test_questions_are_kept_apart_however_fast_the_answers_come(monkeypatch):
+    """Something on the port that answers at once, every time, would otherwise be asked
+    flat out, with the screen drawn again at each answer."""
+    monkeypatch.setattr(grange, "SPACING", 0.15)
+    asked_at = []
+
+    class Timed(Scripted):
+        def read(self, after=None, wait=grange.WAIT):
+            asked_at.append(time.monotonic())
+            return super().read(after, wait)
+
+    there = Timed(*(Reading(0, "djp3", 1, ()) for _ in range(3)))            # a cursor nothing is held for
+    readings, errors = watched(there)
+    assert len(readings) == 3 and errors == [] and there.asked[:3] == [None, 0, 0]
+    assert len(asked_at) >= 3 and all(later - sooner >= 0.14 for sooner, later in zip(asked_at, asked_at[1:]))
+
+
+def test_a_question_that_was_held_is_followed_at_once(monkeypatch):
+    monkeypatch.setattr(grange, "SPACING", 0.05)
+    asked_at = []
+
+    class Held(Scripted):
+        def read(self, after=None, wait=grange.WAIT):
+            asked_at.append(time.monotonic())
+            if self.answers:
+                time.sleep(0.2)                                          # held longer than the gap
+            return super().read(after, wait)
+
+    watched(Held(Reading(4, "djp3", 1, ()), Reading(9, "djp3", 1, ())))
+    assert 0.2 <= asked_at[1] - asked_at[0] < 0.25 + 0.15                # the hold, and no gap on top
+
+
 def test_a_grange_restarted_is_asked_with_whatever_cursor_it_gave_last():
     """Its cursor starts again from 1: the watch compares nothing, it only hands it back."""
     there = Scripted(Reading(812, "djp3", 1, ()), Reading(1, "djp3", 2, ()))

@@ -9,6 +9,7 @@ import urllib.request
 import pytest
 import truststore
 
+import grange
 import keychain
 import main
 from standins import FakeBrowser, FakeGitHub, FakeGrange, FakePulls, FakeTunnel
@@ -60,6 +61,7 @@ def stand_ins(monkeypatch):
     monkeypatch.setattr(main, "open_page", FakeBrowser.open)
     FakeGrange.answers, FakeGrange.asked, FakeGrange.made = queue.Queue(), [], []
     monkeypatch.setattr(main, "Grange", FakeGrange)
+    monkeypatch.setattr(grange, "SPACING", 0.0)   # the stand-ins answer at once: no test waits out the gap
     yield
     for made in FakeGrange.made:                  # an app a test left running asks no more
         made.close()
