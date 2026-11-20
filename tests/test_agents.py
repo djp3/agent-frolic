@@ -49,9 +49,9 @@ def read(name, nodes):
     return RepoPulls(name, "main", stack([parse_pull(name, n) for n in nodes], "main"), len(nodes), NOW, TIP)
 
 
-def picture(*reported, viewer="djp3"):
+def picture(*reported, viewer="djp3", teams=None):
     return Picture(["o/app", "o/web"], {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())},
-                   viewer, reported=tuple(reported))
+                   viewer, reported=tuple(reported), teams=teams or {})
 
 
 def where(*reported):
@@ -177,6 +177,27 @@ def test_an_idle_agent_that_reviews_for_a_team_that_was_asked_is_at_its_prompt()
     """Which team its human is on is not known: a team was asked, and it is not the author's."""
     assert state("bob", "sec-4-pr-40", "idle") == ["at its prompt"]
     assert state("dependabot", "sec-4-pr-40", "idle") == ["waiting"]
+
+
+def test_the_viewers_own_idle_agent_is_at_its_prompt_for_a_team_only_when_they_are_on_it():
+    """The yellow on their card says a move is theirs: for a team they are not on, it is not."""
+    mine = Reported("djp3", "sec-4-pr-40 review", "idle")                        # #40 is asked of team platform
+    off, on = picture(mine), picture(mine, teams={"team/o/platform": "Platform"})
+    assert [a.state for a in off.agents[("o/app", 40)]] == ["waiting"] and not off.mine(off.find(("o/app", 40)))
+    assert [a.state for a in on.agents[("o/app", 40)]] == ["at its prompt"] and on.mine(on.find(("o/app", 40)))
+
+
+def test_the_viewers_idle_agent_is_at_its_prompt_where_they_may_act_as_maintainer():
+    """An outsider's approved pull request waits on the organization to merge it."""
+    def state(access):
+        nodes = [node(41, "ops-9-pr-41", author={"login": "wen"}, authorAssociation="CONTRIBUTOR", baseRefOid=TIP,
+                      reviewDecision="APPROVED", latestOpinionatedReviews=APPROVED("kenji"))]
+        got = RepoPulls("acme/app", "main", stack([parse_pull("acme/app", n) for n in nodes], "main"), 1, NOW, TIP,
+                        access=access, org=True)
+        pic = Picture(["acme/app"], {"acme/app": got}, "djp3", reported=(Reported("djp3", "ops-9-pr-41", "idle"),))
+        return [a.state for a in pic.agents[("acme/app", 41)]]
+
+    assert state("admin") == ["at its prompt"] and state("read") == ["waiting"]
 
 
 @pytest.mark.parametrize("word", ["unknown", "pondering", "", "BUSY"])

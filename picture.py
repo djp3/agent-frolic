@@ -191,8 +191,11 @@ def placed(picture: "Picture", reported: Iterable[Report]) -> dict[Key, list[Age
 def doing(picture: "Picture", one: Report, pull: PullRequest, role: str) -> str:
     """An agent's state, from the farm's word for it and from where its pull request
     stands. A farm gone quiet said its word some time ago: what the agent does now is
-    unknown. An idle agent is at its prompt when the move is its human's to make (theirs
-    by name, or, for one that reviews, a team's that was asked), and waiting otherwise."""
+    unknown. An idle agent is at its prompt when the move is its human's to make, and
+    waiting otherwise. Whether a move is the viewer's the picture knows (`acts_as`: by
+    name, through a team they are on, or as maintainer). Of anyone else it knows less:
+    theirs by name, or, for one that reviews, a team's that was asked, since which teams
+    they are on is not known."""
     if one.stale:
         return "unknown"
     if one.state in AT_WORK:
@@ -201,8 +204,13 @@ def doing(picture: "Picture", one: Report, pull: PullRequest, role: str) -> str:
         return "at its prompt"
     if one.state in IDLE:
         here = picture.stand(pull)
-        theirs = not here.queued and any(
-            who.lower() == one.owner.lower() or (role == "review" and is_team(who)) for who in here.who)
+        if here.queued:
+            return "waiting"
+        if picture.is_viewer(one.owner):
+            theirs = any(picture.acts_as(who, pull) for who in here.who)
+        else:
+            theirs = any(who.lower() == one.owner.lower() or (role == "review" and is_team(who))
+                         for who in here.who)
         return "at its prompt" if theirs else "waiting"
     return "unknown"
 
