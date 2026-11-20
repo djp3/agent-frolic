@@ -115,7 +115,9 @@ class Report(Protocol):
 
 # "proj-86-pr-98" anywhere in a name, in either case: the ticket, and the pull request's
 # number, which may be padded ("pr-0098"). The first one in a name is the one that counts.
-_NAMED = re.compile(r"(?<![a-z0-9])([a-z][a-z0-9_]*-[0-9]+)-pr-0*([0-9]+)(?![0-9])", re.IGNORECASE)
+# A ticket's key may have an underscore in it ("data_eng-7"), so a ticket begins where no
+# letter, digit or underscore comes before it: "proj-86" is not found in "x_proj-86".
+_NAMED = re.compile(r"(?<![a-z0-9_])([a-z][a-z0-9_]*-[0-9]+)-pr-0*([0-9]+)(?![0-9])", re.IGNORECASE)
 # The farm's words for what an agent is doing. One that is not here is "unknown": the farm
 # may have new words before this app does.
 AT_WORK = frozenset({"busy"})
@@ -140,9 +142,10 @@ def words(name: str) -> str:
 
 
 def carries(pull: PullRequest, ticket: str) -> bool:
-    """Whether a pull request's branch or title has this ticket in it ("proj-86", and not
-    as the start of "proj-860")."""
-    there = re.compile(rf"(?<![a-z0-9]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
+    """Whether a pull request's branch or title has this ticket in it: "proj-86", and not
+    as the start of "proj-860" or the end of "xproj-86" or "x_proj-86", which are other
+    tickets."""
+    there = re.compile(rf"(?<![a-z0-9_]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
     return bool(there.search(pull.head) or there.search(pull.title))
 
 

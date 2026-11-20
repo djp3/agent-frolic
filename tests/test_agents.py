@@ -11,7 +11,8 @@ import keychain
 import main
 from canvas import plain
 from grange import GrangeError, Reported, out_of_date
-from picture import Picture, cells, doing, line_agents, located, named, needs_effort, placed, progress, words
+from picture import (Picture, carries, cells, doing, line_agents, located, named, needs_effort, placed, progress,
+                     words)
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
@@ -73,7 +74,8 @@ def said(pic, repo, number):
     ("agent-frolic-af-42-pr-0017-01", ("af-42", 17)), ("review of proj_x-9-pr-3", ("proj_x-9", 3)),
     ("proj-86-pr-98 then proj-91-pr-102", ("proj-86", 98)),
     ("fix tests", None), ("pr-98", None), ("proj-pr-98", None), ("proj-86-pr-", None), ("86-pr-98", None),
-    ("proj-86 pr-98", None), ("", None)])
+    ("proj-86 pr-98", None), ("", None),
+    ("x_proj-86-pr-98", ("x_proj-86", 98)), ("9_proj-86-pr-98", None), ("_proj-86-pr-98", None)])
 def test_a_name_says_its_ticket_and_its_pull_requests_number(name, found):
     assert named(name) == found
 
@@ -92,6 +94,23 @@ def test_a_pull_request_that_does_not_carry_the_ticket_is_not_it():
     """Another repository's pull request 7, most likely: one this board does not show."""
     assert where(Reported("bob", "billing-3-pr-7", "busy"), Reported("bob", "proj-1-pr-7", "busy"),
                  Reported("bob", "proj-120-pr-7", "busy"), Reported("bob", "xproj-12-pr-7", "busy")) == []
+
+
+@pytest.mark.parametrize("branch, there", [
+    ("proj-86-fix", True), ("fix/proj-86", True), ("fix_for-proj-86", True), ("PROJ-86", True),
+    ("x_proj-86-fix", False), ("xproj-86-fix", False), ("9proj-86", False), ("proj-860", False)])
+def test_a_ticket_is_not_found_inside_a_longer_one(branch, there):
+    """A key may have an underscore in it, so "x_proj-86" is another ticket, as "xproj-86" is."""
+    pull = parse_pull("o/app", node(98, branch))
+    assert carries(pull, "proj-86") is there
+
+
+def test_an_agent_is_not_put_on_a_pull_request_whose_ticket_only_ends_as_its_own_does():
+    other = {"o/app": read("o/app", [node(98, "x_proj-86-pr-98-deploy")])}
+    pic = Picture(["o/app"], other, "djp3", reported=(Reported("djp3", "proj-86-pr-98", "busy"),))
+    assert pic.agents == {}
+    mine = Picture(["o/app"], other, "djp3", reported=(Reported("djp3", "x_proj-86-pr-98", "busy"),))
+    assert list(mine.agents) == [("o/app", 98)]
 
 
 def test_an_agent_that_names_no_pull_request_here_is_on_none():
