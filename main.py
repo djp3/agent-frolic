@@ -1774,7 +1774,8 @@ class Frolic(App):
             out.append(f" · as of {age(self.grange_read_at)} ago", style=MUTED)
         shown = [pull for name in (repo.name.lower() for repo in self.store.shown()) if name in self.pulls
                  for pull in self.pulls[name].pulls]
-        here, agents = len(located(self.reported, shown)), len(self.reported)
+        known = [pull for got in self.pulls.values() for pull in got.pulls]
+        here, agents = len(located(self.reported, shown, known)), len(self.reported)
         out.append("\n   agents    ", style=MUTED)
         out.append(f"{agents} reported", style=INK2)
         if agents:

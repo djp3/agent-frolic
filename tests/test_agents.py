@@ -127,6 +127,15 @@ def test_two_pull_requests_that_both_carry_it_are_not_guessed_between():
     assert located([Reported("djp3", "proj-86-pr-98", "busy")], pic.all()) == []
 
 
+def test_hiding_one_of_two_that_both_carry_it_does_not_say_which_was_meant():
+    both = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", [node(98, "proj-86-pr-98-too")])}
+    busy = (Reported("djp3", "proj-86-pr-98", "busy"),)
+    for shown in (["o/app", "o/web"], ["o/app"], ["o/web"]):
+        pic = Picture(shown, both, "djp3", reported=busy)
+        assert pic.agents == {}, shown
+        assert all(pic.mine(pull) == Picture(shown, both, "djp3").mine(pull) for pull in pic.all())
+
+
 def test_a_repository_that_is_not_shown_has_no_agents():
     pic = Picture(["o/web"], {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())}, "djp3",
                   reported=(Reported("djp3", "proj-86-pr-98", "busy"),))

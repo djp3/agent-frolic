@@ -149,13 +149,22 @@ def carries(pull: PullRequest, ticket: str) -> bool:
     return bool(there.search(pull.head) or there.search(pull.title))
 
 
-def located(reported: Iterable[Report], pulls: Iterable[PullRequest]) -> list[tuple[Report, PullRequest]]:
+def located(reported: Iterable[Report], pulls: Iterable[PullRequest],
+            known: Iterable[PullRequest] = ()) -> list[tuple[Report, PullRequest]]:
     """Each reported agent that is on one of these pull requests, with the one it is on, in
     the order reported. On it means: its name has the pull request's number and a ticket,
     and that pull request, alone among those with the number, carries the ticket. An agent
-    whose session has ended is on nothing."""
+    whose session has ended is on nothing.
+
+    `known` is whatever else has been read: the pull requests of repositories now hidden.
+    No agent is put on one of those, but they count when asking whether a pull request is
+    alone: two that carry the ticket are a tie, and hiding one of them does not say which
+    was meant. (A hidden repository is not read again, so its side of a tie is as it was
+    when it was last shown: that errs toward drawing no agent, never toward a wrong one.)"""
+    pulls = list(pulls)
+    shown = {id(pull) for pull in pulls}
     numbered: dict[int, list[PullRequest]] = {}
-    for pull in pulls:
+    for pull in pulls + [pull for pull in known if id(pull) not in shown]:
         numbered.setdefault(pull.number, []).append(pull)
     out = []
     for one in reported:
@@ -164,7 +173,7 @@ def located(reported: Iterable[Report], pulls: Iterable[PullRequest]) -> list[tu
             continue
         ticket, number = said
         there = [pull for pull in numbered.get(number, []) if carries(pull, ticket)]
-        if len(there) == 1:
+        if len(there) == 1 and id(there[0]) in shown:
             out.append((one, there[0]))
     return out
 
@@ -177,7 +186,8 @@ def placed(picture: "Picture", reported: Iterable[Report]) -> dict[Key, list[Age
     that an agent keeps its number from one report to the next; on a pull request the
     author's agents come first."""
     crews: dict[tuple[Key, str], list[tuple[Report, PullRequest]]] = {}
-    for one, pull in located(reported, picture.all()):
+    known = [pull for got in picture.pulls.values() for pull in got.pulls]       # hidden repositories' too
+    for one, pull in located(reported, picture.all(), known):
         crews.setdefault((key_of(pull), one.owner.lower()), []).append((one, pull))
     out: dict[Key, list[Agent]] = {}
     for (key, _), crew in crews.items():
