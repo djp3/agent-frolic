@@ -264,7 +264,9 @@ designed to show a whole team's agents on the team's pull requests:
 ```
 
 On the board an agent sits beneath the person who runs it, on the pull request it is working
-on, and a pull request that an agent is at work on comes off your list: it is moving.
+on, and a pull request that an agent is at work on comes off your list: it is moving. Someone
+the pull request does not wait on, who has an agent on it all the same, is listed after those
+it waits on, in fainter ink.
 
 | mark | that agent |
 |------|------------|
