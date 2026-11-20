@@ -18,8 +18,9 @@ nowhere else, whatever the settings say.
     happens. Cursors are compared for equality only: after a grange restart they start
     again from 1, and passing back a larger one is answered at once.
   • WHAT IS READ IS FROM OUTSIDE. An agent's name was typed on a teammate's Mac. Control
-    characters are taken out here, as they are from what GitHub sends, and an entry that
-    is not shaped as an agent is left out rather than trusted. A state this app has not
+    characters are taken out here, as they are from what GitHub sends, a newline or a tab
+    becomes a space (each of these is drawn on one line of the board, and would break
+    it), and an entry that is not shaped as an agent is left out rather than trusted. A state this app has not
     seen is kept as it came: what to draw for it is the picture's to say.
   • WHAT CAN BE WRONG is said in one plain sentence, GrangeError.said, with what kind of
     wrong it is: "down" (nothing is listening: no grange is running, which is how things
@@ -99,7 +100,10 @@ class GrangeError(Exception):
 
 
 def _text(value: object) -> str | None:
-    return value[:FIELD] if isinstance(value, str) else None
+    """A field as it is shown: on one line, whatever white space it came with (a newline
+    in a name would break the row it is drawn on), and no longer than a field may be.
+    None for what is not text."""
+    return " ".join(value.split())[:FIELD] if isinstance(value, str) else None
 
 
 def _seconds(value: object) -> float | None:
@@ -117,7 +121,8 @@ def parse(data: object) -> Reading:
         raise GrangeError("trouble", "The agent-grange on this Mac answered with something that is not its picture.")
     farms = []
     for entry in data.get("granges") if isinstance(data.get("granges"), list) else []:
-        if not isinstance(entry, dict) or _text(entry.get("grange")) is None:
+        its_id = _text(entry.get("grange")) if isinstance(entry, dict) else None
+        if its_id is None:
             continue
         stale = entry.get("farm_stale") is True
         agents = []
@@ -127,7 +132,7 @@ def parse(data: object) -> Reading:
             owner, name, state = _text(one.get("owner")), _text(one.get("name")), _text(one.get("state"))
             if owner and name is not None and state is not None:
                 agents.append(Reported(owner, name, state, stale))
-        farms.append(Farm(entry["grange"][:FIELD], _seconds(entry.get("seen_age_s")) or 0.0,
+        farms.append(Farm(its_id, _seconds(entry.get("seen_age_s")) or 0.0,
                           _seconds(entry.get("farm_age_s")), stale, tuple(agents)))
     incarnation = data.get("incarnation")
     return Reading(cursor, _text(data.get("grange")) or "",
@@ -215,8 +220,7 @@ def out_of_date(data: object, retry: float = RETRY_DOWN) -> GrangeError:
     in its own words, and the command it names as the fix, when its answer has them. Its
     words are from outside, as an agent's name is: cleaned, and held to a field's length."""
     data = clean(data) if isinstance(data, dict) else {}
-    why = " ".join((_text(data.get("summary")) or "").split())
-    fix = " ".join((_text(data.get("fix")) or "").split())
+    why, fix = _text(data.get("summary")) or "", _text(data.get("fix")) or ""
     said = "The agent-grange on this Mac is out of date and answers nothing until it is updated"
     said += f": {why}." if why else "."
     if fix:

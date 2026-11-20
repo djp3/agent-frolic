@@ -179,6 +179,24 @@ def test_control_characters_are_taken_out_of_what_was_typed_elsewhere():
     assert got.reported() == [Reported("mira", "proj-1-pr-2 ]52;c;aGk=", "busy")]
 
 
+def test_a_newline_or_a_tab_in_a_field_becomes_a_space_so_each_stays_on_its_line():
+    """Every one of these is drawn on one line of the board or the setup."""
+    got = grange.parse({"cursor": 1, "grange": "dj\tp3\n", "granges": [{"grange": "mi\r\nra", "agents": [
+        {"owner": " mira\n", "name": "proj-86-pr-98 fix\ntests\t\tnow \u2028 then", "state": "bu\nsy"}]}]})
+    assert (got.grange, got.granges[0].grange) == ("dj p3", "mi ra")
+    assert got.reported() == [Reported("mira", "proj-86-pr-98 fix tests now then", "bu sy")]
+    shown = [got.grange, got.granges[0].grange, *(part for a in got.reported() for part in (a.owner, a.name, a.state))]
+    assert not any(c in text for text in shown for c in "\n\r\t")
+    wrong = grange.out_of_date({"summary": "image is\n3 behind", "fix": "make update\t(then make up)"})
+    assert (wrong.why, wrong.fix) == ("image is 3 behind", "make update (then make up)") and "\n" not in wrong.said
+
+
+def test_an_owner_of_nothing_but_white_space_is_no_owner():
+    got = grange.parse({"cursor": 1, "granges": [{"grange": "djp3", "agents": [
+        {"owner": " \n\t", "name": "proj-86-pr-98", "state": "busy"}]}]})
+    assert got.reported() == []
+
+
 def test_a_field_is_held_to_the_granges_own_limit():
     got = grange.parse({"cursor": 1, "granges": [{"grange": "g" * 999, "agents": [
         {"owner": "o" * 999, "name": "n" * 999, "state": "s" * 999}]}]})
