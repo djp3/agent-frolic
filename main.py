@@ -89,7 +89,7 @@ from apppaths import app_version, log_dir
 from board import Board, remember_change
 from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
-from grange import Grange, GrangeError, Reading, Reported, Watch
+from grange import GRACE, Grange, GrangeError, Reading, Reported, Watch
 from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, located, quiet, review_marks
 from pulls import PullRequest, RepoPulls, fetch_pulls, is_team, span, stack, team_of, team_slug
 from repos import Repo, RepoStore, parse
@@ -321,8 +321,9 @@ class Frolic(App):
     OPEN_AGAIN_S = 2.0            # o on the same pull request sooner than this after the last o is the key repeating
     NOTICE_S = 3.0                # how long a word about what the user just did takes the ticker's line,
     NOTICE_FAILED_S = 10.0        # and how long when it says that it failed
-    GRANGE_GRACE_S = 60.0         # how long the agents last reported stay on the board once the grange
-                                  # stops answering, counted from when it first failed to
+    GRANGE_GRACE_S = GRACE        # how long the agents last reported stay on the board once the grange
+                                  # stops answering, counted from when it first failed to. The watch
+                                  # asks it often for as long (grange.RETRY_SOON)
     GRANGE_STALE = "agent-grange on this Mac is out of date: s shows how to update it"
     GRANGE_LOST = "agent-grange stopped answering: no agents are shown"
     CSS = f"""

@@ -382,6 +382,38 @@ def test_after_a_failure_the_watch_waits_and_then_asks_without_a_cursor():
     assert time.monotonic() - began >= 0.05
 
 
+def test_a_grange_that_was_answering_and_stops_is_asked_again_soon(monkeypatch):
+    """It may be restarting. Waiting a minute, as for a Mac with no grange, would be longer
+    than the app keeps what it last said."""
+    monkeypatch.setattr(grange, "RETRY_SOON", 0.01)
+    one = Reading(4, "djp3", 1, ())
+    there = Scripted(one, GrangeError("trouble", "it dropped the question", retry=600),
+                     GrangeError("down", "nothing there", retry=600), one)
+    began = time.monotonic()
+    readings, errors = watched(there)
+    assert (readings, [e.kind for e in errors]) == ([one, one], ["trouble", "down"])
+    assert there.asked == [None, 4, None, None, 4] and time.monotonic() - began < 3
+
+
+def test_one_that_stays_silent_past_its_grace_is_asked_at_the_slow_pace_again(monkeypatch):
+    monkeypatch.setattr(grange, "RETRY_SOON", 0.01)
+    monkeypatch.setattr(grange, "GRACE", 0.0)
+    there = Scripted(Reading(4, "djp3", 1, ()), GrangeError("down", "nothing there", retry=600))
+    assert [e.kind for e in watched(there)[1]] == ["down"] and there.asked == [None, 4]      # and then it waits
+
+
+def test_a_grange_out_of_date_is_not_asked_sooner_than_it_says(monkeypatch):
+    monkeypatch.setattr(grange, "RETRY_SOON", 0.01)
+    there = Scripted(Reading(4, "djp3", 1, ()), GrangeError("stale", "out of date", retry=600))
+    assert [e.kind for e in watched(there)[1]] == ["stale"] and there.asked == [None, 4]
+
+
+def test_a_mac_that_never_had_a_grange_is_not_asked_often(monkeypatch):
+    monkeypatch.setattr(grange, "RETRY_SOON", 0.01)
+    there = Scripted(GrangeError("down", "nothing there", retry=600))
+    assert [e.kind for e in watched(there)[1]] == ["down"] and there.asked == [None]
+
+
 def test_a_grange_restarted_is_asked_with_whatever_cursor_it_gave_last():
     """Its cursor starts again from 1: the watch compares nothing, it only hands it back."""
     there = Scripted(Reading(812, "djp3", 1, ()), Reading(1, "djp3", 2, ()))

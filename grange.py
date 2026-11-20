@@ -42,6 +42,7 @@ import logging
 import math
 import socket
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -57,6 +58,8 @@ FIELD = 256                       # the grange's own limit on a field, in bytes;
 RETRY = 15.0                      # seconds before asking again after something went wrong,
 RETRY_DOWN = 60.0                 # after finding no grange, or one out of date that names no wait,
 RETRY_MOST = 300.0                # and the longest wait a grange may ask for
+GRACE = 60.0                      # a grange that was answering and stops is given this long to be back
+RETRY_SOON = 5.0                  # (it may be restarting), and is asked this often meanwhile
 
 
 @dataclass(frozen=True)
@@ -248,8 +251,10 @@ class Watch(threading.Thread):
 
     An answer's cursor goes with the next question, so that one is held until the picture
     changes. After a failure the next question comes when the error says it is worth it,
-    and carries no cursor: whatever is there then is news. `stop` ends it at once, a held
-    question included."""
+    and carries no cursor: whatever is there then is news. A grange that was answering and
+    has stopped is asked sooner than that, every RETRY_SOON seconds for GRACE: it may be
+    restarting, and the app keeps what it last said only that long. `stop` ends it at
+    once, a held question included."""
 
     def __init__(self, grange: Grange, on_reading: Callable[[Reading], None],
                  on_error: Callable[[GrangeError], None]) -> None:
@@ -261,6 +266,8 @@ class Watch(threading.Thread):
 
     def run(self) -> None:
         cursor: int | None = None
+        answering = False                 # its last try was answered
+        lost_at: float | None = None      # when a grange that was answering first failed to
         while not self.stopped.is_set():
             wait = 0.0
             try:
@@ -269,9 +276,15 @@ class Watch(threading.Thread):
                 except GrangeError as e:
                     if e.kind == "closed":
                         return
+                    if answering:
+                        answering, lost_at = False, time.monotonic()
                     cursor, wait = None, e.retry
+                    if (lost_at is not None and e.kind in ("down", "trouble")
+                            and time.monotonic() - lost_at < GRACE):
+                        wait = min(wait, RETRY_SOON)
                     self.on_error(e)
                 else:
+                    answering, lost_at = True, None
                     cursor = reading.cursor
                     self.on_reading(reading)
             except Exception:                       # a mistake in what was handed the news: it is
