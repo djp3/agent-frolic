@@ -61,7 +61,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import NamedTuple, Sequence
 
 from rich.cells import cell_len
 from rich.text import Text
@@ -78,7 +78,8 @@ from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, A
                      age_reach, age_said, line_agents, mark, move_words, needs_effort, progress, quiet,
                      review_cell, reviewers, reviewing, silence, tree)
 from pulls import PullRequest, span
-from theme import (AGE, AXIS, CRIT, DIVIDER, INK, INK2, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN, darker)
+from theme import (AGE, AXIS, CRIT, DIVIDER, INK, INK2, KEY, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN,
+                   darker)
 
 PROGRESS = 22                    # cells of the progress column, the blank one before the age among them
 TIMER_INK = INK2                 # the filled part of a repository's timer: the time left until its next read
@@ -94,13 +95,16 @@ PER_COL = 4                      # agents beneath a human before a card takes an
 BAND = 10                        # rows of the bottom band: the list and the drawer
 X_OWNER, X_STATE, X_WAITS, X_RULE, X_TREE = 1, 18, 33, 51, 53
 ORDER = {"at its prompt": 0, "working": 1, "waiting": 2}
-HINTS = ["↑↓ pull request", "o open on GitHub", "PgUp PgDn scroll", "n next needing effort", "tab focus",
-         "esc everyone", "m repos", "u update", "d drawer", "s setup", "q quit"]
-# When the window is too narrow for every hint, these are left out, the first first. The way
-# back to the setup and out of the board always stay: they are what a lost user looks for.
-LEFT_OUT_FIRST = ["d drawer", "u update", "m repos", "esc everyone", "tab focus", "PgUp PgDn scroll",
-                  "n next needing effort", "o open on GitHub", "↑↓ pull request"]
-HINT_GAP = "   "
+# The hints at the foot of the screen, each a key and a word or two for what it does. They
+# are drawn as agent-farm's footer is: the key lit, its words beside it (`hint_text`).
+HINTS = [("↑↓", "Pull request"), ("o", "Open on GitHub"), ("PgUp PgDn", "Scroll"), ("n", "Next needing effort"),
+         ("tab", "Focus"), ("esc", "Everyone"), ("m", "Repos"), ("u", "Update"), ("d", "Drawer"),
+         ("s", "Setup"), ("q", "Quit")]
+# When the window is too narrow for every hint, these are left out, the first first, by their
+# keys. The way back to the setup and out of the board always stay: they are what a lost
+# user looks for.
+LEFT_OUT_FIRST = ["d", "u", "m", "esc", "tab", "PgUp PgDn", "n", "o", "↑↓"]
+HINT_GAP = "  "
 THUMB, TRACK_LINE = "┃", "│"     # the list's scroll bar: its thumb, and the track it runs in
 
 
@@ -168,15 +172,32 @@ def title_end(cols: tuple) -> int:
     return next(x for x in (x_review, x_ci, x_prog, x_quiet) if x is not None)
 
 
-def hint_line(width: int) -> str:
-    """The key hints that fit in `width` cells, in their order, the least needed left out
-    first (LEFT_OUT_FIRST). Narrower than "s setup   q quit", the line is cut as text is."""
-    shown = list(HINTS)
-    for hint in LEFT_OUT_FIRST:
-        if cell_len(HINT_GAP.join(shown)) <= width:
+def hint_text(hints: Sequence[tuple[str, str]]) -> Text:
+    """Hints as they are drawn, on the board and on the setup alike: "q Quit", the key lit
+    and bold, its words in plain ink, and a gap between one hint and the next."""
+    out = Text(no_wrap=True, overflow="ellipsis")
+    for at, (key, does) in enumerate(hints):
+        out.append(HINT_GAP if at else "")
+        out.append(key, style=f"bold {KEY}").append(f" {does}", style=INK2)
+    return out
+
+
+def fit_hints(hints: Sequence[tuple[str, str]], left_out_first: Sequence[str], width: int) -> Text:
+    """The hints that fit in `width` cells, in their order: while they do not, the one whose
+    key comes next in `left_out_first` is left out. The keys not named there always stay,
+    and when even those do not fit the line is cut as text is."""
+    shown = list(hints)
+    for key in left_out_first:
+        if hint_text(shown).cell_len <= width:
             break
-        shown.remove(hint)
-    return HINT_GAP.join(shown)
+        shown = [hint for hint in shown if hint[0] != key]
+    return hint_text(shown)
+
+
+def hint_line(width: int) -> Text:
+    """The board's key hints as they fit in `width` cells, the least needed left out first
+    (LEFT_OUT_FIRST). Narrower than "s Setup  q Quit", the line is cut as text is."""
+    return fit_hints(HINTS, LEFT_OUT_FIRST, width)
 
 
 def thumb_size(rows: int, total: int) -> int:
@@ -411,7 +432,7 @@ class Board(Screen):
     #effort {{ width: 1fr; margin: 0 1 0 0; }}
     #drawer {{ width: 66; }}
     #events {{ height: 1; margin: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }}
-    #boardhints {{ height: 1; margin: 0 2; color: {MUTED}; text-wrap: nowrap; text-overflow: ellipsis; }}
+    #boardhints {{ height: 1; padding: 0 2; background: {RAISED}; text-wrap: nowrap; text-overflow: ellipsis; }}
     #menu {{ layer: overlay; display: none; width: 64; height: auto; margin: 2 0 0 6;
              padding: 1 2; background: {RAISED}; border: round {DIVIDER}; }}
     """
@@ -435,7 +456,7 @@ class Board(Screen):
         self.pic = Picture([], {})
         self.efforts: list[Effort] = []
         self.drawn_from: tuple = ()               # what self.pic was built from (look)
-        self.hints_shown = ""                     # the key hints as last fitted to the window
+        self.hints_shown = ""                     # the key hints as last fitted to the window, as plain text
         self.sel: Key | None = None               # the selected pull request
         self.focus = Focus()
         self.top = 0                              # first line of the list on screen
@@ -596,8 +617,8 @@ class Board(Screen):
             self.query_one("#events", Static).update(self.ticker())
             hints = self.query_one("#boardhints", Static)
             fitted = hint_line(hints.size.width or self.size.width - 4)
-            if fitted != self.hints_shown:                         # only when the width calls for it
-                self.hints_shown = fitted
+            if fitted.plain != self.hints_shown:                   # only when the width calls for it
+                self.hints_shown = fitted.plain
                 hints.update(fitted)
             if self.menu_open:
                 self.query_one("#menu", Static).update(self.menu_text())
