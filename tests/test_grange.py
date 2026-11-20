@@ -247,6 +247,21 @@ def test_any_other_refusal_is_trouble(serve, status):
     assert (wrong.kind, wrong.said) == ("trouble", f"The agent-grange on this Mac refused the question (HTTP {status}).")
 
 
+def test_an_answer_nested_too_deep_to_read_is_trouble_and_not_a_failure_of_the_apps_own(serve):
+    deep = b'{"cursor": 1, "granges": ' + b"[" * 200_000 + b"]" * 200_000 + b"}"
+    wrong = failure(Grange(serve(answering(deep)).port).read)
+    assert wrong.kind == "trouble"
+    assert wrong.said == "The agent-grange on this Mac answered with something that cannot be read (RecursionError)."
+
+
+def test_one_age_that_is_no_time_at_all_does_not_void_the_answer(serve):
+    body = {"cursor": 1, "grange": "djp3", "granges": [
+        {"grange": "djp3", "seen_age_s": 10 ** 400, "farm_age_s": float("inf"), "farm_stale": False,
+         "agents": [{"owner": "djp3", "name": "proj-86-pr-98", "state": "busy"}]}]}
+    got = Grange(serve(answering(body)).port).read()
+    assert got.granges == (Farm("djp3", 0.0, None, False, (Reported("djp3", "proj-86-pr-98", "busy"),)),)
+
+
 def test_an_answer_that_is_not_json_is_trouble(serve):
     assert failure(Grange(serve(answering(b"<html>hello</html>")).port).read).kind == "trouble"
 
@@ -307,6 +322,13 @@ def test_closing_twice_or_with_nothing_asked_is_harmless():
 
 # ---- the watch -------------------------------------------------------------------------
 
+class _Raises:
+    """In a script: raise this, though it is no GrangeError."""
+
+    def __init__(self, wrong):
+        self.wrong = wrong
+
+
 class Scripted:
     """A grange that answers from a list, then holds the question until it is closed."""
 
@@ -319,6 +341,8 @@ class Scripted:
             self.closed.wait(10)
             raise GrangeError("closed", "given up")
         answer = self.answers.pop(0)
+        if isinstance(answer, _Raises):
+            raise answer.wrong
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -383,6 +407,17 @@ def test_the_watch_goes_on_when_what_it_hands_the_news_to_fails(monkeypatch):
 
     watched(there, on_reading=breaks)
     assert seen == [one, two] and there.asked == [None, None, 9]
+
+
+def test_a_failure_nobody_foresaw_is_handed_on_as_trouble_and_the_watch_goes_on(monkeypatch):
+    """Or the app would go on saying the grange answers, and showing what it last said."""
+    monkeypatch.setattr(grange, "RETRY_DOWN", 0.01)
+    one = Reading(4, "djp3", 1, ())
+    there = Scripted(one, _Raises(RuntimeError("nobody foresaw this")), one)
+    readings, errors = watched(there)
+    assert readings == [one, one] and [(e.kind, e.said) for e in errors] == [
+        ("trouble", "Asking the agent-grange on this Mac failed (RuntimeError).")]
+    assert there.asked == [None, 4, None, 4]
 
 
 def test_the_watch_against_a_real_server_follows_a_change(serve):

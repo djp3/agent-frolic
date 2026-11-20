@@ -39,6 +39,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import math
 import socket
 import threading
 from collections.abc import Callable
@@ -107,9 +108,15 @@ def _text(value: object) -> str | None:
 
 
 def _seconds(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or value < 0:
+    """A count of seconds, or None for what is not one: not a number, not finite, below
+    nought, or a whole number too long to be a time at all."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:
+        seconds = float(value)
+    except OverflowError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def parse(data: object) -> Reading:
@@ -181,15 +188,22 @@ class Grange:
         if len(body) > MOST_BYTES:
             raise GrangeError("trouble", "The agent-grange on this Mac answered with more than a picture holds.")
         try:
-            data = json.loads(body)
-        except ValueError:
-            data = None
-        if status == 503:
-            asked = _seconds(_number(again))
-            raise out_of_date(data, RETRY_DOWN if asked is None else min(max(asked, 1.0), RETRY_MOST))
-        if status != 200:
-            raise GrangeError("trouble", f"The agent-grange on this Mac refused the question (HTTP {status}).")
-        return parse(data)
+            try:
+                data = json.loads(body)
+            except ValueError:
+                data = None
+            if status == 503:
+                asked = _seconds(_number(again))
+                raise out_of_date(data, RETRY_DOWN if asked is None else min(max(asked, 1.0), RETRY_MOST))
+            if status != 200:
+                raise GrangeError("trouble", f"The agent-grange on this Mac refused the question (HTTP {status}).")
+            return parse(data)
+        except GrangeError:
+            raise
+        except Exception as e:            # an answer nested deeper than can be read, say: it is
+            raise GrangeError(            # trouble like any other, not a failure of this app's
+                "trouble", f"The agent-grange on this Mac answered with something that cannot be read "
+                           f"({type(e).__name__}).") from None
 
     def close(self) -> None:
         """Give up the question being held, if one is, and ask no more."""
@@ -251,7 +265,7 @@ class Watch(threading.Thread):
             wait = 0.0
             try:
                 try:
-                    reading = self.grange.read(after=cursor)
+                    reading = self.ask(cursor)
                 except GrangeError as e:
                     if e.kind == "closed":
                         return
@@ -260,11 +274,24 @@ class Watch(threading.Thread):
                 else:
                     cursor = reading.cursor
                     self.on_reading(reading)
-            except Exception:                       # a mistake of this app's own, here or in what
-                log.exception("watching the agent-grange failed")    # was handed the news: it is
-                cursor, wait = None, RETRY_DOWN                      # logged, and the watch goes on
+            except Exception:                       # a mistake in what was handed the news: it is
+                log.exception("watching the agent-grange failed")    # logged, and the watch goes on
+                cursor, wait = None, RETRY_DOWN
             if wait and self.stopped.wait(wait):
                 return
+
+    def ask(self, cursor: int | None) -> Reading:
+        """One question. Whatever goes wrong is a GrangeError: a failure nobody foresaw is
+        logged and handed on as trouble, so that the app knows the grange is not answering
+        and does not go on showing what it last said as if it were."""
+        try:
+            return self.grange.read(after=cursor)
+        except GrangeError:
+            raise
+        except Exception as e:
+            log.exception("asking the agent-grange failed")
+            raise GrangeError("trouble", f"Asking the agent-grange on this Mac failed ({type(e).__name__}).",
+                              RETRY_DOWN) from None
 
     def stop(self) -> None:
         self.stopped.set()
