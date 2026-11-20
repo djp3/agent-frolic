@@ -20,7 +20,7 @@ import main
 from repos import RepoStore
 from settings import Settings
 from githubapi import Team
-from picture import Agent
+from grange import Reported
 from standins import AUTHTOKEN, TOKEN, FakeBrowser, FakeGitHub, FakePulls, age, drive, screen, settle
 from test_pulls import node, review
 from textual._xterm_parser import XTermParser
@@ -1165,8 +1165,8 @@ def a_team_board():
     RepoStore().add("acme/web-console", private=True, admin=False)
     FakeGitHub.teams_listed = [Team("Acme", "platform", "Platform")]
     FakePulls.open_ = {"acme/web-console": [
-        node(201, "bump-a", author={"login": "dependabot"}, title="Bump a", reviewRequests=ask_team("platform"),
-             updatedAt="2026-11-12T16:00:00Z"),
+        node(201, "sec-4-bump-a", author={"login": "dependabot"}, title="Bump a",
+             reviewRequests=ask_team("platform"), updatedAt="2026-11-12T16:00:00Z"),
         node(202, "bump-b", author={"login": "dependabot"}, title="Bump b", reviewRequests=ask_team("docs"),
              updatedAt="2026-11-13T16:00:00Z"),
         node(203, "theme", author={"login": "mira"}, title="Dark theme", reviewRequests=ask("bob"),
@@ -1204,8 +1204,7 @@ async def test_a_request_to_a_team_the_viewer_is_on_is_drawn_as_theirs_and_the_t
         assert dim not in {ink for ink, _ in colors(app, "#201 Bump a")}
         assert dim in {ink for ink, _ in colors(app, "#203 Dark theme")}
         await pilot.press("escape")
-        app.agents = {("acme/web-console", 201): [Agent("bob", "01", "acme/web-console", 201, "review",
-                                                        "at its prompt")]}
+        app.reported = (Reported("bob", "sec-4-pr-201 review", "idle"),)     # as the grange reports it
         app.draw()
         await pilot.pause()
         assert "● Platform › ▷ agent 01 at its prompt" in screen(app)                     # a teammate's agent

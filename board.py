@@ -93,7 +93,7 @@ STRIP = 5                        # the most rows the strip of cards takes: a nam
 PER_COL = 4                      # agents beneath a human before a card takes another column
 BAND = 10                        # rows of the bottom band: the list and the drawer
 X_OWNER, X_STATE, X_WAITS, X_RULE, X_TREE = 1, 18, 33, 51, 53
-ORDER = {"at its prompt": 0, "working": 1, "waiting": 2}
+ORDER = {"at its prompt": 0, "working": 1, "waiting": 2, "unknown": 3}
 HINTS = ["↑↓ pull request", "o open on GitHub", "PgUp PgDn scroll", "n next needing effort", "tab focus",
          "esc everyone", "m repos", "u update", "d drawer", "s setup", "q quit"]
 # When the window is too narrow for every hint, these are left out, the first first. The way
@@ -229,7 +229,7 @@ def agent_line(agent: Agent, yours: bool) -> Segments:
         return [(SPIN[0] + " ", INK), (said, INK2)]
     if agent.state == "at its prompt":
         return [("▷ ", WAITING if yours else MUTED), (said, f"bold {INK}" if yours else INK2)]
-    return [("· ", MUTED), (said, MUTED)]
+    return [("? " if agent.state == "unknown" else "· ", MUTED), (said, MUTED)]
 
 
 def count_marks(yours: int, nudge: int, gap: str = " ") -> Segments:
@@ -521,12 +521,12 @@ class Board(Screen):
         # The viewer's teams arrive on their own, after the sign-in: they are in it so that the
         # picture is built again when they do. Everything but the readings is compared by value.
         teams, held = app.teams_now()
-        drawn_from = (names, notes, viewer, repr(sorted(app.agents.items())), int(time.time() // 60),
+        drawn_from = (names, notes, viewer, app.reported, int(time.time() // 60),
                       teams, held, list(app.pulls.items()))
         if self.same_sources(drawn_from):             # the focus and selection are still on it, too
             return
         self.drawn_from = drawn_from
-        self.pic = Picture(names, app.pulls, viewer, app.agents, notes, teams=teams, held=held)
+        self.pic = Picture(names, app.pulls, viewer, notes=notes, teams=teams, held=held, reported=app.reported)
         self.efforts = needs_effort(self.pic)
         now = time.monotonic()
         cards = {p.login.lower(): plain(head_line(p)) for p in humans(self.pic)}
@@ -1089,7 +1089,8 @@ class Board(Screen):
         out.append(pull.title + "\n", style=INK)
 
         def actor(agent: Agent) -> None:
-            icon, color = {"working": (spin, INK), "at its prompt": ("▷", INK2), "waiting": ("·", MUTED)}[agent.state]
+            icon, color = {"working": (spin, INK), "at its prompt": ("▷", INK2), "waiting": ("·", MUTED),
+                           "unknown": ("?", MUTED)}[agent.state]
             out.append(" › ", style=MUTED).append(icon + " ", style=color)
             out.append(f"{agent.name} {'at work' if agent.working else agent.state}",
                        style=INK if agent.working else INK2)
