@@ -86,6 +86,8 @@ class Agent:
     role: str                     # "author": works on it for its author; "review": reviews it
     state: str                    # "working" | "at its prompt" | "waiting" | "unknown"
     note: str = ""                # what it is doing, in its human's words: what its name goes on to say
+    ident: str = ""               # what tells it from its human's other agents here, from one report to
+                                  # the next: its session's name. Its serial is only its place among them
 
     @property
     def name(self) -> str:
@@ -102,7 +104,9 @@ class Agent:
 
     @property
     def key(self) -> tuple[str, str, int, str]:
-        return (self.operator.lower(), self.repo.lower(), self.number, self.serial)
+        """What the focus holds on to. By `ident` when it has one: a serial moves to another
+        agent when one before it starts or ends."""
+        return (self.operator.lower(), self.repo.lower(), self.number, self.ident or self.serial)
 
 
 class Report(Protocol):
@@ -182,9 +186,13 @@ def placed(picture: "Picture", reported: Iterable[Report]) -> dict[Key, list[Age
     """The reported agents as the picture has them: each on its pull request (`located`),
     working for its author when the author runs it and reviewing otherwise, numbered
     among the agents the same human has there, doing what `doing` makes of the farm's
-    word, and noted with what its name goes on to say (`words`). Numbered by name, so
-    that an agent keeps its number from one report to the next; on a pull request the
-    author's agents come first."""
+    word, and noted with what its name goes on to say (`words`). On a pull request the
+    author's agents come first.
+
+    An agent's number is its place among them by name, and moves up when one before it
+    ends. What it is known by from one report to the next is its name (`Agent.ident`), so
+    a focus on it stays on it. Two sessions with one name cannot be told apart: they are
+    numbered by what they are doing, so nothing moves on screen when they trade."""
     crews: dict[tuple[Key, str], list[tuple[Report, PullRequest]]] = {}
     known = [pull for got in picture.pulls.values() for pull in got.pulls]       # hidden repositories' too
     for one, pull in located(reported, picture.all(), known):
@@ -192,10 +200,13 @@ def placed(picture: "Picture", reported: Iterable[Report]) -> dict[Key, list[Age
     out: dict[Key, list[Agent]] = {}
     for (key, _), crew in crews.items():
         crew.sort(key=lambda pair: (pair[0].name, pair[0].state))
+        seen: dict[str, int] = {}
         for at, (one, pull) in enumerate(crew, 1):
             role = "author" if one.owner.lower() == pull.author.lower() else "review"
+            seen[one.name] = nth = seen.get(one.name, 0) + 1
+            ident = one.name if nth == 1 else f"{one.name} ·{nth}"       # the second of two with one name
             out.setdefault(key, []).append(Agent(one.owner, f"{at:02d}", pull.repo, pull.number, role,
-                                                 doing(picture, one, pull, role), words(one.name)))
+                                                 doing(picture, one, pull, role), words(one.name), ident))
     for agents in out.values():
         agents.sort(key=lambda a: (a.role != "author", a.operator.lower(), a.serial))
     return out

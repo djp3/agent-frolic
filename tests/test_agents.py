@@ -11,8 +11,8 @@ import keychain
 import main
 from canvas import plain
 from grange import GrangeError, Reported, out_of_date
-from picture import (Picture, carries, cells, doing, line_agents, located, named, needs_effort, placed, progress,
-                     words)
+from picture import (Focus, Picture, carries, cells, doing, focuses, line_agents, located, named, needs_effort,
+                     placed, progress, words)
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
@@ -173,8 +173,26 @@ def test_what_an_agent_is_at_is_said_on_its_line_of_the_list():
 
 def test_two_sessions_with_one_name_are_two_agents():
     twice = Reported("djp3", "proj-86-pr-98", "busy")
-    assert [a.key for a in picture(twice, twice).agents[("o/app", 98)]] == [
-        ("djp3", "o/app", 98, "01"), ("djp3", "o/app", 98, "02")]
+    assert [(a.serial, a.key) for a in picture(twice, twice).agents[("o/app", 98)]] == [
+        ("01", ("djp3", "o/app", 98, "proj-86-pr-98")), ("02", ("djp3", "o/app", 98, "proj-86-pr-98 ·2"))]
+
+
+def test_an_agent_is_known_by_its_name_when_one_before_it_ends_so_a_focus_on_it_stays():
+    a, b, c = (Reported("djp3", f"proj-86-pr-98 {letter}", "busy") for letter in "abc")
+    before, after = picture(a, b, c), picture(b, c)                               # a ends
+    was = {agent.note: agent for agent in before.agents[("o/app", 98)]}
+    now = {agent.note: agent for agent in after.agents[("o/app", 98)]}
+    assert (was["b"].serial, now["b"].serial) == ("02", "01")                     # its place moves up
+    assert was["b"].key == now["b"].key and was["c"].key == now["c"].key          # what it is known by does not
+    held = Focus("agent", "djp3", was["b"].key)
+    assert held in focuses(before) and held in focuses(after)
+    assert Focus("agent", "djp3", was["a"].key) not in focuses(after)             # the one that ended is let go
+
+
+def test_two_sessions_with_one_name_do_not_move_on_screen_when_they_trade_what_they_do():
+    busy, idle = Reported("djp3", "proj-86-pr-98", "busy"), Reported("djp3", "proj-86-pr-98", "idle")
+    one, other = picture(busy, idle).agents[("o/app", 98)], picture(idle, busy).agents[("o/app", 98)]
+    assert [(a.serial, a.state, a.key) for a in one] == [(a.serial, a.state, a.key) for a in other]
 
 
 # ---- what it is doing --------------------------------------------------------------------
