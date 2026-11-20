@@ -11,12 +11,13 @@ import keychain
 import main
 from canvas import plain
 from grange import GrangeError, Reported, out_of_date
-from picture import Picture, cells, doing, located, named, needs_effort, placed, progress, words
+from picture import Picture, cells, doing, line_agents, located, named, needs_effort, placed, progress, words
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
 from standins import TOKEN, FakeGrange, FakePulls, drive, screen, settle, team, to_setup, until
 from test_pulls import node, review
+from theme import MUTED
 
 NOW = datetime(2026, 11, 14, 16, 0, tzinfo=timezone.utc)
 TIP = "a1" * 20
@@ -218,6 +219,33 @@ def test_each_agent_is_drawn_beneath_its_human_with_what_it_is_doing():
     assert said(pic, "o/app", 98) == ["  you |  |   bob", "  └ ⠋ agent 01 | working |   └ ▷ agent 01",
                                       "  └ · agent 02 | waiting |"]
     assert said(pic, "o/app", 7) == ["  mira |  | ● you", "  └ ? agent 01 | unknown |"]
+
+
+def test_an_agent_whose_human_is_not_waited_on_is_on_the_row_all_the_same():
+    """It takes the pull request off the list of what needs effort: the row must say why."""
+    pic = picture(Reported("kenji", "proj-12-pr-7 poke", "busy"))                 # #7 waits on djp3; nobody asked kenji
+    seven = pic.find(("o/app", 7))
+    assert not pic.mine(seven) and said(pic, "o/app", 7) == ["  mira | waiting |   you", " |  |   kenji",
+                                                             " |  |   └ ⠋ agent 01"]
+    assert [[a.operator for a in line] for line in line_agents(pic, seven)] == [[], [], ["kenji"]]
+    assert MUTED in {style for _, style in cells(pic, seven)[1][2]}               # kenji: the faintest ink
+
+
+def test_a_reviewers_agent_stays_on_the_row_when_the_move_goes_back_to_the_author():
+    pic = picture(Reported("bob", "proj-87-pr-99 review", "idle"))                # #99 is djp3's draft to finish
+    assert said(pic, "o/app", 99) == ["● you | to act |   bob", " |  |   └ · agent 01"]
+
+
+def test_an_agent_on_a_pull_request_that_waits_on_the_one_below_is_on_its_own_row():
+    pic = picture(Reported("kenji", "proj-91-pr-102", "busy"), Reported("bob", "proj-86-pr-98", "busy"))
+    assert said(pic, "o/app", 102) == ["  you | waiting |   #98 →", " |  |   bob", " |  |   └ ⠋ agent 01",
+                                       " |  |   kenji", " |  |   └ ⠋ agent 01"]
+
+
+def test_no_agent_is_drawn_twice_on_a_row():
+    pic = picture(Reported("bob", "proj-86-pr-98 review", "busy"), Reported("djp3", "proj-86-pr-98", "busy"))
+    drawn = [a.key for line in line_agents(pic, pic.find(("o/app", 98))) for a in line]
+    assert sorted(drawn) == sorted(a.key for a in pic.agents[("o/app", 98)]) and len(drawn) == 2
 
 
 def test_an_agent_whose_state_is_unknown_has_its_place_on_a_card_and_in_the_order():

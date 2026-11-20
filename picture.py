@@ -445,6 +445,12 @@ def human_cell(picture: Picture, login: str, yours_to_act: bool, pull: PullReque
     return [("  ", MUTED), (name, INK if picture.yours(login) else INK2)]
 
 
+def onlooker_cell(picture: Picture, login: str, pull: PullRequest | None = None) -> Segments:
+    """A human the pull request does not wait on, who has an agent on it all the same. In
+    the faintest ink, the viewer too: the names it waits on are the ones to read first."""
+    return [("  ", MUTED), (picture.shown(login, pull), MUTED)]
+
+
 def agent_cell(picture: Picture, agent: Agent, spin: str = SPIN[0]) -> Segments:
     """An agent, beneath its human. The mark turns while it works; ▷ is an agent at its
     prompt, · one that waits. It is never yellow: the yellow dot is on the human above."""
@@ -508,6 +514,15 @@ def _lines(picture: Picture, pull: PullRequest,
             yours = mine and picture.acts_as(who, end.pull)
             right.append((human_cell(picture, who, yours, end.pull), []))
             right += [(agent_cell(picture, a, spin), [a]) for a in reviewing(picture, end.pull, who)]
+    # An agent here that none of the above drew: its human is not one of those it waits on (they
+    # reviewed already, or came unasked), or this one waits on another. It still counts as an
+    # agent on this pull request, so it is on the row: after those waited on, beneath its human.
+    drawn = {id(agent) for _, agents in right for agent in agents}
+    rest = [a for a in picture.on(pull) if a.role == "review" and id(a) not in drawn]
+    for operator in dict.fromkeys(a.operator.lower() for a in rest):
+        theirs = [a for a in rest if a.operator.lower() == operator]
+        right.append((onlooker_cell(picture, theirs[0].operator, pull), []))
+        right += [(agent_cell(picture, a, spin), [a]) for a in theirs]
     lines = max(len(left), len(right))
     left += [([], [], [])] * (lines - len(left))
     right += [([], [])] * (lines - len(right))
