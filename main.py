@@ -343,8 +343,12 @@ class Frolic(App):
     Input {{ background: {RAISED}; color: {INK}; border: tall {AXIS}; }}
     Input:focus {{ border: tall {DIVIDER}; }}
     """
-    def __init__(self) -> None:
+    def __init__(self, ask_grange: bool = True) -> None:
+        """`ask_grange` is whether to ask the agent-grange on this Mac for the team's agents.
+        The build's self-check says no: it starts the app to see that it starts, and is to
+        reach nothing while it does."""
         super().__init__()
+        self.ask_grange = ask_grange
         self.settings = Settings.load()
         self.store = RepoStore()
         self.sel = 0
@@ -414,7 +418,8 @@ class Frolic(App):
         self.tunnel_checking = False              # opened); and whether such a check is under way
         self.reported: tuple[Reported, ...] = ()  # the team's agents, as the agent-grange on this Mac last
                                                   # said: the picture puts each on its pull request
-        self.grange_state = "asking"              # "asking" | "ok" | "down" | "stale" | "trouble"
+        self.grange_state = "asking" if ask_grange else "off"     # "asking" | "ok" | "down" | "stale" |
+                                                  # "trouble", or "off" when it is not to be asked
         self.grange_wrong: GrangeError | None = None  # what is wrong, unless it is "asking" or "ok"
         self.grange_reading: Reading | None = None    # its last answer, for as long as that is believed
         self.grange_read_at = 0.0                 # when that answer came
@@ -446,7 +451,8 @@ class Frolic(App):
         self.set_window_title(window_title(self.watched()))
         self.set_interval(1.0, self.tick)
         self.check_stored_token()
-        self.start_grange()
+        if self.ask_grange:
+            self.start_grange()
 
     def tick(self) -> None:
         """Once a second: each shown repository whose timer has run out is read again, with
@@ -1753,6 +1759,8 @@ class Frolic(App):
         out = Text("4  Agents", style=f"bold {INK}")
         out.append("\n   grange    ", style=MUTED)
         port = self.settings.grange_port
+        if self.grange_state == "off":
+            return out.append("not asked in this run", style=INK2)
         if self.grange_state == "asking":
             return out.append(f"asking the agent-grange on this Mac (port {port})…", style=INK2)
         reading, wrong = self.grange_reading, self.grange_wrong
@@ -1915,16 +1923,18 @@ def selfcheck() -> int:
 
     It loads the parts a packaged copy could be missing (ngrok's library, the Keychain
     backend, macOS's certificate trust), then starts the app without a screen, with an
-    empty stand-in for the Keychain and empty settings in a temporary folder. So it reads
-    no secret, and with no token the app talks to nobody. Returns 0 when the setup screen
-    drew and HTTPS is judged by macOS."""
+    empty stand-in for the Keychain and empty settings in a temporary folder, and told not
+    to ask the agent-grange. So it reads no secret, and talks to nobody: with no token
+    there is nothing to ask GitHub, and whatever listens on the grange's port on the Mac
+    that builds is left alone. Returns 0 when the setup screen drew and HTTPS is judged by
+    macOS."""
     import ngrok                                               # noqa: F401  only that it loads
     if sys.platform == "darwin":
         from keyring.backends import macOS                     # noqa: F401
     trusted = use_macos_trust()
 
     async def look() -> bool:
-        app = Frolic()
+        app = Frolic(ask_grange=False)
         async with app.run_test(size=(150, 46)) as pilot:
             await pilot.pause()
             shown = "\n".join(strip.text for strip in app.screen._compositor.render_strips())

@@ -540,6 +540,25 @@ async def test_leaving_the_app_gives_up_the_question_the_grange_is_holding(isola
     assert not watch.is_alive() and FakeGrange.made[0].closed.is_set()
 
 
+def test_the_builds_self_check_asks_no_grange(isolated, capsys):
+    """It starts the app to see that it starts, on the Mac that builds: whatever listens on
+    the grange's port there is none of its business."""
+    assert main.selfcheck() == 0 and "self-check passed" in capsys.readouterr().out
+    assert FakeGrange.made == [] and FakeGrange.asked == []
+
+
+@drive
+async def test_an_app_told_not_to_ask_the_grange_starts_no_watch_and_says_so(isolated):
+    a_board()
+    app = main.Frolic(ask_grange=False)
+    async with app.run_test(size=(150, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.pause(0.1)
+        assert app.watch is None and FakeGrange.made == [] and app.grange_state == "off"
+        await to_setup(app, pilot)
+        assert "grange    not asked in this run" in screen(app)
+
+
 def test_the_granges_port_is_7788_unless_the_settings_say_otherwise(tmp_path):
     import json
     assert Settings.load().grange_port == 7788
