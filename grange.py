@@ -158,21 +158,24 @@ class Grange:
     def __init__(self, port: int = PORT) -> None:
         self.port = port
         self._lock = threading.Lock()
-        self._asking: http.client.HTTPConnection | None = None
-        self._closed = False
+        self._sock: socket.socket | None = None   # the socket a question is out on, for `close` to
+        self._closed = False                      # wake. Read and set under the lock alone
 
     def read(self, after: int | None = None, wait: float = WAIT) -> Reading:
         """The team's picture. With `after`, the cursor of the last answer, the grange holds
         the question until the picture differs from that one, `wait` seconds at the most."""
         path = "/v1/agents" if after is None else f"/v1/agents?after={after}&wait={wait:g}"
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=wait + SLACK)
-        with self._lock:
-            self._asking = conn
+        answer = None
         try:
             conn.connect()
-            given_up = self._gone()       # `close` came before there was a connection to wake: it
-            if given_up is not None:      # is looked for again here, now that there is one. From
-                raise given_up            # here on `close` reaches the socket itself.
+            with self._lock:
+                # The socket is kept here, and not asked of the connection when it is wanted:
+                # for an answer that says the connection will close, http.client lets go of
+                # its own before the body is read, and `close` must still wake that read.
+                if self._closed:          # `close` came before there was a socket to wake
+                    raise GrangeError("closed", "The question was given up.")
+                self._sock = conn.sock
             conn.request("GET", path, headers={"Accept": "application/json", "User-Agent": "agent-frolic"})
             answer = conn.getresponse()
             body = answer.read(MOST_BYTES + 1)
@@ -187,8 +190,13 @@ class Grange:
                 "trouble", f"The agent-grange on this Mac did not answer ({type(e).__name__}).") from None
         finally:
             with self._lock:
-                self._asking = None
+                self._sock = None
+            if answer is not None:
+                answer.close()
             conn.close()
+        given_up = self._gone()           # given up as the answer came: nothing is handed on once
+        if given_up is not None:          # `close` has been called
+            raise given_up
         if len(body) > MOST_BYTES:
             raise GrangeError("trouble", "The agent-grange on this Mac answered with more than a picture holds.")
         try:
@@ -213,12 +221,12 @@ class Grange:
         """Give up the question being held, if one is, and ask no more."""
         with self._lock:
             self._closed = True
-            conn, self._asking = self._asking, None
-        if conn is not None and conn.sock is not None:
+            sock = self._sock
+        if sock is not None:
             try:
-                conn.sock.shutdown(socket.SHUT_RDWR)       # wakes the thread that waits on it
-            except OSError:
-                pass
+                sock.shutdown(socket.SHUT_RDWR)   # wakes the thread that waits on it
+            except OSError:               # the question ended as this was called: the socket is
+                pass                      # shut already, and there is nothing left to wake
 
     def _gone(self) -> GrangeError | None:
         """The error for a question this app gave up itself, when it did."""

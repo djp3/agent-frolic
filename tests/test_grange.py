@@ -306,6 +306,69 @@ def test_a_held_question_is_given_up_at_once_when_the_app_leaves(serve):
     assert ended == ["closed"] and time.monotonic() - began < 2
 
 
+def held_mid_answer(head: bytes):
+    """A server that sends `head`, the start of an answer, and then stalls. Returns its port
+    and the event that lets it go."""
+    listening = socket.socket()
+    listening.bind(("127.0.0.1", 0))
+    listening.listen(1)
+    let_go = threading.Event()
+
+    def serve_one():
+        conn, _ = listening.accept()
+        conn.recv(4096)
+        conn.sendall(head)
+        let_go.wait(20)
+        conn.close()
+        listening.close()
+
+    threading.Thread(target=serve_one, daemon=True).start()
+    return listening.getsockname()[1], let_go
+
+
+@pytest.mark.parametrize("head", [
+    b'HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 50\r\n\r\n{"cursor":',      # as its 503 is sent
+    b'HTTP/1.0 200 OK\r\n\r\n{"cursor":',
+    b'HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n{"cursor":',
+    b"HTTP/1.1 200 OK\r\nContent-Le"])
+def test_a_question_stalled_in_the_middle_of_its_answer_is_given_up_at_once_too(head):
+    """For an answer that says the connection will close, http.client has let go of its
+    socket by the time the body is read: this one keeps its own."""
+    port, let_go = held_mid_answer(head)
+    there, ended = Grange(port), []
+
+    def ask():
+        try:
+            there.read(after=9124)
+        except GrangeError as e:
+            ended.append(e.kind)
+
+    thread = threading.Thread(target=ask, daemon=True)
+    thread.start()
+    time.sleep(0.3)                                                      # the head has arrived by now
+    began = time.monotonic()
+    there.close()
+    thread.join(5)
+    let_go.set()
+    assert ended == ["closed"] and time.monotonic() - began < 2
+
+
+def test_closing_as_a_question_ends_is_harmless():
+    """The socket it would wake may be shut, or gone, by the time it gets to it."""
+    there, shut = Grange(free_port()), socket.socket()
+    shut.close()
+    there._sock = shut
+    there.close()
+    assert failure(there.read).kind == "closed"
+
+
+def test_an_answer_that_arrives_as_the_app_leaves_is_not_handed_on(serve):
+    there = Grange(0)
+    stand_in = serve(lambda path: (there.close(), (200, {}, PICTURE))[1])
+    there.port = stand_in.port
+    assert failure(there.read).kind == "closed"
+
+
 def test_nothing_is_asked_once_it_is_closed(serve):
     stand_in = serve(answering(PICTURE))
     there = Grange(stand_in.port)
