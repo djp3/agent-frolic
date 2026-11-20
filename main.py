@@ -322,7 +322,7 @@ class Frolic(App):
     NOTICE_S = 3.0                # how long a word about what the user just did takes the ticker's line,
     NOTICE_FAILED_S = 10.0        # and how long when it says that it failed
     GRANGE_GRACE_S = 60.0         # how long the agents last reported stay on the board once the grange
-                                  # stops answering: it answers twice in that time when all is well
+                                  # stops answering, counted from when it first failed to
     GRANGE_STALE = "agent-grange on this Mac is out of date: s shows how to update it"
     GRANGE_LOST = "agent-grange stopped answering: no agents are shown"
     CSS = f"""
@@ -417,6 +417,7 @@ class Frolic(App):
         self.grange_wrong: GrangeError | None = None  # what is wrong, unless it is "asking" or "ok"
         self.grange_reading: Reading | None = None    # its last answer, for as long as that is believed
         self.grange_read_at = 0.0                 # when that answer came
+        self.grange_failed_at = 0.0               # when it first failed to answer, since it last did
         self.watch: Watch | None = None           # the thread that asks it, from mount to unmount
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
@@ -491,7 +492,7 @@ class Frolic(App):
                 del self.hook_read_due[key]
                 self.read_for_webhook(key)
         if (self.grange_reading is not None and self.grange_state != "ok"
-                and now >= self.grange_read_at + self.GRANGE_GRACE_S):
+                and now >= self.grange_failed_at + self.GRANGE_GRACE_S):
             self.forget_agents()
         self.draw()
 
@@ -580,7 +581,7 @@ class Frolic(App):
         """The grange's picture of the team: it replaces the one before, whole."""
         back = self.grange_state != "ok"
         self.grange_state, self.grange_wrong = "ok", None
-        self.grange_reading, self.grange_read_at = reading, time.time()
+        self.grange_reading, self.grange_read_at, self.grange_failed_at = reading, time.time(), 0.0
         self.reported = tuple(reading.reported())
         if self.notice is not None and self.notice[1] in (self.GRANGE_STALE, self.GRANGE_LOST):
             self.notice = None                    # what it said was wrong no longer is
@@ -593,9 +594,14 @@ class Frolic(App):
     def grange_failed(self, wrong: GrangeError) -> None:
         """The grange did not answer, or refused. It is said once, not at every try. What it
         last reported stays on the board for a while yet (GRANGE_GRACE_S, see `tick`): a
-        grange being restarted is back within that. Finding no grange when none has ever
-        answered is how things are on a Mac without one, and is no trouble."""
+        grange being restarted is back within that. The while is counted from this first
+        failure, not from its last answer: after the Mac has slept that answer is hours
+        old, and the grange is asked again within moments of waking. Finding no grange
+        when none has ever answered is how things are on a Mac without one, and is no
+        trouble."""
         before = self.grange_wrong
+        if not self.grange_failed_at:
+            self.grange_failed_at = time.time()
         if before is None or (wrong.kind, wrong.said) != (before.kind, before.said):
             plain = wrong.kind == "down" and self.grange_reading is None
             self.say(wrong.said, INK2 if plain else INK)

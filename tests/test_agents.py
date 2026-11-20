@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The team's agents, from what the agent-grange reports to where they are drawn: which
 pull request an agent is on, what it is doing there, and how the app keeps asking."""
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -474,13 +475,35 @@ async def test_what_was_last_reported_stays_for_a_minute_once_the_grange_stops_a
         drawn = screen(app)
         assert "✗ The agent-grange on this Mac did not answer." in drawn and "4 reported" in drawn
         assert "as of" in drawn
-        app.grange_read_at -= app.GRANGE_GRACE_S + 1             # a minute on
+        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # a minute on
         app.tick()
         await pilot.pause()
         assert app.reported == () and app.grange_reading is None and "4 reported" not in screen(app)
         assert "agent-grange has not answered for a minute: the 4 agents it reported are no longer shown" in [
             said for _, said, _ in app.lines]
         assert app.notice_now() == "agent-grange stopped answering: no agents are shown"
+
+
+@drive
+async def test_the_minute_is_counted_from_the_first_failure_not_from_the_last_answer(isolated):
+    """After the Mac has slept, the last answer is hours old when the first failure comes."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 40)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(*THE_TEAM))
+        await until(pilot, lambda: app.reported)
+        app.grange_read_at -= 2 * 3600                           # two hours asleep
+        for kind in ("trouble", "down"):                         # the held question drops, then nothing listens
+            FakeGrange.answers.put(GrangeError(kind, f"The agent-grange on this Mac: {kind}.", retry=0.01))
+            await until(pilot, lambda: app.grange_state == kind)
+            app.tick()
+            assert len(app.reported) == 4 and app.notice_now() == ""
+        first = app.grange_failed_at
+        assert time.time() - first < 30                          # counted from the first failure, and not
+        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # moved on by the second
+        app.tick()
+        assert app.reported == () and app.notice_now() == app.GRANGE_LOST
 
 
 @drive
@@ -497,6 +520,7 @@ async def test_a_grange_that_answers_again_within_the_minute_loses_nothing(isola
         assert "✗ No agent-grange is running on this Mac (port 7788)." in screen(app) and "4 reported" in screen(app)
         FakeGrange.answers.put(team(*THE_TEAM, cursor=1))        # restarted: its cursor starts again
         await until(pilot, lambda: app.grange_state == "ok")
+        assert app.grange_failed_at == 0.0                       # the count of its silence starts afresh
         app.grange_read_at -= app.GRANGE_GRACE_S + 1
         app.tick()                                               # however long ago: it is answering
         assert len(app.reported) == 4 and FakeGrange.asked[-2:] == [(7788, None), (7788, 1)]
