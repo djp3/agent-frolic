@@ -27,6 +27,18 @@ def test_the_notice_says_whose_it_is_which_license_and_where_the_source_is():
     assert "credits/README.txt" in notice                             # the artwork has licenses of its own
 
 
+def test_nothing_a_build_leaves_behind_is_kept_in_the_repository():
+    """SwiftPM's .build, PyInstaller's build and dist: made on one Mac, of no use to another.
+    Two files of a .build at the top of the checkout were once committed with a change."""
+    tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
+                             timeout=30).stdout.split("\n")
+    left = [name for name in tracked if {".build", "build", "dist", "__pycache__"} & set(Path(name).parts[:-1])]
+    assert left == []
+    ignored = subprocess.run(["git", "check-ignore", ".build/CACHEDIR.TAG", "macos/.build/x", "scripts/.build/x"],
+                             cwd=ROOT, capture_output=True, text=True, timeout=30).stdout.split()
+    assert ignored == [".build/CACHEDIR.TAG", "macos/.build/x", "scripts/.build/x"]
+
+
 def test_every_source_file_says_whose_it_is_and_its_license():
     """Python, Swift and shell, in the first lines of each; the mockups are left as they are.
     A shebang, and Swift's tools-version line, stay first."""
