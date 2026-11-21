@@ -93,10 +93,10 @@ def free_port() -> int:
 
 def test_the_whole_picture_is_read_this_macs_grange_first(serve):
     got = Grange(serve(answering(PICTURE)).port).read()
-    assert (got.cursor, got.grange, got.incarnation) == (9124, "djp3", 1763323200123)
+    assert (got.cursor, got.grange) == (9124, "djp3")
     assert got.granges == (
-        Farm("djp3", 0.0, 7.2, False, (Reported("djp3", "proj-86-pr-98 fix tests", "busy"),)),
-        Farm("mira", 2.4, 95.0, True, (Reported("mira", "proj-12-pr-7 docs", "idle", stale=True),)))
+        Farm("djp3", False, (Reported("djp3", "proj-86-pr-98 fix tests", "busy"),)),
+        Farm("mira", True, (Reported("mira", "proj-12-pr-7 docs", "idle", stale=True),)))
     assert [(a.owner, a.state) for a in got.reported()] == [("djp3", "busy"), ("mira", "idle")]
 
 
@@ -156,9 +156,9 @@ def test_what_is_not_shaped_as_it_should_be_is_left_out():
             {"owner": "djp3", "name": 98, "state": "busy"}, {"owner": "djp3", "name": "proj-1-pr-2", "state": None},
             {"owner": "djp3", "name": "proj-1-pr-2", "state": "busy", "path": "/Users/djp3/secret"}]},
         {"grange": "mira", "seen_age_s": True, "farm_age_s": float("nan"), "farm_stale": True, "agents": "none"}]})
-    assert (got.cursor, got.grange, got.incarnation) == (3, "", 0)
-    assert got.granges == (Farm("djp3", 0.0, None, False, (Reported("djp3", "proj-1-pr-2", "busy"),)),
-                           Farm("mira", 0.0, None, True, ()))
+    assert (got.cursor, got.grange) == (3, "")
+    assert got.granges == (Farm("djp3", False, (Reported("djp3", "proj-1-pr-2", "busy"),)),
+                           Farm("mira", True, ()))
 
 
 @pytest.mark.parametrize("body", [[], "a picture", None, {}, {"cursor": "9"}, {"cursor": True}, {"cursor": 1.5}])
@@ -169,7 +169,7 @@ def test_an_answer_that_is_not_a_picture_is_trouble(body):
 
 
 def test_a_picture_of_no_granges_is_a_picture():
-    assert grange.parse({"cursor": 1}) == Reading(1, "", 0, ())
+    assert grange.parse({"cursor": 1}) == Reading(1, "", ())
 
 
 def test_control_characters_are_taken_out_of_what_was_typed_elsewhere():
@@ -284,12 +284,15 @@ def test_an_answer_nested_too_deep_to_read_is_trouble_and_not_a_failure_of_the_a
     assert wrong.said == "The agent-grange on this Mac answered with something that cannot be read (RecursionError)."
 
 
-def test_one_age_that_is_no_time_at_all_does_not_void_the_answer(serve):
-    body = {"cursor": 1, "grange": "djp3", "granges": [
-        {"grange": "djp3", "seen_age_s": 10 ** 400, "farm_age_s": float("inf"), "farm_stale": False,
+def test_what_the_app_does_not_show_is_not_read_so_nothing_in_it_can_void_the_answer(serve):
+    """The ages of each grange and the restart count: whatever they hold."""
+    body = {"cursor": 1, "grange": "djp3", "incarnation": [10 ** 400], "granges": [
+        {"grange": "djp3", "seen_age_s": 10 ** 400, "farm_age_s": {"not": "a time"}, "farm_stale": False,
          "agents": [{"owner": "djp3", "name": "proj-86-pr-98", "state": "busy"}]}]}
     got = Grange(serve(answering(body)).port).read()
-    assert got.granges == (Farm("djp3", 0.0, None, False, (Reported("djp3", "proj-86-pr-98", "busy"),)),)
+    assert got == Reading(1, "djp3", (Farm("djp3", False, (Reported("djp3", "proj-86-pr-98", "busy"),)),))
+    kept = {name for cls in (Farm, Reading) for name in cls.__dataclass_fields__}
+    assert not {"seen_age_s", "farm_age_s", "incarnation"} & kept
 
 
 def test_an_answer_that_is_not_json_is_trouble(serve):
@@ -480,14 +483,14 @@ def watched(there, on_reading=None, on_error=None, noted=None):
 
 
 def test_the_watch_asks_again_with_the_cursor_of_the_last_answer():
-    one, two = Reading(4, "djp3", 1, ()), Reading(9, "djp3", 1, ())
+    one, two = Reading(4, "djp3", ()), Reading(9, "djp3", ())
     there = Scripted(one, two)
     readings, errors = watched(there)
     assert (readings, errors, there.asked) == ([one, two], [], [None, 4, 9])
 
 
 def test_after_a_failure_the_watch_waits_and_then_asks_without_a_cursor():
-    one, down = Reading(4, "djp3", 1, ()), GrangeError("down", "nothing there", retry=0.05)
+    one, down = Reading(4, "djp3", ()), GrangeError("down", "nothing there", retry=0.05)
     there = Scripted(one, down, one)
     began = time.monotonic()
     readings, errors = watched(there)
@@ -499,7 +502,7 @@ def test_a_grange_that_was_answering_and_stops_is_asked_again_soon(monkeypatch):
     """It may be restarting. Waiting a minute, as for a Mac with no grange, would be longer
     than the app keeps what it last said."""
     monkeypatch.setattr(grange, "RETRY_SOON", 0.01)
-    one = Reading(4, "djp3", 1, ())
+    one = Reading(4, "djp3", ())
     there = Scripted(one, GrangeError("trouble", "it dropped the question", retry=600),
                      GrangeError("down", "nothing there", retry=600), one)
     began = time.monotonic()
@@ -511,13 +514,13 @@ def test_a_grange_that_was_answering_and_stops_is_asked_again_soon(monkeypatch):
 def test_one_that_stays_silent_past_its_grace_is_asked_at_the_slow_pace_again(monkeypatch):
     monkeypatch.setattr(grange, "RETRY_SOON", 0.01)
     monkeypatch.setattr(grange, "GRACE", 0.0)
-    there = Scripted(Reading(4, "djp3", 1, ()), GrangeError("down", "nothing there", retry=600))
+    there = Scripted(Reading(4, "djp3", ()), GrangeError("down", "nothing there", retry=600))
     assert [e.kind for e in watched(there)[1]] == ["down"] and there.asked == [None, 4]      # and then it waits
 
 
 def test_a_grange_out_of_date_is_not_asked_sooner_than_it_says(monkeypatch):
     monkeypatch.setattr(grange, "RETRY_SOON", 0.01)
-    there = Scripted(Reading(4, "djp3", 1, ()), GrangeError("stale", "out of date", retry=600))
+    there = Scripted(Reading(4, "djp3", ()), GrangeError("stale", "out of date", retry=600))
     assert [e.kind for e in watched(there)[1]] == ["stale"] and there.asked == [None, 4]
 
 
@@ -538,7 +541,7 @@ def test_questions_are_kept_apart_however_fast_the_answers_come(monkeypatch):
             asked_at.append(time.monotonic())
             return super().read(after, wait)
 
-    there = Timed(*(Reading(0, "djp3", 1, ()) for _ in range(3)))            # a cursor nothing is held for
+    there = Timed(*(Reading(0, "djp3", ()) for _ in range(3)))            # a cursor nothing is held for
     readings, errors = watched(there)
     assert len(readings) == 3 and errors == [] and there.asked == [None, 0, 0, 0]
     assert all(later - sooner >= 0.14 for sooner, later in zip(asked_at, asked_at[1:]))   # never sooner
@@ -555,7 +558,7 @@ def test_a_question_that_was_held_is_followed_at_once(monkeypatch):
             return super().read(after, wait)
 
     noted = Noted()
-    readings, _ = watched(Held(Reading(4, "djp3", 1, ()), Reading(9, "djp3", 1, ())), noted=noted)
+    readings, _ = watched(Held(Reading(4, "djp3", ()), Reading(9, "djp3", ())), noted=noted)
     assert len(readings) == 2 and noted.waits == []                      # the hold was gap enough
 
 
@@ -602,13 +605,13 @@ def test_no_grange_at_all_is_asked_for_at_the_same_slow_pace_throughout():
 def test_a_grange_that_answers_puts_an_end_to_the_longer_waits(monkeypatch):
     monkeypatch.setattr(grange, "GRACE", 0.0)                             # so the minute of asking often is over
     refused = lambda: GrangeError("trouble", "refused the question (HTTP 500)")          # noqa: E731
-    waits = waits_of(Scripted(refused(), refused(), refused(), Reading(4, "djp3", 1, ()), refused(), refused()))
+    waits = waits_of(Scripted(refused(), refused(), refused(), Reading(4, "djp3", ()), refused(), refused()))
     assert [w for w in waits if w] == [15, 30, 60, 15, 30]
 
 
 def test_a_grange_restarted_is_asked_with_whatever_cursor_it_gave_last():
     """Its cursor starts again from 1: the watch compares nothing, it only hands it back."""
-    there = Scripted(Reading(812, "djp3", 1, ()), Reading(1, "djp3", 2, ()))
+    there = Scripted(Reading(812, "djp3", ()), Reading(1, "djp3", ()))
     assert watched(there)[1] == [] and there.asked == [None, 812, 1]
 
 
@@ -621,7 +624,7 @@ def test_stopping_the_watch_ends_a_wait_between_two_tries():
 
 def test_the_watch_goes_on_when_what_it_hands_the_news_to_fails(monkeypatch):
     monkeypatch.setattr(grange, "RETRY_DOWN", 0.01)
-    one, two = Reading(4, "djp3", 1, ()), Reading(9, "djp3", 1, ())
+    one, two = Reading(4, "djp3", ()), Reading(9, "djp3", ())
     there, seen = Scripted(one, two), []
 
     def breaks(reading):
@@ -636,7 +639,7 @@ def test_the_watch_goes_on_when_what_it_hands_the_news_to_fails(monkeypatch):
 def test_a_failure_nobody_foresaw_is_handed_on_as_trouble_and_the_watch_goes_on(monkeypatch):
     """Or the app would go on saying the grange answers, and showing what it last said."""
     monkeypatch.setattr(grange, "RETRY_DOWN", 0.01)
-    one = Reading(4, "djp3", 1, ())
+    one = Reading(4, "djp3", ())
     there = Scripted(one, _Raises(RuntimeError("nobody foresaw this")), one)
     readings, errors = watched(there)
     assert readings == [one, one] and [(e.kind, e.said) for e in errors] == [

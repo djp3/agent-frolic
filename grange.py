@@ -11,6 +11,7 @@ nowhere else, whatever the settings say.
   • ONE QUESTION. GET /v1/agents?after=<cursor>&wait=<seconds>. The answer is always the
     whole picture: every grange now live, this Mac's first, each with the agents its farm
     last reported (owner, name, state). There are no deltas: a new answer replaces the last.
+    Only what the app shows is read from it: the ages and the restart count are left be.
   • HELD UNTIL SOMETHING CHANGES. Each answer has a cursor. Asked again with that cursor
     as `after`, the grange holds the question until the picture changes, WAIT seconds at
     the most, and then answers either way. So one question after another, each with the
@@ -81,10 +82,10 @@ class Reported:
 
 @dataclass(frozen=True)
 class Farm:
-    """One grange and what its farm last reported."""
+    """One grange and what its farm last reported. The answer says more of each (how long
+    since it was heard from, how long since its farm reported): nothing here shows those,
+    so they are not read. What is read from outside is what can be wrong."""
     grange: str
-    seen_age_s: float             # seconds since this Mac's grange last heard that one was alive
-    farm_age_s: float | None      # seconds since that Mac's farm last reported; None if it never has
     farm_stale: bool              # that farm has been silent too long: its agents are its last word
     agents: tuple[Reported, ...]
 
@@ -93,7 +94,6 @@ class Farm:
 class Reading:
     cursor: int
     grange: str                   # this Mac's grange
-    incarnation: int
     granges: tuple[Farm, ...]
 
     def reported(self) -> list[Reported]:
@@ -120,7 +120,7 @@ def _text(value: object) -> str | None:
 
 def _seconds(value: object) -> float | None:
     """A count of seconds, or None for what is not one: not a number, not finite, below
-    nought, or a whole number too long to be a time at all."""
+    nought. (For how long a grange asks to be left alone.)"""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     try:
@@ -150,12 +150,8 @@ def parse(data: object) -> Reading:
             owner, name, state = _text(one.get("owner")), _text(one.get("name")), _text(one.get("state"))
             if owner and LOGIN.fullmatch(owner) and name is not None and state is not None:
                 agents.append(Reported(owner, name, state, stale))
-        farms.append(Farm(its_id, _seconds(entry.get("seen_age_s")) or 0.0,
-                          _seconds(entry.get("farm_age_s")), stale, tuple(agents)))
-    incarnation = data.get("incarnation")
-    return Reading(cursor, _text(data.get("grange")) or "",
-                   incarnation if isinstance(incarnation, int) and not isinstance(incarnation, bool) else 0,
-                   tuple(farms))
+        farms.append(Farm(its_id, stale, tuple(agents)))
+    return Reading(cursor, _text(data.get("grange")) or "", tuple(farms))
 
 
 class Grange:

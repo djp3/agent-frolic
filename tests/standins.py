@@ -203,8 +203,8 @@ def team(*agents, cursor=1, quiet=()):
     state), and one more grange for each other owner among them. `quiet` names the owners
     whose farm has gone silent."""
     owners = ["djp3"] + sorted({owner for owner, _, _ in agents} - {"djp3"})
-    return Reading(cursor, "djp3", 1763323200123, tuple(
-        Farm(owner, 0.0, 95.0 if owner in quiet else 7.2, owner in quiet,
+    return Reading(cursor, "djp3", tuple(
+        Farm(owner, owner in quiet,
              tuple(Reported(o, name, state, owner in quiet) for o, name, state in agents if o == owner))
         for owner in owners))
 
