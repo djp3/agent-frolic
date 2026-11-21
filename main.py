@@ -418,6 +418,8 @@ class Frolic(App):
         self.tunnel_checking = False              # opened); and whether such a check is under way
         self.reported: tuple[Reported, ...] = ()  # the team's agents, as the agent-grange on this Mac last
                                                   # said: the picture puts each on its pull request
+        self.agent_numbers: dict = {}             # the number each agent on the board has ("agent 02"), so
+                                                  # that it keeps it from one report to the next (picture.placed)
         self.grange_state = "asking" if ask_grange else "off"     # "asking" | "ok" | "down" | "stale" |
                                                   # "trouble", or "off" when it is not to be asked
         self.grange_wrong: GrangeError | None = None  # what is wrong, unless it is "asking" or "ok"
@@ -621,6 +623,7 @@ class Frolic(App):
         """The grange has not answered for too long: what it last said is no longer shown."""
         had = len(self.reported)
         self.grange_reading, self.reported = None, ()
+        self.agent_numbers.clear()
         if had:
             self.say(f"agent-grange has not answered for a minute: the {had} "
                      f"agent{'' if had == 1 else 's'} it reported {'is' if had == 1 else 'are'} no longer shown", INK)

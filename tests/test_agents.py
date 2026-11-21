@@ -201,6 +201,40 @@ def test_an_agent_is_known_by_its_name_when_one_before_it_ends_so_a_focus_on_it_
     assert Focus("agent", "djp3", was["a"].key) not in focuses(after)             # the one that ended is let go
 
 
+def numbered(numbers, *names):
+    """{what its name goes on to say: its number} for djp3's sessions on #98, built with `numbers`."""
+    pic = Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", numbers=numbers,
+                  reported=tuple(Reported("djp3", f"proj-86-pr-98 {name}", "busy") for name in names))
+    return {agent.note: agent.serial for agent in pic.agents.get(("o/app", 98), [])}
+
+
+def test_an_agent_keeps_its_number_for_as_long_as_its_session_is_reported():
+    """Numbered by place alone, agent 02 became agent 01 the moment the one before it ended."""
+    numbers = {}
+    assert numbered(numbers, "a", "b", "c") == {"a": "01", "b": "02", "c": "03"}
+    assert numbered(numbers, "b", "c") == {"b": "02", "c": "03"}                  # a has ended: nothing moves
+    assert numbered(numbers, "c", "b") == {"b": "02", "c": "03"}                  # in whatever order they come
+    assert numbered(numbers, "aa", "b", "c") == {"aa": "01", "b": "02", "c": "03"}    # a new one takes what is free
+    assert numbered(numbers, "aa", "c", "d") == {"aa": "01", "c": "03", "d": "02"}
+    assert numbered(numbers, "c") == {"c": "03"}
+    assert numbered(numbers, "a", "c") == {"a": "01", "c": "03"}                  # a is back: as a new one is
+
+
+def test_numbers_are_forgotten_with_the_agents_that_had_them():
+    numbers = {}
+    numbered(numbers, "a", "b")
+    assert list(numbers) == [(("o/app", 98), "djp3")]
+    assert numbered(numbers, "b") == {"b": "02"} and numbers[(("o/app", 98), "djp3")] == {"proj-86-pr-98 b": 2}
+    Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", numbers=numbers,
+            reported=(Reported("mira", "proj-12-pr-7", "busy"),))              # djp3 has none on #98 any more
+    assert list(numbers) == [(("o/app", 7), "mira")]
+    assert numbered(numbers, "b") == {"b": "01"}                                  # so b is numbered afresh
+
+
+def test_without_numbers_kept_agents_are_numbered_by_name_each_time():
+    assert numbered(None, "b", "c") == {"b": "01", "c": "02"}
+
+
 def test_two_sessions_with_one_name_do_not_move_on_screen_when_they_trade_what_they_do():
     busy, idle = Reported("djp3", "proj-86-pr-98", "busy"), Reported("djp3", "proj-86-pr-98", "idle")
     one, other = picture(busy, idle).agents[("o/app", 98)], picture(idle, busy).agents[("o/app", 98)]
@@ -400,6 +434,26 @@ async def test_a_new_answer_replaces_the_last_whole(isolated):
         await pilot.pause(0.3)
         assert {key: [a.state for a in agents] for key, agents in app.board.pic.agents.items()} == {
             ("o/app", 7): ["waiting"]}
+
+
+@drive
+async def test_on_the_board_an_agent_keeps_its_number_when_the_one_before_it_ends(isolated):
+    a_board()
+    app = main.Frolic()
+    mine = [("djp3", "proj-86-pr-98 a", "busy"), ("djp3", "proj-86-pr-98 b", "busy")]
+    async with app.run_test(size=(150, 40)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(*mine, cursor=4))
+        await until(pilot, lambda: len(app.reported) == 2)
+        await pilot.pause(0.3)
+        assert [(a.note, a.serial) for a in app.board.pic.agents[("o/app", 98)]] == [("a", "01"), ("b", "02")]
+        FakeGrange.answers.put(team(mine[1], cursor=5))          # a has ended
+        await until(pilot, lambda: len(app.reported) == 1)
+        await pilot.pause(0.3)
+        assert [(a.note, a.serial) for a in app.board.pic.agents[("o/app", 98)]] == [("b", "02")]
+        assert "agent 02" in screen(app) and "agent 01" not in screen(app)
+        app.forget_agents()                                      # the grange gone for good: nothing is kept
+        assert app.agent_numbers == {}
 
 
 @drive

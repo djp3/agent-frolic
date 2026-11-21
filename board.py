@@ -526,7 +526,8 @@ class Board(Screen):
         if self.same_sources(drawn_from):             # the focus and selection are still on it, too
             return
         self.drawn_from = drawn_from
-        self.pic = Picture(names, app.pulls, viewer, notes=notes, teams=teams, held=held, reported=app.reported)
+        self.pic = Picture(names, app.pulls, viewer, notes=notes, teams=teams, held=held, reported=app.reported,
+                           numbers=app.agent_numbers)
         self.efforts = needs_effort(self.pic)
         now = time.monotonic()
         cards = {p.login.lower(): plain(head_line(p)) for p in humans(self.pic)}

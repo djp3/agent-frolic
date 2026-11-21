@@ -46,6 +46,7 @@ request. Nothing here touches the screen or the network, so all of it is tested 
 """
 from __future__ import annotations
 
+import itertools
 import math
 import re
 from dataclasses import dataclass, field
@@ -182,34 +183,56 @@ def located(reported: Iterable[Report], pulls: Iterable[PullRequest],
     return out
 
 
-def placed(picture: "Picture", reported: Iterable[Report]) -> dict[Key, list[Agent]]:
+Numbers = dict[tuple[Key, str], dict[str, int]]    # (pull request, its human in lower case) -> the number
+                                                    # each of their agents there has, by `Agent.ident`
+
+
+def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | None = None) -> dict[Key, list[Agent]]:
     """The reported agents as the picture has them: each on its pull request (`located`),
     working for its author when the author runs it and reviewing otherwise, numbered
     among the agents the same human has there, doing what `doing` makes of the farm's
     word, and noted with what its name goes on to say (`words`). On a pull request the
     author's agents come first.
 
-    An agent's number is its place among them by name, and moves up when one before it
-    ends. What it is known by from one report to the next is its name (`Agent.ident`), so
-    a focus on it stays on it. Two sessions with one name cannot be told apart: they are
-    numbered by what they are doing, so nothing moves on screen when they trade."""
+    What an agent is known by from one report to the next is its name (`Agent.ident`), so
+    a focus on it stays on it. Its number is for the eye. Given `numbers`, the numbers
+    handed out before, an agent keeps its own for as long as its session is reported:
+    one that is new takes the lowest that is free, and a number is free again only when
+    its session has gone. `numbers` is brought up to date here, for the next report; it
+    is the caller's to keep. Without it they are numbered by name, afresh each time.
+
+    Two sessions with one name cannot be told apart: they are numbered by what they are
+    doing, so nothing moves on screen when they trade."""
     crews: dict[tuple[Key, str], list[tuple[Report, PullRequest]]] = {}
     known = [pull for got in picture.pulls.values() for pull in got.pulls]       # hidden repositories' too
     for one, pull in located(reported, picture.all(), known):
         crews.setdefault((key_of(pull), one.owner.lower()), []).append((one, pull))
     out: dict[Key, list[Agent]] = {}
-    for (key, _), crew in crews.items():
+    for (key, owner), crew in crews.items():
         crew.sort(key=lambda pair: (pair[0].name, pair[0].state))
         seen: dict[str, int] = {}
-        for at, (one, pull) in enumerate(crew, 1):
-            role = "author" if one.owner.lower() == pull.author.lower() else "review"
+        idents = []
+        for one, _ in crew:
             seen[one.name] = nth = seen.get(one.name, 0) + 1
             # The second of two with one name is known by the name and its place among them,
             # set apart by a character no name can have (control characters are taken out of
             # all the grange sends): written with ordinary ones, it could be a third's name.
-            ident = one.name if nth == 1 else f"{one.name}\x00{nth}"
-            out.setdefault(key, []).append(Agent(one.owner, f"{at:02d}", pull.repo, pull.number, role,
+            idents.append(one.name if nth == 1 else f"{one.name}\x00{nth}")
+        before = numbers.get((key, owner), {}) if numbers is not None else {}
+        given = {ident: before[ident] for ident in idents if ident in before}
+        free = (n for n in itertools.count(1) if n not in set(given.values()))
+        for ident in idents:
+            if ident not in given:
+                given[ident] = next(free)
+        if numbers is not None:
+            numbers[(key, owner)] = given
+        for ident, (one, pull) in zip(idents, crew):
+            role = "author" if one.owner.lower() == pull.author.lower() else "review"
+            out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", pull.repo, pull.number, role,
                                                  doing(picture, one, pull, role), words(one.name), ident))
+    if numbers is not None:
+        for gone in [crew for crew in numbers if crew not in crews]:
+            del numbers[gone]
     for agents in out.values():
         agents.sort(key=lambda a: (a.role != "author", a.operator.lower(), a.serial))
     return out
@@ -258,6 +281,9 @@ class Picture:
                                                    # they are known, a team's request is nobody's
     reported: tuple = ()                           # the agents the grange reports (Report): given
                                                    # these, `agents` is worked out from them
+    numbers: Numbers | None = field(default=None, repr=False, compare=False)    # the numbers their agents
+                                                   # had before, kept by whoever builds one picture after
+                                                   # another (`placed` brings it up to date)
     standings: dict[Key, Standing] = field(default_factory=dict, repr=False)
     efforts: list[Effort] | None = field(default=None, repr=False, compare=False)   # needs_effort's
                                                    # answer, once something has asked for it
@@ -275,7 +301,7 @@ class Picture:
                 owner = got.repo.split("/", 1)[0].lower()
                 self.orgs[owner] = self.orgs.get(owner, False) or any(got.rights)
         if self.reported:
-            self.agents = placed(self, self.reported)
+            self.agents = placed(self, self.reported, self.numbers)
 
     def read(self) -> list[RepoPulls]:
         """What was read, for the shown repositories that have been read, in order."""
