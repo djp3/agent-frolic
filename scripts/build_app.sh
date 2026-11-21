@@ -87,11 +87,14 @@ cp "$BIN" "$APP/Contents/MacOS/AgentFrolic"
 # matters is what is left: the app would not start.
 EXE="$APP/Contents/MacOS/AgentFrolic"
 NEEDED="@executable_path/../Frameworks"
-rpaths() { otool -l "$EXE" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}'; }
-rpaths | while read -r rp; do
-    [ "$rp" = "$NEEDED" ] || install_name_tool -delete_rpath "$rp" "$EXE"
-done
-[ "$(rpaths)" = "$NEEDED" ] || { echo "the app's executable looks for its frameworks in: $(rpaths | tr '\n' ' '); it must be $NEEDED alone" >&2; exit 1; }
+# One path a line, each whole: otool prints "path <path> (offset <n>)", and a path can hold
+# spaces (a checkout in "My Checkout"), so not awk's $2.
+rpaths() { otool -l "$EXE" | awk '/LC_RPATH/{f=1} f && sub(/^[[:space:]]*path /, "") {sub(/ \(offset [0-9]+\)$/, ""); print; f=0}'; }
+FOUND=$(rpaths)             # read whole before any is taken out: the file changes under otool otherwise
+while IFS= read -r rp; do
+    [ -z "$rp" ] || [ "$rp" = "$NEEDED" ] || install_name_tool -delete_rpath "$rp" "$EXE"
+done <<< "$FOUND"
+[ "$(rpaths)" = "$NEEDED" ] || { echo "the app's executable must look for its frameworks in $NEEDED alone; it looks in:" >&2; rpaths | sed 's/^/    /' >&2; exit 1; }
 cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
 cp -R dist/python/agent-frolic-core "$APP/Contents/Resources/agent-frolic-core"
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"

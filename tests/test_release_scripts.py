@@ -115,16 +115,43 @@ def test_a_key_file_that_is_not_there_is_refused(tmp_path):
     assert got.returncode == 1 and got.stdout == "" and "cannot read" in got.stderr
 
 
-def test_the_app_is_left_one_place_to_look_for_its_frameworks_or_the_build_stops():
-    """Its own Contents/Frameworks, which Package.swift sets. Whatever else the toolchain
-    recorded is taken out, and anything but that one left stops the build."""
-    assert "SwiftPM records an absolute rpath" not in BUILD            # it said so, and none is recorded
-    rule = BUILD[BUILD.index("# Where the app looks for Sparkle.framework"):BUILD.index('cp -R "$SPARKLE_FW"')]
-    assert 'NEEDED="@executable_path/../Frameworks"' in rule
-    assert '[ "$rp" = "$NEEDED" ] || install_name_tool -delete_rpath "$rp" "$EXE"' in rule
-    assert '[ "$(rpaths)" = "$NEEDED" ] || {' in rule and "exit 1" in rule
+def rpath_step(tmp_path, *rpaths: str) -> tuple[subprocess.CompletedProcess, list]:
+    """Run the build's own lines that settle where the app looks for its frameworks, on a small
+    executable linked with these rpaths. What the step did, and the rpaths left afterwards."""
+    start, end = BUILD.index("rpaths() {"), BUILD.index('cp -R "$SPARKLE_FW"')
+    exe = tmp_path / "exe"
+    (tmp_path / "main.c").write_text("int main(void) { return 0; }\n")
+    subprocess.run(["cc", "-o", str(exe), str(tmp_path / "main.c"), *(f"-Wl,-rpath,{rp}" for rp in rpaths)],
+                   check=True, capture_output=True, timeout=120)
+    script = f'EXE="$1"\nNEEDED="@executable_path/../Frameworks"\n{BUILD[start:end]}'
+    done = subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", script, "_", str(exe)], capture_output=True,
+                          text=True, timeout=120)
+    left = subprocess.run(["otool", "-l", str(exe)], capture_output=True, text=True).stdout.splitlines()
+    return done, [line.split("path ", 1)[1].rsplit(" (offset", 1)[0] for line in left if line.strip().startswith("path ")]
+
+
+needs_cc = pytest.mark.skipif(shutil.which("cc") is None or shutil.which("otool") is None,
+                              reason="needs the compiler and otool, as a build does")
+
+
+@needs_cc
+def test_the_app_is_left_one_place_to_look_for_its_frameworks_wherever_it_was_built(tmp_path):
+    """Its own Contents/Frameworks, which Package.swift sets. Whatever else was recorded is
+    taken out, a path with a space in it too: a checkout may be in a folder named with one."""
+    spaced = tmp_path / "My Checkout" / "macos" / ".build" / "release"
+    spaced.mkdir(parents=True)
+    done, left = rpath_step(tmp_path, "@loader_path", str(spaced), "@executable_path/../Frameworks")
+    assert done.returncode == 0, done.stderr
+    assert left == ["@executable_path/../Frameworks"]
     package = (ROOT / "macos" / "Package.swift").read_text()
     assert '"-rpath", "-Xlinker", "@executable_path/../Frameworks"' in package
+
+
+@needs_cc
+def test_the_build_stops_when_the_one_place_that_matters_is_not_among_them(tmp_path):
+    done, left = rpath_step(tmp_path, "@loader_path")
+    assert done.returncode == 1 and left == []
+    assert "must look for its frameworks in @executable_path/../Frameworks alone" in done.stderr
 
 
 def test_closing_the_boards_window_ends_the_app_whatever_else_is_open():
