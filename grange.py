@@ -26,7 +26,8 @@ nowhere else, whatever the settings say.
   • WHAT CAN BE WRONG is said in one plain sentence, GrangeError.said, with what kind of
     wrong it is: "down" (nothing is listening: no grange is running, which is how things
     are on a Mac without one), "stale" (the grange is out of date and refuses every
-    question until it is updated; its answer says how), "trouble" (anything else), and
+    question until it is updated; its answer says so, and how), "trouble" (anything else,
+    a 503 that does not say the grange is out of date among it), and
     "closed" (this app gave the question up itself, on its way out).
   • ASKED FROM A THREAD OF ITS OWN. Watch asks, hands on each answer and each failure, and
     after a failure waits before it asks again. A question may be held for half a minute,
@@ -210,7 +211,7 @@ class Grange:
                 data = json.loads(body)
             except ValueError:
                 data = None
-            if status == 503:
+            if status == 503 and says_out_of_date(data):
                 asked = _seconds(_number(again))
                 raise out_of_date(data, RETRY_DOWN if asked is None else min(max(asked, 1.0), RETRY_MOST))
             if status != 200:
@@ -245,6 +246,16 @@ def _number(text: str | None) -> object:
         return float(text) if text is not None else None
     except ValueError:
         return None
+
+
+def says_out_of_date(data: object) -> bool:
+    """Whether a 503's body is the grange's own way of saying it is out of date: an object
+    with its `error` and at least one of the things it then gives (why, the fix, what it
+    was built from). Anything else that answers 503 on the port is not saying that: a
+    container that is restarting, or something that is no grange. That is trouble of the
+    passing kind, and is asked again soon, not told to update."""
+    return (isinstance(data, dict) and isinstance(data.get("error"), str)
+            and any(key in data for key in ("fix", "summary", "built_commit", "tag")))
 
 
 def out_of_date(data: object, retry: float = RETRY_DOWN) -> GrangeError:

@@ -246,9 +246,21 @@ def test_a_grange_out_of_date_says_why_and_how_to_fix_it(serve):
                                            ({"Retry-After": "86400"}, grange.RETRY_MOST),
                                            ({"Retry-After": "0"}, 1.0), ({"Retry-After": "-5"}, grange.RETRY_DOWN)])
 def test_how_long_an_out_of_date_grange_is_left_alone(serve, header, waits):
-    wrong = failure(Grange(serve(answering(b"<html>503</html>", 503, **header)).port).read)
+    body = {"error": "image out of date", "tag": "agent-grange-latest"}
+    wrong = failure(Grange(serve(answering(body, 503, **header)).port).read)
     assert (wrong.kind, wrong.retry, wrong.why, wrong.fix) == ("stale", waits, "", "")
     assert wrong.said == "The agent-grange on this Mac is out of date and answers nothing until it is updated."
+
+
+@pytest.mark.parametrize("body", [b"<html>503 Service Unavailable</html>", b"", {"error": "upstream is restarting"},
+                                  {"message": "try later"}, ["error", "fix"], "out of date"])
+def test_a_503_that_does_not_say_the_grange_is_out_of_date_is_passing_trouble(serve, body):
+    """A container that is restarting, a proxy, something that is no grange: told to update,
+    the user would update a grange that is not out of date, and it would be asked again
+    only once a minute."""
+    wrong = failure(Grange(serve(answering(body, 503, **{"Retry-After": "60"})).port).read)
+    assert (wrong.kind, wrong.retry) == ("trouble", grange.RETRY)
+    assert wrong.said == "The agent-grange on this Mac refused the question (HTTP 503)." and wrong.fix == ""
 
 
 def test_what_an_out_of_date_grange_says_is_cleaned_and_held_short():
