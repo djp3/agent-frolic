@@ -565,10 +565,32 @@ async def test_the_minute_is_counted_from_the_first_failure_not_from_the_last_an
             app.tick()
             assert len(app.reported) == 4 and app.notice_now() == ""
         first = app.grange_failed_at
-        assert time.time() - first < 30                          # counted from the first failure, and not
+        assert time.monotonic() - first < 30                     # counted from the first failure, and not
         app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # moved on by the second
         app.tick()
         assert app.reported == () and app.notice_now() == app.GRANGE_LOST
+
+
+@drive
+async def test_a_failure_just_before_the_mac_sleeps_does_not_cost_the_agents_on_waking(isolated, monkeypatch):
+    """The wall clock moves on while the Mac sleeps, and the clock the watch counts on does
+    not. Counted on the first, the minute was long over on waking, before the watch, still
+    inside its own, had asked once more."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 40)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(*THE_TEAM))
+        await until(pilot, lambda: app.reported)
+        FakeGrange.answers.put(GrangeError("trouble", "The agent-grange on this Mac did not answer.", retry=30))
+        await until(pilot, lambda: app.grange_state == "trouble")
+        asleep = time.time() + 2 * 3600
+        monkeypatch.setattr(main.time, "time", lambda: asleep)   # two hours on, by the wall clock alone
+        app.tick()
+        assert len(app.reported) == 4 and app.notice_now() == ""
+        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # and a minute awake does cost them
+        app.tick()
+        assert app.reported == ()
 
 
 @drive

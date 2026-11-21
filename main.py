@@ -425,7 +425,8 @@ class Frolic(App):
         self.grange_wrong: GrangeError | None = None  # what is wrong, unless it is "asking" or "ok"
         self.grange_reading: Reading | None = None    # its last answer, for as long as that is believed
         self.grange_read_at = 0.0                 # when that answer came
-        self.grange_failed_at = 0.0               # when it first failed to answer, since it last did
+        self.grange_failed_at = 0.0               # when it first failed to answer, since it last did: by
+                                                  # time.monotonic(), the clock the watch counts on
         self.watch: Watch | None = None           # the thread that asks it, from mount to unmount
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
@@ -500,8 +501,12 @@ class Frolic(App):
             if time.time() >= at:
                 del self.hook_read_due[key]
                 self.read_for_webhook(key)
+        # Counted on the clock that stands still while the Mac sleeps, as the watch counts its
+        # own minute of asking often (grange.Watch): on the wall clock a failure just before
+        # the lid closed would be hours old on waking, and the agents gone before the watch
+        # had asked once more.
         if (self.grange_reading is not None and self.grange_state != "ok"
-                and now >= self.grange_failed_at + self.GRANGE_GRACE_S):
+                and time.monotonic() >= self.grange_failed_at + self.GRANGE_GRACE_S):
             self.forget_agents()
         self.draw()
 
@@ -610,7 +615,7 @@ class Frolic(App):
         trouble."""
         before = self.grange_wrong
         if not self.grange_failed_at:
-            self.grange_failed_at = time.time()
+            self.grange_failed_at = time.monotonic()
         if before is None or (wrong.kind, wrong.said) != (before.kind, before.said):
             plain = wrong.kind == "down" and self.grange_reading is None
             self.say(wrong.said, INK2 if plain else INK)
