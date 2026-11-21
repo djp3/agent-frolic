@@ -198,7 +198,7 @@ def test_an_owner_of_nothing_but_white_space_is_no_owner():
 
 
 @pytest.mark.parametrize("owner", ["team/o/platform", "a hidden reviewer", "o/app", "-djp3", "djp3-", "dj--p3",
-                                   "d" * 40, "djp3!", "dj p3", "@djp3", ""])
+                                   "d" * 40, "djp3!", "dj p3", "@djp3", "", "_djp3", "djp3_", "dj__p3", "dj-_p3"])
 def test_an_owner_that_is_not_shaped_as_a_github_login_is_no_owner(owner):
     """The picture uses an owner as a login: whose card the agent is on, whether a move is
     theirs. Taken as it came, "team/o/platform" would put an agent on that team's card."""
@@ -208,7 +208,8 @@ def test_an_owner_that_is_not_shaped_as_a_github_login_is_no_owner(owner):
     assert got.reported() == [Reported("djp3", "proj-86-pr-98", "busy")]
 
 
-@pytest.mark.parametrize("owner", ["djp3", "DJP3", "d", "mira-k", "a1-b2-c3", "d" * 39])
+@pytest.mark.parametrize("owner", ["djp3", "DJP3", "d", "mira-k", "a1-b2-c3", "d" * 39,
+                                   "mira_acme", "mira-k_acme", "m_a"])             # as an enterprise names its people
 def test_a_github_login_is_an_owner(owner):
     got = grange.parse({"cursor": 1, "granges": [{"grange": "djp3", "agents": [
         {"owner": owner, "name": "proj-86-pr-98", "state": "busy"}]}]})

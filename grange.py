@@ -65,10 +65,12 @@ RETRY_MOST = 300.0                # and the longest wait a grange may ask for
 GRACE = 60.0                      # a grange that was answering and stops is given this long to be back
 RETRY_SOON = 5.0                  # (it may be restarting), and is asked this often meanwhile
 SPACING = 1.0                     # the least from one question to the next, however fast the answers come
-# A GitHub login: letters, digits and single hyphens, not at either end, 39 at the most. An
-# agent's owner is used as one (whose card it is on, whether a move is theirs), so nothing
-# else is taken for an owner: not "team/o/platform", which is how a team is written here.
-LOGIN = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}")
+# A GitHub login: letters, digits and single hyphens, not at either end, 39 at the most; and
+# a single underscore as a hyphen may be, which the logins an enterprise manages have
+# ("mira_acme"). An agent's owner is used as a login (whose card it is on, whether a move is
+# theirs), so nothing else is taken for an owner: not "team/o/platform", which is how a team
+# is written here, nor anything with a space in it.
+LOGIN = re.compile(r"[A-Za-z0-9](?:[-_]?[A-Za-z0-9]){0,38}")
 
 
 @dataclass(frozen=True)
