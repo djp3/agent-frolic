@@ -490,6 +490,39 @@ async def test_on_the_board_an_agent_keeps_its_number_when_the_one_before_it_end
 
 
 @drive
+async def test_a_repository_that_is_removed_takes_its_reading_with_it_and_settles_the_tie(isolated):
+    """Hidden, a repository's reading is kept, and still counts when two pull requests carry
+    one ticket: hiding does not say which was meant. Removed, it is gone for good, its side of
+    the tie with it, and a read of it that ends afterwards is not kept either."""
+    a_board()
+    FakePulls.open_["o/web"] = [node(98, "proj-86-pr-98-too", author={"login": "kenji"}, baseRefOid=TIP)]
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "proj-86-pr-98", "busy")))
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        assert app.board.pic.agents == {}                        # two carry it: it is on neither
+        app.show_repo("o/web", False)
+        await pilot.pause(0.3)
+        assert app.board.pic.agents == {} and "o/web" in app.pulls     # hidden: still a tie
+        late = app.pulls["o/web"]
+        await to_setup(app, pilot)
+        await pilot.press("down")
+        assert app.selected().name == "o/web"
+        await pilot.press("x")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert app.store.get("o/web") is None and "o/web" not in app.pulls
+        app.pulls_known("o/web", late, app.token_used)           # a read of it that ends only now
+        assert "o/web" not in app.pulls
+        await pilot.press("s")
+        await pilot.pause(0.3)
+        assert list(app.board.pic.agents) == [("o/app", 98)]     # removed: the tie is settled
+
+
+@drive
 async def test_the_grange_is_asked_on_the_port_in_the_settings(isolated):
     a_board(port=7790)
     app = main.Frolic()
