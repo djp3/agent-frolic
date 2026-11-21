@@ -75,7 +75,10 @@ if [ -z "$DIR" ] || [ -n "$(wrong_in "$DIR")" ]; then
         || die "swift package resolve failed"
     DIR=$(find_dir)
 fi
-[ -n "$DIR" ] || die "no Sparkle tools under macos/.build/artifacts, though the packages are resolved"
+# (When only the artifacts folder was removed, SwiftPM still has it on record as fetched, and
+# resolving fetches nothing: the record has to go too.)
+[ -n "$DIR" ] || die "no Sparkle tools under macos/.build/artifacts, though the packages are resolved.
+SwiftPM may believe it still has them: in macos/, run 'swift package reset' (or remove macos/.build), then try again"
 WRONG=$(wrong_in "$DIR" | tr '\n' ' ')
 [ -z "$WRONG" ] || die "not the pinned files of Sparkle $VER, refusing to use them: $WRONG(in $DIR/bin)"
 for tool in $TOOLS; do

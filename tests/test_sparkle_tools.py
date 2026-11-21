@@ -75,6 +75,7 @@ def test_a_checkout_not_built_yet_has_swiftpm_fetch_what_is_pinned_and_nothing_n
     assert asked_of_swift(tree) == ["package --only-use-versions-from-resolved-file resolve"]
     assert got.returncode == 1 and got.stdout == ""                    # this stand-in swift fetches nothing
     assert "no Sparkle tools under macos/.build/artifacts" in got.stderr
+    assert "swift package reset" in got.stderr                         # what to do when SwiftPM thinks it has them
 
 
 def test_a_version_of_sparkle_with_no_pinned_hashes_is_refused_before_anything_is_fetched(tmp_path):
