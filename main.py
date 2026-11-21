@@ -644,11 +644,18 @@ class Frolic(App):
     def agents_here(self) -> int:
         """How many of the reported agents are on a pull request the board shows. The setup
         says it, and is drawn every second: it is worked out again only when the report, the
-        shown repositories or a reading has changed (a new reading is a new object)."""
+        shown repositories or a reading has changed (a new reading is a new object).
+
+        The readings it was counted from are kept, and known again by being the same
+        objects. Known by where they lie in memory alone, one that had been let go could be
+        taken for a later one that came to lie in its place, and the old count be said."""
         names = tuple(repo.name for repo in self.store.shown())
-        asked = (self.reported, names, tuple(map(id, self.pulls.values())))
-        if self.here_for != asked:
-            self.here_for, self.here = asked, len(located_in(self.reported, names, self.pulls))
+        readings = tuple(self.pulls.values())
+        last = self.here_for
+        if not (last is not None and last[0] == self.reported and last[1] == names
+                and len(last[2]) == len(readings) and all(was is now for was, now in zip(last[2], readings))):
+            self.here_for = (self.reported, names, readings)
+            self.here = len(located_in(self.reported, names, self.pulls))
         return self.here
 
     def agents_amiss(self) -> str:

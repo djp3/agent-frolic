@@ -3,6 +3,7 @@
 """The team's agents, from what the agent-grange reports to where they are drawn: which
 pull request an agent is on, what it is doing there, and how the app keeps asking."""
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -516,6 +517,10 @@ async def test_the_setup_says_what_the_grange_reports(isolated):
         counted = app.here_for
         app.setup.draw()
         assert app.here_for is counted                           # drawn again: not counted again
+        assert all(kept is app.pulls[key] for kept, key in zip(counted[2], app.pulls))   # the readings themselves
+        app.pulls["o/web"] = replace(app.pulls["o/web"])         # read again: the same within, another object
+        app.setup.draw()
+        assert app.here_for is not counted and app.here_for[2][1] is app.pulls["o/web"]
         app.show_repo("o/app", False)                            # a repository hidden: counted afresh
         await pilot.pause(0.1)
         assert "4 reported · 0 on the pull requests shown here" in screen(app)
