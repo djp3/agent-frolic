@@ -614,7 +614,7 @@ def test_the_longer_waits_begin_at_their_beginning_once_the_minute_of_asking_oft
     """The dozen tries of that minute were counted toward the doubling: the first wait after
     it was already the longest there is, five minutes, for a grange that may be back at once."""
     clock = [1000.0]
-    monkeypatch.setattr(grange.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(grange, "now", lambda: clock[0])
     refused = lambda: GrangeError("trouble", "refused the question (HTTP 500)")          # noqa: E731
 
     class Ticking(Scripted):
@@ -626,6 +626,77 @@ def test_the_longer_waits_begin_at_their_beginning_once_the_minute_of_asking_oft
     often = [w for w in waits if w == grange.RETRY_SOON]
     assert len(often) == 12                                              # the minute, asked every five seconds
     assert [w for w in waits if w][12:16] == [15, 30, 60, 120]           # and then from the beginning
+
+
+class Stepping(Scripted):
+    """A scripted grange on a clock of the test's own: each try comes `step` seconds on."""
+
+    def __init__(self, clock, step, *answers):
+        super().__init__(*answers)
+        self.clock, self.step = clock, step
+
+    def read(self, after=None, wait=grange.WAIT):
+        self.clock[0] += self.step
+        return super().read(after, wait)
+
+
+def lost_after(monkeypatch, step, *answers) -> tuple[list, list]:
+    """Run a watch over these answers, each try `step` seconds after the last by its clock.
+    What happened, in order ("answer", an error's kind, or "lost"), and the waits it asked for."""
+    clock, happened = [1000.0], []
+    monkeypatch.setattr(grange, "now", lambda: clock[0])
+    there = Stepping(clock, step, *answers)
+    watch = Watch(there, lambda reading: happened.append("answer"), lambda wrong: happened.append(wrong.kind),
+                  lambda: happened.append("lost"))
+    watch.stopped = waited = Recorded()
+    watch.start()
+    end = time.monotonic() + 5
+    while there.answers and time.monotonic() < end:
+        time.sleep(0.005)
+    watch.stop()
+    watch.join(5)
+    assert not watch.is_alive()
+    return happened, waited.waits
+
+
+def test_a_grange_silent_for_its_minute_is_said_to_be_lost_once(monkeypatch):
+    """The minute is the watch's to keep, and nobody else's: it says when it is over."""
+    down = lambda: GrangeError("down", "nothing there", retry=grange.RETRY_DOWN)         # noqa: E731
+    happened, _ = lost_after(monkeypatch, 5.0, Reading(4, "djp3", ()), *(down() for _ in range(16)))
+    assert happened[0] == "answer" and happened.count("lost") == 1
+    assert happened[1:14] == ["down"] * 13                               # every five seconds, to the minute's end
+    assert happened[14:] == ["lost"] + ["down"] * 3                      # said then, and never again
+
+
+def test_the_minute_runs_from_the_first_failure_whatever_kind_the_later_ones_are(monkeypatch):
+    kinds = ["trouble", "down", "trouble", "stale", "down", "down", "down"]
+    happened, _ = lost_after(monkeypatch, 10.0, Reading(4, "djp3", ()),
+                             *(GrangeError(kind, kind, retry=1) for kind in kinds))
+    assert happened == ["answer", "trouble", "down", "trouble", "stale", "down", "down", "down", "lost"]
+
+
+def test_a_grange_that_never_answered_is_never_lost(monkeypatch):
+    down = lambda: GrangeError("down", "nothing there", retry=grange.RETRY_DOWN)         # noqa: E731
+    happened, _ = lost_after(monkeypatch, 30.0, *(down() for _ in range(6)))
+    assert happened == ["down"] * 6
+
+
+def test_a_grange_back_within_its_minute_is_not_lost_and_one_lost_twice_is_said_twice(monkeypatch):
+    down = lambda: GrangeError("down", "nothing there", retry=grange.RETRY_DOWN)         # noqa: E731
+    one = Reading(4, "djp3", ())
+    happened, _ = lost_after(monkeypatch, 25.0, one, down(), down(), one, *(down() for _ in range(4)), one,
+                             *(down() for _ in range(4)))
+    assert happened == ["answer", "down", "down", "answer", "down", "down", "down", "down", "lost", "answer",
+                        "down", "down", "down", "down", "lost"]
+
+
+def test_when_its_minute_ends_it_is_asked_once_more_whatever_it_asked_to_wait(monkeypatch):
+    """One that says it is out of date asks to be left a minute, or five. It is asked at the
+    end of its minute all the same, so that it is not called lost a moment before it is back."""
+    stale = lambda: GrangeError("stale", "out of date", retry=300)                        # noqa: E731
+    happened, waits = lost_after(monkeypatch, 20.0, Reading(4, "djp3", ()), stale(), stale(), stale(), stale())
+    assert happened == ["answer", "stale", "stale", "stale", "stale", "lost"]
+    assert waits[:4] == [60, 40, 20, 300]                               # to the end of its minute, then as it asked
 
 
 def test_a_grange_restarted_is_asked_with_whatever_cursor_it_gave_last():

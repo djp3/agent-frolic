@@ -59,7 +59,7 @@ def stand_ins(monkeypatch):
     monkeypatch.setattr(main, "wait_reachable", lambda url, nonce, **how: True)
     FakeBrowser.opened, FakeBrowser.broken = [], None
     monkeypatch.setattr(main, "open_page", FakeBrowser.open)
-    FakeGrange.answers, FakeGrange.asked, FakeGrange.made = queue.Queue(), [], []
+    FakeGrange.answers, FakeGrange.asked, FakeGrange.made, FakeGrange.failing = queue.Queue(), [], [], None
     monkeypatch.setattr(main, "Grange", FakeGrange)
     monkeypatch.setattr(grange, "SPACING", 0.0)   # the stand-ins answer at once: no test waits out the gap
     yield

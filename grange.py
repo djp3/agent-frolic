@@ -73,6 +73,12 @@ SPACING = 1.0                     # the least from one question to the next, how
 LOGIN = re.compile(r"[A-Za-z0-9](?:[-_]?[A-Za-z0-9]){0,38}")
 
 
+def now() -> float:
+    """The clock the watch counts on: one that stands still while the Mac sleeps, so that a
+    minute of silence is a minute awake."""
+    return time.monotonic()
+
+
 @dataclass(frozen=True)
 class Reported:
     """One agent, as its farm reported it."""
@@ -271,13 +277,20 @@ def out_of_date(data: object, retry: float = RETRY_DOWN) -> GrangeError:
 
 class Watch(threading.Thread):
     """Keeps asking the grange, from a thread of its own, and hands on what it learns:
-    `on_reading` gets each answer, `on_error` each failure. Both are called on this thread.
+    `on_reading` gets each answer, `on_error` each failure, and `on_lost` is told, once,
+    when a grange that was answering has been silent for GRACE: what it last said is not
+    to be believed any longer. All three are called on this thread.
+
+    That minute is kept here and nowhere else. It runs from the first failure after an
+    answer, on the clock that stands still while the Mac sleeps, and when it ends the
+    grange is asked once more before anything is said: so a question is always due at
+    its end, whatever the failures before it asked to wait.
 
     An answer's cursor goes with the next question, so that one is held until the picture
     changes. After a failure the next question comes when the error says it is worth it,
     and carries no cursor: whatever is there then is news. A grange that was answering and
     has stopped is asked sooner than that, every RETRY_SOON seconds for GRACE: it may be
-    restarting, and the app keeps what it last said only that long. Trouble that goes on
+    restarting. Trouble that goes on
     past that, or on a port where no grange ever answered, is asked about less and less
     often: each try that fails waits twice as long as the one before, RETRY_MOST at the
     most. It may be something else that listens there, and that is not to be asked every
@@ -289,44 +302,54 @@ class Watch(threading.Thread):
     questions are still SPACING apart, not one on the heels of the last."""
 
     def __init__(self, grange: Grange, on_reading: Callable[[Reading], None],
-                 on_error: Callable[[GrangeError], None]) -> None:
+                 on_error: Callable[[GrangeError], None], on_lost: Callable[[], None] = lambda: None) -> None:
         super().__init__(name="grange-watch", daemon=True)
         self.grange = grange
         self.on_reading = on_reading
         self.on_error = on_error
+        self.on_lost = on_lost
         self.stopped = threading.Event()
 
     def run(self) -> None:
         cursor: int | None = None
         answering = False                 # its last try was answered
         lost_at: float | None = None      # when a grange that was answering first failed to
+        told = False                      # that it is lost has been said, for this time it was
         troubled = 0                      # tries in a row that ended in trouble
         while not self.stopped.is_set():
-            wait, asked_at = 0.0, time.monotonic()
+            wait, asked_at = 0.0, now()
             try:
                 try:
                     reading = self.ask(cursor)
                 except GrangeError as e:
                     if e.kind == "closed":
                         return
+                    at = now()
                     if answering:
-                        answering, lost_at = False, time.monotonic()
+                        answering, lost_at, told = False, at, False
                     cursor, wait = None, e.retry
-                    if (lost_at is not None and e.kind in ("down", "trouble")
-                            and time.monotonic() - lost_at < GRACE):
-                        # Asked often, and none of these tries counts toward the longer
-                        # waits: those begin at their beginning once this minute is over.
-                        wait, troubled = min(wait, RETRY_SOON), 0
+                    left = GRACE - (at - lost_at) if lost_at is not None else 0.0
+                    if left > 0:
+                        # Its minute: asked often (unless it has said it is out of date, and
+                        # for how long to leave it), and asked when the minute ends, whatever
+                        # it asked to wait. None of these tries counts toward the longer
+                        # waits: those begin at their beginning once the minute is over.
+                        if e.kind in ("down", "trouble"):
+                            wait = min(wait, RETRY_SOON)
+                        wait, troubled = min(wait, left), 0
                     else:
                         troubled = troubled + 1 if e.kind == "trouble" else 0
                         if troubled > 1:
                             wait = min(wait * 2 ** min(troubled - 1, 16), RETRY_MOST)
                     self.on_error(e)
+                    if lost_at is not None and left <= 0 and not told:
+                        told = True
+                        self.on_lost()
                 else:
                     answering, lost_at, troubled = True, None, 0
                     cursor = reading.cursor
                     self.on_reading(reading)
-                    wait = max(0.0, SPACING - (time.monotonic() - asked_at))
+                    wait = max(0.0, SPACING - (now() - asked_at))
             except Exception:                       # a mistake in what was handed the news: it is
                 log.exception("watching the agent-grange failed")    # logged, and the watch goes on
                 cursor, wait = None, RETRY_DOWN

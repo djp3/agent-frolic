@@ -177,6 +177,7 @@ class FakeGrange:
     answers: "queue.Queue" = queue.Queue()
     asked: list[tuple[int, int | None]] = []      # each question: the port, and the cursor it came with
     made: list["FakeGrange"] = []
+    failing: Exception | None = None              # set, every question fails so, once the answers are used up
 
     def __init__(self, port=7788):
         self.port, self.closed = port, threading.Event()
@@ -188,6 +189,8 @@ class FakeGrange:
             try:
                 answer = FakeGrange.answers.get(timeout=0.01)
             except queue.Empty:
+                if FakeGrange.failing is not None:
+                    raise FakeGrange.failing
                 continue
             if isinstance(answer, Exception):
                 raise answer

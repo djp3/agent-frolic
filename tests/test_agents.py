@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import pytest
 
 import board
+import grange
 import keychain
 import main
 from canvas import plain
@@ -455,6 +456,19 @@ def a_board(port=None):
         Settings(grange_port=port).save()
 
 
+def watch_clock(monkeypatch) -> list:
+    """The clock the watch counts a silent grange's minute on, in the test's hands: `[0]` is
+    the time by it. (The watch still waits between its tries by the real one.)"""
+    clock = [1000.0]
+    monkeypatch.setattr(grange, "now", lambda: clock[0])
+    return clock
+
+
+def failing(kind: str, said: str, **more) -> None:
+    """From now on every question to the grange fails so, and is asked again at once."""
+    FakeGrange.failing = GrangeError(kind, said, retry=0.01, **more)
+
+
 def ticker(app) -> str:
     """The board's ticker line, as drawn (the line above the hints)."""
     return screen(app).splitlines()[-2].rstrip()
@@ -674,24 +688,25 @@ async def test_a_grange_out_of_date_is_said_on_the_board_and_the_setup_says_how_
 
 
 @drive
-async def test_the_board_does_not_say_no_agents_are_shown_while_they_still_are(isolated):
+async def test_the_board_does_not_say_no_agents_are_shown_while_they_still_are(isolated, monkeypatch):
     """A grange that was answering and is found out of date: what it last reported stays its
     minute, and the board said "no agents shown" from the first second of it."""
+    clock = watch_clock(monkeypatch)
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(170, 46)) as pilot:
         await settle(app, pilot)
         FakeGrange.answers.put(team(*THE_TEAM))
         await until(pilot, lambda: app.reported)
-        FakeGrange.answers.put(out_of_date({"error": "image out of date", "fix": "make update"}, retry=30))
+        FakeGrange.failing = out_of_date({"error": "image out of date", "fix": "make update"}, retry=0.01)
         await until(pilot, lambda: app.grange_state == "stale")
         await pilot.pause(0.3)
         assert len(app.reported) == 4 and app.agents_amiss() == "agent-grange is out of date · s to fix"
         assert "no agents shown" not in ticker(app) and "agent 01" in screen(app)
-        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # its minute is over
-        app.tick()
+        clock[0] += grange.GRACE + 1                             # its minute is over
+        await until(pilot, lambda: app.reported == ())
         await pilot.pause(0.3)
-        assert app.reported == () and app.agents_amiss() == "agent-grange is out of date: no agents shown · s to fix"
+        assert app.agents_amiss() == "agent-grange is out of date: no agents shown · s to fix"
         assert ticker(app).endswith("✗ " + app.GRANGE_STALE) and "agent 01" not in screen(app)
 
 
@@ -720,33 +735,37 @@ async def test_what_the_grange_says_of_itself_takes_one_row_a_line_however_long_
 
 
 @drive
-async def test_what_was_last_reported_stays_for_a_minute_once_the_grange_stops_answering(isolated):
+async def test_what_was_last_reported_stays_for_a_minute_once_the_grange_stops_answering(isolated, monkeypatch):
+    clock = watch_clock(monkeypatch)
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(170, 46)) as pilot:
         await settle(app, pilot)
         FakeGrange.answers.put(team(*THE_TEAM))
         await until(pilot, lambda: app.reported)
-        FakeGrange.answers.put(GrangeError("trouble", "The agent-grange on this Mac did not answer.", retry=30))
+        failing("trouble", "The agent-grange on this Mac did not answer.")
         await until(pilot, lambda: app.grange_state == "trouble")
-        app.tick()
+        clock[0] += grange.GRACE - 1                             # nearly its minute, and still asked
+        asked = len(FakeGrange.asked)
+        await until(pilot, lambda: len(FakeGrange.asked) > asked + 2)
         assert len(app.reported) == 4                            # a grange being restarted is back by then
         await to_setup(app, pilot)
         drawn = screen(app)
         assert "✗ The agent-grange on this Mac did not answer." in drawn and "4 reported" in drawn
         assert "as of" in drawn
-        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # a minute on
-        app.tick()
-        await pilot.pause()
-        assert app.reported == () and app.grange_reading is None and "4 reported" not in screen(app)
+        clock[0] += 2                                            # the minute is over: the watch says so
+        await until(pilot, lambda: app.reported == ())
+        await pilot.pause(0.1)
+        assert app.grange_reading is None and "4 reported" not in screen(app)
         assert "agent-grange has not answered for a minute: the 4 agents it reported are no longer shown" in [
             said for _, said, _ in app.lines]
         assert app.agents_amiss() == "agent-grange stopped answering: no agents shown"
 
 
 @drive
-async def test_the_minute_is_counted_from_the_first_failure_not_from_the_last_answer(isolated):
+async def test_the_minute_is_counted_from_the_first_failure_not_from_the_last_answer(isolated, monkeypatch):
     """After the Mac has slept, the last answer is hours old when the first failure comes."""
+    clock = watch_clock(monkeypatch)
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(150, 40)) as pilot:
@@ -754,38 +773,40 @@ async def test_the_minute_is_counted_from_the_first_failure_not_from_the_last_an
         FakeGrange.answers.put(team(*THE_TEAM))
         await until(pilot, lambda: app.reported)
         app.grange_read_at -= 2 * 3600                           # two hours asleep
+        clock[0] += 2 * 3600
         for kind in ("trouble", "down"):                         # the held question drops, then nothing listens
-            FakeGrange.answers.put(GrangeError(kind, f"The agent-grange on this Mac: {kind}.", retry=0.01))
+            failing(kind, f"The agent-grange on this Mac: {kind}.")
             await until(pilot, lambda: app.grange_state == kind)
+            clock[0] += 20                                       # not moved on by the second kind of failure
             app.tick()
-            assert len(app.reported) == 4 and app.notice_now() == ""
-        first = app.grange_failed_at
-        assert time.monotonic() - first < 30                     # counted from the first failure, and not
-        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # moved on by the second
-        app.tick()
-        assert app.reported == () and app.agents_amiss() == app.GRANGE_LOST
+            assert len(app.reported) == 4 and app.agents_amiss() == ""
+        clock[0] += 25                                           # 65 seconds since the first failure
+        await until(pilot, lambda: app.reported == ())
+        assert app.agents_amiss() == app.GRANGE_LOST
 
 
 @drive
 async def test_a_failure_just_before_the_mac_sleeps_does_not_cost_the_agents_on_waking(isolated, monkeypatch):
     """The wall clock moves on while the Mac sleeps, and the clock the watch counts on does
     not. Counted on the first, the minute was long over on waking, before the watch, still
-    inside its own, had asked once more."""
+    inside its own, had asked once more. Only the watch counts it now."""
+    clock = watch_clock(monkeypatch)
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(150, 40)) as pilot:
         await settle(app, pilot)
         FakeGrange.answers.put(team(*THE_TEAM))
         await until(pilot, lambda: app.reported)
-        FakeGrange.answers.put(GrangeError("trouble", "The agent-grange on this Mac did not answer.", retry=30))
+        failing("trouble", "The agent-grange on this Mac did not answer.")
         await until(pilot, lambda: app.grange_state == "trouble")
         asleep = time.time() + 2 * 3600
         monkeypatch.setattr(main.time, "time", lambda: asleep)   # two hours on, by the wall clock alone
         app.tick()
-        assert len(app.reported) == 4 and app.notice_now() == ""
-        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # and a minute awake does cost them
-        app.tick()
-        assert app.reported == ()
+        asked = len(FakeGrange.asked)
+        await until(pilot, lambda: len(FakeGrange.asked) > asked + 2)
+        assert len(app.reported) == 4 and app.agents_amiss() == ""
+        clock[0] += grange.GRACE + 1                             # and a minute awake does cost them
+        await until(pilot, lambda: app.reported == ())
 
 
 @drive
@@ -802,8 +823,7 @@ async def test_a_grange_that_answers_again_within_the_minute_loses_nothing(isola
         assert "✗ No agent-grange is running on this Mac (port 7788)." in screen(app) and "4 reported" in screen(app)
         FakeGrange.answers.put(team(*THE_TEAM, cursor=1))        # restarted: its cursor starts again
         await until(pilot, lambda: app.grange_state == "ok")
-        assert app.grange_failed_at == 0.0                       # the count of its silence starts afresh
-        app.grange_read_at -= app.GRANGE_GRACE_S + 1
+        app.grange_read_at -= 2 * 3600
         app.tick()                                               # however long ago: it is answering
         assert len(app.reported) == 4 and FakeGrange.asked[-2:] == [(7788, None), (7788, 1)]
         assert [said for _, said, _ in app.lines].count("agent-grange answers: 3 granges, 4 agents") == 2

@@ -42,7 +42,8 @@ until its picture changes, so an agent that starts or stops shows within moments
 answer is the whole picture and replaces the last; the board's picture puts each agent on
 the pull request its name says (picture.placed). A Mac with no grange is no trouble: the
 board is then of people and teams alone. When a grange that was answering stops, what it
-last reported stays for a minute and is then let go.
+last reported stays for a minute and is then let go: the thread that asks keeps that
+minute, and says when it is over.
 
 Setup keys: t paste a token, f forget it, a add a repository, up/down pick one, shift+up /
 shift+down (or [ and ]) move it up or down the list, space show or hide it, x remove it,
@@ -89,7 +90,7 @@ from apppaths import app_version, log_dir
 from board import Board, fit_hints, remember_change
 from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
-from grange import GRACE, Grange, GrangeError, Reading, Reported, Watch
+from grange import Grange, GrangeError, Reading, Reported, Watch
 from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, located_in, quiet, review_marks
 from pulls import PullRequest, RepoPulls, fetch_pulls, is_team, span, stack, team_of, team_slug
 from repos import Repo, RepoStore, parse
@@ -337,9 +338,6 @@ class Frolic(App):
     OPEN_AGAIN_S = 2.0            # o on the same pull request sooner than this after the last o is the key repeating
     NOTICE_S = 3.0                # how long a word about what the user just did takes the ticker's line,
     NOTICE_FAILED_S = 10.0        # and how long when it says that it failed
-    GRANGE_GRACE_S = GRACE        # how long the agents last reported stay on the board once the grange
-                                  # stops answering, counted from when it first failed to. The watch
-                                  # asks it often for as long (grange.RETRY_SOON)
     GRANGE_STALE = "agent-grange is out of date: no agents shown · s to fix"     # kept short: they share
     GRANGE_STALE_YET = "agent-grange is out of date · s to fix"                 # the ticker's line. (YET:
     GRANGE_LOST = "agent-grange stopped answering: no agents shown"             # its last report still shows)
@@ -445,8 +443,6 @@ class Frolic(App):
         self.grange_reading: Reading | None = None    # its last answer, for as long as that is believed
         self.grange_read_at = 0.0                 # when that answer came
         self.grange_ever = False                  # a grange has answered on that port since the app began
-        self.grange_failed_at = 0.0               # when it first failed to answer, since it last did: by
-                                                  # time.monotonic(), the clock the watch counts on
         self.watch: Watch | None = None           # the thread that asks it, from mount to unmount
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
@@ -521,13 +517,6 @@ class Frolic(App):
             if time.time() >= at:
                 del self.hook_read_due[key]
                 self.read_for_webhook(key)
-        # Counted on the clock that stands still while the Mac sleeps, as the watch counts its
-        # own minute of asking often (grange.Watch): on the wall clock a failure just before
-        # the lid closed would be hours old on waking, and the agents gone before the watch
-        # had asked once more.
-        if (self.grange_reading is not None and self.grange_state != "ok"
-                and time.monotonic() >= self.grange_failed_at + self.GRANGE_GRACE_S):
-            self.forget_agents()
         self.draw()
 
     # ---- each repository's timer -----------------------------------------------------------
@@ -608,14 +597,15 @@ class Frolic(App):
         the setup says so, and the board is of people and teams alone."""
         self.watch = Watch(Grange(self.settings.grange_port),
                            lambda reading: self.later(self.grange_answered, reading),
-                           lambda wrong: self.later(self.grange_failed, wrong))
+                           lambda wrong: self.later(self.grange_failed, wrong),
+                           lambda: self.later(self.forget_agents))
         self.watch.start()
 
     def grange_answered(self, reading: Reading) -> None:
         """The grange's picture of the team: it replaces the one before, whole."""
         back = self.grange_state != "ok"
         self.grange_state, self.grange_wrong, self.grange_ever = "ok", None, True
-        self.grange_reading, self.grange_read_at, self.grange_failed_at = reading, time.time(), 0.0
+        self.grange_reading, self.grange_read_at = reading, time.time()
         self.reported = tuple(reading.reported())
         if back:
             granges, agents = len(reading.granges), len(self.reported)
@@ -625,16 +615,14 @@ class Frolic(App):
 
     def grange_failed(self, wrong: GrangeError) -> None:
         """The grange did not answer, or refused. It is said once, not at every try. What it
-        last reported stays on the board for a while yet (GRANGE_GRACE_S, see `tick`): a
-        grange being restarted is back within that. The while is counted from this first
-        failure, not from its last answer: after the Mac has slept that answer is hours
-        old, and the grange is asked again within moments of waking. Finding no grange
-        when none has ever answered is how things are on a Mac without one, and is no
-        trouble; nor is finding something else on its port, which the watch then asks
-        less and less often."""
+        last reported stays on the board for a while yet: a grange being restarted is back
+        within a minute. That minute is the watch's to keep (grange.Watch), from its first
+        failure, on a clock that stands still while the Mac sleeps; when it is over the
+        watch says so, and `forget_agents` lets the report go. Finding no grange when none
+        has ever answered is how things are on a Mac without one, and is no trouble; nor
+        is finding something else on its port, which the watch then asks less and less
+        often."""
         before = self.grange_wrong
-        if not self.grange_failed_at:
-            self.grange_failed_at = time.monotonic()
         if before is None or (wrong.kind, wrong.said) != (before.kind, before.said):
             plain = wrong.kind in ("down", "trouble") and not self.grange_ever
             self.say(wrong.said, INK2 if plain else INK)
@@ -675,13 +663,15 @@ class Frolic(App):
         return ""
 
     def forget_agents(self) -> None:
-        """The grange has not answered for too long: what it last said is no longer shown."""
+        """The grange has not answered for too long, the watch says: what it last said is no
+        longer shown."""
         had = len(self.reported)
         self.grange_reading, self.reported = None, ()
         self.agent_numbers.clear()
         if had:
             self.say(f"agent-grange has not answered for a minute: the {had} "
                      f"agent{'' if had == 1 else 's'} it reported {'is' if had == 1 else 'are'} no longer shown", INK)
+        self.draw()
 
     # ---- the terminal's title ----------------------------------------------------------
     def watched(self) -> int:
