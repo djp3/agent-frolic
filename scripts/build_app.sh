@@ -94,6 +94,17 @@ cp LICENSE NOTICE "$APP/Contents/Resources/"
 # copy of the app: the licenses say so. The build stops if the folder in the app is not whole.
 cp -R credits "$APP/Contents/Resources/credits"
 scripts/check_credits.sh "$APP/Contents/Resources/credits"
+# Other people's programs inside the app come under licenses of their own. Those of the two
+# the Swift host links ask that their text go with every copy: Sparkle's, which has with it
+# the notices of what Sparkle itself carries, and SwiftTerm's. They are taken from the very
+# packages this copy was built from, so they are the licenses of the versions inside it. A
+# build that cannot find one stops here.
+mkdir -p "$APP/Contents/Resources/licenses"
+for package in Sparkle SwiftTerm; do
+    [ -s "macos/.build/checkouts/$package/LICENSE" ] \
+        || { echo "no license text for $package under macos/.build/checkouts" >&2; exit 1; }
+    cp "macos/.build/checkouts/$package/LICENSE" "$APP/Contents/Resources/licenses/$package.txt"
+done
 sed "s/__VERSION__/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
 if [ "${WITH_UPDATES:-0}" != 1 ]; then
     # A copy built to try a change is not to replace itself with the published release, which
