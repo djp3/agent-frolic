@@ -50,6 +50,7 @@ import itertools
 import math
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Iterable, Mapping, Protocol
 
@@ -180,8 +181,15 @@ def carries(pull: PullRequest, ticket: str) -> bool:
     """Whether a pull request's branch or title has this ticket in it: "proj-86", and not
     as the start of "proj-860" or the end of "xproj-86" or "x_proj-86", which are other
     tickets."""
-    there = re.compile(rf"(?<![a-z0-9_]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
+    there = _carrying(ticket)
     return bool(there.search(pull.head) or there.search(pull.title))
+
+
+@lru_cache(maxsize=4096)
+def _carrying(ticket: str) -> re.Pattern:
+    """The search for one ticket, made once: it is asked of every pull request that has the
+    number, for every agent that names it, each time a picture is built or the setup counts."""
+    return re.compile(rf"(?<![a-z0-9_]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
 
 
 def located(reported: Iterable[Report], pulls: Iterable[PullRequest],

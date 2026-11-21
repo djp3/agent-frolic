@@ -109,6 +109,14 @@ def test_a_ticket_is_not_found_inside_a_longer_one(branch, there):
     assert carries(pull, "proj-86") is there
 
 
+def test_the_search_for_a_ticket_is_made_once_however_often_it_is_asked():
+    pictures._carrying.cache_clear()
+    pull = parse_pull("o/app", node(98, "proj-86-pr-98"))
+    assert all(carries(pull, "proj-86") for _ in range(50)) and not carries(pull, "proj-87")
+    assert (pictures._carrying.cache_info().misses, pictures._carrying.cache_info().hits) == (2, 49)
+    assert carries(pull, "PROJ-86")                                               # another spelling, another search
+
+
 def test_an_agent_is_not_put_on_a_pull_request_whose_ticket_only_ends_as_its_own_does():
     other = {"o/app": read("o/app", [node(98, "x_proj-86-pr-98-deploy")])}
     pic = Picture(["o/app"], other, "djp3", reported=(Reported("djp3", "proj-86-pr-98", "busy"),))
