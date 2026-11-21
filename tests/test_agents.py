@@ -175,7 +175,18 @@ def test_what_an_agent_is_at_is_said_on_its_line_of_the_list():
 def test_two_sessions_with_one_name_are_two_agents():
     twice = Reported("djp3", "proj-86-pr-98", "busy")
     assert [(a.serial, a.key) for a in picture(twice, twice).agents[("o/app", 98)]] == [
-        ("01", ("djp3", "o/app", 98, "proj-86-pr-98")), ("02", ("djp3", "o/app", 98, "proj-86-pr-98 ·2"))]
+        ("01", ("djp3", "o/app", 98, "proj-86-pr-98")), ("02", ("djp3", "o/app", 98, "proj-86-pr-98\x002"))]
+
+
+def test_no_two_agents_are_known_by_the_same_thing_whatever_they_are_named():
+    """The second of two sessions with one name was known as "name ·2", and a third session
+    may be named exactly that: two agents with one key, and tab could not step past them."""
+    named = ("proj-86-pr-98", "proj-86-pr-98", "proj-86-pr-98 ·2", "proj-86-pr-98 2", "proj-86-pr-98 ·2")
+    pic = picture(*(Reported("djp3", name, "busy") for name in named))
+    agents = pic.agents[("o/app", 98)]
+    assert len(agents) == 5 and len({a.key for a in agents}) == 5
+    steps = [f for f in focuses(pic) if f.kind == "agent"]
+    assert len(steps) == len(set(steps)) == 5                                     # each a stop of its own
 
 
 def test_an_agent_is_known_by_its_name_when_one_before_it_ends_so_a_focus_on_it_stays():

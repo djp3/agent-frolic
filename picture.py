@@ -204,7 +204,10 @@ def placed(picture: "Picture", reported: Iterable[Report]) -> dict[Key, list[Age
         for at, (one, pull) in enumerate(crew, 1):
             role = "author" if one.owner.lower() == pull.author.lower() else "review"
             seen[one.name] = nth = seen.get(one.name, 0) + 1
-            ident = one.name if nth == 1 else f"{one.name} ·{nth}"       # the second of two with one name
+            # The second of two with one name is known by the name and its place among them,
+            # set apart by a character no name can have (control characters are taken out of
+            # all the grange sends): written with ordinary ones, it could be a third's name.
+            ident = one.name if nth == 1 else f"{one.name}\x00{nth}"
             out.setdefault(key, []).append(Agent(one.owner, f"{at:02d}", pull.repo, pull.number, role,
                                                  doing(picture, one, pull, role), words(one.name), ident))
     for agents in out.values():
