@@ -1816,8 +1816,9 @@ class Frolic(App):
         wide = self.setup.query_one("#agents", Static).size.width if self.setup.is_mounted else 0
         room = max(24, (wide or 400) - 15)            # what a line has after its label and its mark
         if wrong is None:
-            out.append("✓ ", style=GOOD).append(f"answers on 127.0.0.1:{port}", style=INK)
-            out.append(f" as {reading.grange}" if reading.grange else "", style=INK2)
+            said = f"answers on 127.0.0.1:{port}"
+            out.append("✓ ", style=GOOD).append(said, style=INK)
+            out.append(cut(f" as {reading.grange}", max(0, room - len(said))) if reading.grange else "", style=INK2)
         elif wrong.kind == "down" and not self.grange_ever:   # as on any Mac without one: no trouble
             out.append(f"none is running on this Mac (port {port})", style=INK2)
             return out.append("   agent-grange brings your team's agents onto the board", style=MUTED)
@@ -1849,10 +1850,11 @@ class Frolic(App):
             out.append(f" · as of {age(self.grange_read_at)} ago", style=MUTED)
         here, agents = self.agents_here(), len(self.reported)
         out.append("\n   agents    ", style=MUTED)
-        out.append(f"{agents} reported", style=INK2)
-        if agents:
-            out.append(f" · {here} on the pull requests shown here", style=INK2)
-            out.append("   by the ticket and number in their names: proj-86-pr-98", style=MUTED)
+        said = f"{agents} reported" + (f" · {here} on the pull requests shown here" if agents else "")
+        out.append(said, style=INK2)
+        how = "   by the ticket and number in their names: proj-86-pr-98"
+        if agents and len(said) + len(how) <= room + 2:       # said when there is room: the line keeps its row
+            out.append(how, style=MUTED)
         return out
 
     def log_text(self) -> Text:

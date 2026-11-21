@@ -735,6 +735,25 @@ async def test_what_the_grange_says_of_itself_takes_one_row_a_line_however_long_
 
 
 @drive
+async def test_a_granges_own_name_takes_one_row_too_however_long_it_is(isolated):
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        await to_setup(app, pilot)
+        named = team(*THE_TEAM)
+        FakeGrange.answers.put(replace(named, grange="g" * 256))
+        await until(pilot, lambda: app.grange_state == "ok")
+        await pilot.pause(0.2)
+        rows = screen(app).splitlines()
+        top = next(i for i, row in enumerate(rows) if "4  Agents" in row)
+        part = rows[top:next(i for i in range(top, len(rows)) if set(rows[i].strip()) == {"─"})]
+        assert len(part) == 4, part                                # its heading, the grange, the team, the agents
+        assert "✓ answers on 127.0.0.1:7788 as ggg" in part[1] and part[1].rstrip().endswith("…")
+        assert all(len(row.rstrip()) <= 100 for row in part)
+
+
+@drive
 async def test_what_was_last_reported_stays_for_a_minute_once_the_grange_stops_answering(isolated, monkeypatch):
     clock = watch_clock(monkeypatch)
     a_board()
