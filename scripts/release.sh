@@ -34,6 +34,8 @@
 #     Apps already installed accept updates signed with this key only, so keep a copy of it
 #     somewhere safe:  generate_keys --account agent-frolic -x <file>  exports it.
 #     SPARKLE_PRIVATE_KEY_FILE=<file> signs with an exported key instead of the keychain's.
+#     It must be a file: a release reads the key three times (to check it is the app's, to
+#     sign, to verify), so not "-" or a pipe, though Sparkle's own tools take those.
 #   - gh logged in with push access to the repo
 #
 # Each release:
@@ -43,8 +45,10 @@
 #   git add VERSION release-notes && git commit -m "Release 0.2.0"
 #   scripts/release.sh
 set -euo pipefail
-# A key file named from where this was called must still be found once we have moved.
-case "${SPARKLE_PRIVATE_KEY_FILE:-}" in ""|/*) ;; *) SPARKLE_PRIVATE_KEY_FILE="$PWD/$SPARKLE_PRIVATE_KEY_FILE" ;; esac
+# A key file named from where this was called must still be found once we have moved. ("-",
+# which Sparkle's tools take for standard input, is no file's name: it is left as it is, and
+# scripts/check_sparkle_key.sh says why a release cannot use it.)
+case "${SPARKLE_PRIVATE_KEY_FILE:-}" in ""|/*|-) ;; *) SPARKLE_PRIVATE_KEY_FILE="$PWD/$SPARKLE_PRIVATE_KEY_FILE" ;; esac
 cd "$(dirname "$0")/.."
 
 VERSION=$(tr -d '[:space:]' < VERSION)

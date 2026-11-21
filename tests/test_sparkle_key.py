@@ -5,6 +5,7 @@ would sign with the one installed copies trust? These run it against a generate_
 own, so no keychain is asked anything, and against a stand-in for the script that works out
 an exported key's public half (scripts/sparkle_public_key.sh, which has tests of its own in
 test_release_scripts.py)."""
+import os
 import plistlib
 import shutil
 import subprocess
@@ -95,6 +96,18 @@ def test_a_key_file_whose_key_is_not_the_apps_stops_the_release_as_the_keychains
     done = run(checkout, SPARKLE_PRIVATE_KEY_FILE=str(key), FILE_HAS=ANOTHER_KEY)
     assert done.returncode == 1 and done.stdout == "" and asked(checkout) == []
     assert f"the Sparkle key in {key} is not the one in macos/Info.plist" in done.stderr
+
+
+def test_a_key_on_standard_input_or_a_pipe_is_refused_for_what_it_is(checkout):
+    """Sparkle's tools take either. A release reads the key three times, and a pipe is empty
+    after the first: said as that, not as a file that cannot be found."""
+    pipe = checkout / "a-pipe"
+    os.mkfifo(pipe)
+    for given in ("-", str(pipe), "/dev/null"):
+        done = run(checkout, SPARKLE_PRIVATE_KEY_FILE=given)
+        assert done.returncode == 1 and done.stdout == "" and asked(checkout) == [], given
+        assert "must be a file" in done.stderr and "reads the key more than once" in done.stderr, given
+        assert "names no file" not in done.stderr and not (checkout / "asked-of-file").exists()
 
 
 def test_a_file_that_holds_no_key_stops_the_release(checkout):
