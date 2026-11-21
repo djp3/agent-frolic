@@ -63,8 +63,9 @@ meanwhile reached nobody.
 
 The GitHub token, and the two secrets webhooks need, are kept in the macOS Keychain and nowhere
 else: never in a file, a log or an error message. The app talks to GitHub, to ngrok if you turn
-webhooks on, and checks for an update once a day. It reads your pull requests and never changes
-one. The only thing it writes on GitHub is its own webhook, on the repositories you ask it to.
+webhooks on, and to the agent-grange on this Mac if one is running (at `127.0.0.1` only), and it
+checks for an update once a day. It reads your pull requests and never changes one. The only
+thing it writes on GitHub is its own webhook, on the repositories you ask it to.
 
 ## Install
 
@@ -84,7 +85,7 @@ macOS 27, and the build holds the whole app to that.
 ## Setting up
 
 The app opens on its setup screen until it has a token. `s` goes from the board to the setup
-and back. It has three parts.
+and back. It has four parts.
 
 **1. The GitHub token.** Press `t` and paste one. It is checked with GitHub and then kept in
 your Keychain. A classic token needs the `repo` scope. A fine-grained token needs, on each
@@ -102,6 +103,12 @@ running, and registers a webhook on each shown repository you administer. Reposi
 not administer cannot have one, and are read every five minutes instead. The app keeps checking
 that the tunnel still leads back to it; while it does not, every repository is read every five
 minutes.
+
+**4. Agents.** There is nothing to set here. It says whether an
+[agent-grange](https://github.com/djp3/agent-grange) answers on this Mac, how many of your team's
+Macs it hears from, how many agents it reports, and how many of those are on the pull requests
+on your board. Without a grange the board is of people and teams alone: see
+[below](#made-to-work-with-agent-farm-and-agent-grange).
 
 | key | on the setup screen |
 |-----|---------------------|
@@ -260,12 +267,38 @@ designed to show a whole team's agents on the team's pull requests:
 ```
 
 On the board an agent sits beneath the person who runs it, on the pull request it is working
-on, and a pull request that an agent is at work on comes off your list: it is moving. An agent
-is tied to its pull request by its name, which carries the ticket and the pull request's
-number (`proj-86-pr-98` somewhere in it, in upper or lower case).
+on, and a pull request that an agent is at work on comes off your list: it is moving. Someone
+the pull request does not wait on, who has an agent on it all the same, is listed after those
+it waits on, in fainter ink.
 
-That connection is not in this release. agent-frolic does not read from agent-grange yet, so
-today the board shows people and teams, from GitHub's records alone.
+| mark | that agent |
+|------|------------|
+| ⠋ (turning) | is at work |
+| ▷ | is at its prompt: it has asked its human something, or it is idle and the pull request's next move is its human's |
+| · | is idle, and the pull request waits on someone else |
+| ? | cannot be said: the agent-farm on its Mac has gone quiet, or says something this version does not know |
+
+An agent is tied to its pull request by its name, which carries the ticket and the pull request's
+number (`proj-86-pr-98` somewhere in it, in upper or lower case). The number alone is not
+enough, since each of your repositories may have a pull request 98: the agent is on the one that
+carries the same ticket (`proj-86`) in its branch name or its title. An agent whose name leads to
+no pull request on your board is not drawn. Whatever the name goes on to say
+(`proj-86-pr-98 fix tests`) is shown on the agent's line, as what it is at.
+
+Nothing needs setting up in agent-frolic. It asks the agent-grange on your own Mac (at
+`127.0.0.1`, and nowhere else), and when one answers, the agents appear. The grange holds each
+question until something changes, so an agent that starts or stops shows within moments. Part 4
+of the setup says what the grange reports:
+
+- **No grange on this Mac**: the board shows people and teams, from GitHub's records alone.
+- **A grange that stops answering**: what it last reported stays for a minute, and is then
+  taken off the board.
+- **A grange that is out of date** answers nothing until it is updated. The setup shows the
+  command to run in the grange's folder (`make update`).
+
+In either of the last two cases the board says so at the end of the ticker's line, for as long
+as it lasts: without their agents, pull requests that agents are at work on look as if nobody
+were on them.
 
 ## Files and logs
 
@@ -283,13 +316,18 @@ past 2 MB and keeps the three before it.
 change it, from 1 to 1440. A repository with a webhook that can be relied on is read every six
 times that.
 
+`grange_port` is the port the agent-grange on this Mac listens on: 7788 unless you change it,
+to match `GRANGE_PORT` in the grange's `.env`.
+
 ## How it works
 
 The app asks GitHub for the open pull requests of each shown repository with one query: at
 start, when that repository's timer runs out, when you press `u`, and when a webhook says
 something changed there. The webhook receiver listens on 127.0.0.1 only; deliveries reach it
-through the ngrok tunnel and are accepted only with GitHub's signature. Everything on the board
-is worked out from what was read; the board itself never talks to GitHub.
+through the ngrok tunnel and are accepted only with GitHub's signature. The team's agents are
+read from the agent-grange on this Mac, which keeps a question waiting until it has news.
+Everything on the board is worked out from what was read; the board itself never talks to
+GitHub or to the grange.
 
 It is a Python program (Textual) running inside a native window. To run it from source:
 

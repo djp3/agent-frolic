@@ -7,8 +7,16 @@ request. Nothing here touches the screen or the network, so all of it is tested 
 
   • TWO KINDS OF ACTOR. Humans (GitHub logins; the viewer reads as "you") and agents. An
     agent runs under one human, its operator, and is always drawn beneath that human.
-    Nothing reports agents yet, so the mapping is empty; the shapes are here for when it
-    is not.
+  • WHERE AN AGENT IS, `placed()`. The agent-grange on this Mac reports the team's agents
+    (grange.py), each as three words: who runs it, its name, and what it is doing. Which
+    pull request it is on is in its name alone: a ticket and the pull request's number,
+    "proj-86-pr-98". Every repository has its own pull request 98, so the number is not
+    enough: the agent is on the one whose branch or title carries the same ticket. An
+    agent that names no pull request on the board is on none of them, and is not drawn.
+  • WHAT AN AGENT IS DOING is the farm's word, turned into one of four (`Agent.state`). An
+    idle one is "at its prompt" when its pull request waits on the human who runs it, and
+    "waiting" when it waits on someone else: the farm cannot tell those apart, and only
+    the first is something its human can get moving.
   • TEAMS. A review can be asked of a GitHub team ("team/org/slug", see pulls.py). A team
     the viewer is on is the viewer's to act for (`acts_as`): its request is drawn as
     "● you" is, under the team's name, and the team has a card of its own. One request is
@@ -38,10 +46,13 @@ request. Nothing here touches the screen or the network, so all of it is tested 
 """
 from __future__ import annotations
 
+import itertools
 import math
+import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import datetime, timezone
-from typing import Mapping
+from typing import Iterable, Mapping, Protocol
 
 from canvas import Segments, cell_len, cut, seg_len
 from pulls import PullRequest, RepoPulls, Review, Step, is_team, known_as, team_slug
@@ -75,8 +86,10 @@ class Agent:
     repo: str
     number: int                   # the pull request it is on
     role: str                     # "author": works on it for its author; "review": reviews it
-    state: str                    # "working" | "at its prompt" | "waiting"
-    note: str = ""                # what it is doing, or why it is idle
+    state: str                    # "working" | "at its prompt" | "waiting" | "unknown"
+    note: str = ""                # what it is doing, in its human's words: what its name goes on to say
+    ident: str = ""               # what tells it from its human's other agents here, from one report to
+                                  # the next: its session's name. Its serial is only its place among them
 
     @property
     def name(self) -> str:
@@ -87,8 +100,216 @@ class Agent:
         return self.state == "working"
 
     @property
+    def idle(self) -> bool:
+        """Known to be doing nothing. One whose state is unknown is neither this nor working."""
+        return self.state in ("at its prompt", "waiting")
+
+    @property
     def key(self) -> tuple[str, str, int, str]:
-        return (self.operator.lower(), self.repo.lower(), self.number, self.serial)
+        """What the focus holds on to. By `ident` when it has one: a serial moves to another
+        agent when one before it starts or ends."""
+        return (self.operator.lower(), self.repo.lower(), self.number, self.ident or self.serial)
+
+
+@dataclass(frozen=True)
+class Look:
+    """How one state of an agent is drawn, wherever it is drawn."""
+    mark: str                     # before its name; "" for the dots that turn while it works (SPIN)
+    word: str                     # in the state column
+    order: int                    # on its human's card: the ones at a prompt first, then at work, ...
+
+
+# The one place that says how each state is drawn: the row, the card, the drawer and the order
+# on a card all read it. The colors are theirs, since they differ by where it is and whose it is.
+LOOKS = {
+    "at its prompt": Look("▷", "at prompt", 0),
+    "working": Look("", "working", 1),
+    "waiting": Look("·", "waiting", 2),
+    "unknown": Look("?", "unknown", 3),
+}
+
+
+def look(agent: Agent) -> Look:
+    """How this agent's state is drawn. A state that has no look of its own is drawn as
+    unknown: a drawing that fails is swallowed where the screen is drawn, and the board
+    would stand still with nothing to say why."""
+    return LOOKS.get(agent.state, LOOKS["unknown"])
+
+
+def mark_of(agent: Agent, spin: str = SPIN[0]) -> str:
+    """The mark before an agent's name: its state's, or the turning dots while it works."""
+    return look(agent).mark or spin
+
+
+class Report(Protocol):
+    """An agent as the grange reports it (grange.Reported)."""
+    owner: str                    # the GitHub login of the human who runs it
+    name: str                     # the session's name: where it says which pull request it is on
+    state: str                    # the farm's word for what it is doing
+    stale: bool                   # its farm has gone quiet: that word is its last, some time ago
+
+
+# "proj-86-pr-98" anywhere in a name, in either case: the ticket, and the pull request's
+# number, which may be padded ("pr-0098"). The first one in a name is the one that counts.
+# A ticket's key may have an underscore in it ("data_eng-7"), so a ticket begins where no
+# letter, digit or underscore comes before it: "proj-86" is not found in "x_proj-86".
+_NAMED = re.compile(r"(?<![a-z0-9_])([a-z][a-z0-9_]*-[0-9]+)-pr-0*([0-9]+)(?![0-9])", re.IGNORECASE)
+# The farm's words for what an agent is doing. One that is not here is "unknown": the farm
+# may have new words before this app does.
+AT_WORK = frozenset({"busy"})
+ASKING = frozenset({"waiting"})   # it asked its human something, and stops until it is answered
+IDLE = frozenset({"idle", "shell"})   # done for now, or waiting on a command it started: a command
+                                  # left running would otherwise read as work for ever
+GONE = frozenset({"dead"})        # the session has ended: it is on no pull request any more
+
+
+def named(name: str) -> tuple[str, int] | None:
+    """The ticket and the pull request's number an agent's name carries, if it does."""
+    found = _NAMED.search(name)
+    return (found[1], int(found[2])) if found else None
+
+
+def words(name: str) -> str:
+    """What a name goes on to say after its ticket and number: its human's own words for
+    what the agent is at ("fix tests"). "" when there is nothing more, or only a number."""
+    found = _NAMED.search(name)
+    rest = name[found.end():].strip(" -_:·") if found else ""
+    return "" if rest.isdigit() else rest
+
+
+def carries(pull: PullRequest, ticket: str) -> bool:
+    """Whether a pull request's branch or title has this ticket in it: "proj-86", and not
+    as the start of "proj-860" or the end of "xproj-86" or "x_proj-86", which are other
+    tickets."""
+    there = _carrying(ticket)
+    return bool(there.search(pull.head) or there.search(pull.title))
+
+
+@lru_cache(maxsize=4096)
+def _carrying(ticket: str) -> re.Pattern:
+    """The search for one ticket, made once: it is asked of every pull request that has the
+    number, for every agent that names it, each time a picture is built or the setup counts."""
+    return re.compile(rf"(?<![a-z0-9_]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
+
+
+def located(reported: Iterable[Report], pulls: Iterable[PullRequest],
+            known: Iterable[PullRequest] = ()) -> list[tuple[Report, PullRequest]]:
+    """Each reported agent that is on one of these pull requests, with the one it is on, in
+    the order reported. On it means: its name has the pull request's number and a ticket,
+    and that pull request, alone among those with the number, carries the ticket. An agent
+    whose session has ended is on nothing.
+
+    `known` is whatever else has been read: the pull requests of repositories now hidden.
+    No agent is put on one of those, but they count when asking whether a pull request is
+    alone: two that carry the ticket are a tie, and hiding one of them does not say which
+    was meant. (A hidden repository is not read again, so its side of a tie is as it was
+    when it was last shown: that errs toward drawing no agent, never toward a wrong one.)"""
+    pulls = list(pulls)
+    shown = {id(pull) for pull in pulls}
+    numbered: dict[int, list[PullRequest]] = {}
+    for pull in pulls + [pull for pull in known if id(pull) not in shown]:
+        numbered.setdefault(pull.number, []).append(pull)
+    out = []
+    for one in reported:
+        said = named(one.name)
+        if said is None or one.state in GONE:
+            continue
+        ticket, number = said
+        there = [pull for pull in numbered.get(number, []) if carries(pull, ticket)]
+        if len(there) == 1 and id(there[0]) in shown:
+            out.append((one, there[0]))
+    return out
+
+
+def located_in(reported: Iterable[Report], names: Iterable[str],
+               pulls: Mapping[str, RepoPulls]) -> list[tuple[Report, PullRequest]]:
+    """`located`, from what the app holds: each reported agent that is on a pull request of
+    the repositories named (the ones shown), told among all that have been read. The one
+    place that says which pull requests count, for the picture and for the setup's tally."""
+    shown = [pull for name in names if name.lower() in pulls for pull in pulls[name.lower()].pulls]
+    return located(reported, shown, [pull for got in pulls.values() for pull in got.pulls])
+
+
+Numbers = dict[tuple[Key, str], dict[str, int]]    # (pull request, its human in lower case) -> the number
+                                                    # each of their agents there has, by `Agent.ident`
+
+
+def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | None = None) -> dict[Key, list[Agent]]:
+    """The reported agents as the picture has them: each on its pull request (`located`),
+    working for its author when the author runs it and reviewing otherwise, numbered
+    among the agents the same human has there, doing what `doing` makes of the farm's
+    word, and noted with what its name goes on to say (`words`). On a pull request the
+    author's agents come first.
+
+    What an agent is known by from one report to the next is its name (`Agent.ident`), so
+    a focus on it stays on it. Its number is for the eye. Given `numbers`, the numbers
+    handed out before, an agent keeps its own for as long as its session is reported:
+    one that is new takes the lowest that is free, and a number is free again only when
+    its session has gone. `numbers` is brought up to date here, for the next report; it
+    is the caller's to keep. (With nobody reported this is not asked at all, and the
+    picture frees every number itself.) Without it they are numbered by name, afresh each time.
+
+    Two sessions with one name cannot be told apart: they are numbered by what they are
+    doing, so nothing moves on screen when they trade."""
+    crews: dict[tuple[Key, str], list[tuple[Report, PullRequest]]] = {}
+    for one, pull in located_in(reported, picture.names, picture.pulls):
+        crews.setdefault((key_of(pull), one.owner.lower()), []).append((one, pull))
+    out: dict[Key, list[Agent]] = {}
+    for (key, owner), crew in crews.items():
+        crew.sort(key=lambda pair: (pair[0].name, pair[0].state))
+        seen: dict[str, int] = {}
+        idents = []
+        for one, _ in crew:
+            seen[one.name] = nth = seen.get(one.name, 0) + 1
+            # The second of two with one name is known by the name and its place among them,
+            # set apart by a character no name can have (control characters are taken out of
+            # all the grange sends): written with ordinary ones, it could be a third's name.
+            idents.append(one.name if nth == 1 else f"{one.name}\x00{nth}")
+        before = numbers.get((key, owner), {}) if numbers is not None else {}
+        given = {ident: before[ident] for ident in idents if ident in before}
+        free = (n for n in itertools.count(1) if n not in set(given.values()))
+        for ident in idents:
+            if ident not in given:
+                given[ident] = next(free)
+        if numbers is not None:
+            numbers[(key, owner)] = given
+        for ident, (one, pull) in zip(idents, crew):
+            role = "author" if one.owner.lower() == pull.author.lower() else "review"
+            out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", pull.repo, pull.number, role,
+                                                 doing(picture, one, pull, role), words(one.name), ident))
+    if numbers is not None:
+        for gone in [crew for crew in numbers if crew not in crews]:
+            del numbers[gone]
+    for agents in out.values():
+        agents.sort(key=lambda a: (a.role != "author", a.operator.lower(), a.serial))
+    return out
+
+
+def doing(picture: "Picture", one: Report, pull: PullRequest, role: str) -> str:
+    """An agent's state, from the farm's word for it and from where its pull request
+    stands. A farm gone quiet said its word some time ago: what the agent does now is
+    unknown. An idle agent is at its prompt when the move is its human's to make, and
+    waiting otherwise. Whether a move is the viewer's the picture knows (`acts_as`: by
+    name, through a team they are on, or as maintainer). Of anyone else it knows less:
+    theirs by name, or, for one that reviews, a team's that was asked, since which teams
+    they are on is not known."""
+    if one.stale:
+        return "unknown"
+    if one.state in AT_WORK:
+        return "working"
+    if one.state in ASKING:
+        return "at its prompt"
+    if one.state in IDLE:
+        here = picture.stand(pull)
+        if here.queued:
+            return "waiting"
+        if picture.is_viewer(one.owner):
+            theirs = any(picture.acts_as(who, pull) for who in here.who)
+        else:
+            theirs = any(who.lower() == one.owner.lower() or (role == "review" and is_team(who))
+                         for who in here.who)
+        return "at its prompt" if theirs else "waiting"
+    return "unknown"
 
 
 # ---- the picture -----------------------------------------------------------------------
@@ -98,13 +319,20 @@ class Picture:
     names: list[str]                               # the shown repositories, in the user's order
     pulls: dict[str, RepoPulls]                    # repository (lower case) -> what was read from it
     viewer: str = ""                               # the viewer's GitHub login, "" when unknown
-    agents: dict[Key, list[Agent]] = field(default_factory=dict)
+    agents: dict[Key, list[Agent]] = field(default_factory=dict)    # the agents on each pull request:
+                                                   # given as they are, or worked out from `reported`.
+                                                   # One or the other: both is a mistake, and is refused
     notes: dict[str, str] = field(default_factory=dict)    # repository (lower case) -> a line to
                                                            # show under it: reading…, or why it failed
     teams: Mapping[str, str] = field(default_factory=dict)     # the teams the viewer is on: "team/org/
                                                            # slug" in lower case -> the name people read
     held: bool = False                             # the viewer's teams are still being read: until
                                                    # they are known, a team's request is nobody's
+    reported: tuple[Report, ...] = ()              # the agents the grange reports: given these,
+                                                   # `agents` is worked out from them (`placed`)
+    numbers: Numbers | None = field(default=None, repr=False, compare=False)    # the numbers their agents
+                                                   # had before, kept by whoever builds one picture after
+                                                   # another (`placed` brings it up to date)
     standings: dict[Key, Standing] = field(default_factory=dict, repr=False)
     efforts: list[Effort] | None = field(default=None, repr=False, compare=False)   # needs_effort's
                                                    # answer, once something has asked for it
@@ -121,6 +349,15 @@ class Picture:
             if got.org:
                 owner = got.repo.split("/", 1)[0].lower()
                 self.orgs[owner] = self.orgs.get(owner, False) or any(got.rights)
+        if self.reported:
+            if self.agents:
+                raise ValueError("a picture is given its agents, or the reports they are worked out from: not both")
+            # Last, when the standings and the organizations are settled: `placed` asks the
+            # picture where each pull request stands and whether a move is the viewer's, and
+            # nothing it asks reads the agents it is about to set.
+            self.agents = placed(self, self.reported, self.numbers)
+        elif self.numbers:
+            self.numbers.clear()                  # nobody is reported: every number is free again
 
     def read(self) -> list[RepoPulls]:
         """What was read, for the shown repositories that have been read, in order."""
@@ -325,21 +562,29 @@ def human_cell(picture: Picture, login: str, yours_to_act: bool, pull: PullReque
     return [("  ", MUTED), (name, INK if picture.yours(login) else INK2)]
 
 
+def onlooker_cell(picture: Picture, login: str, pull: PullRequest | None = None) -> Segments:
+    """A human the pull request does not wait on, who has an agent on it all the same. In
+    the faintest ink, the viewer too: the names it waits on are the ones to read first."""
+    return [("  ", MUTED), (picture.shown(login, pull), MUTED)]
+
+
 def agent_cell(picture: Picture, agent: Agent, spin: str = SPIN[0]) -> Segments:
     """An agent, beneath its human. The mark turns while it works; ▷ is an agent at its
     prompt, · one that waits. It is never yellow: the yellow dot is on the human above."""
     yours = picture.is_viewer(agent.operator)
-    mark, style = {"working": (spin, INK), "at its prompt": ("▷", INK if yours else MUTED),
-                   "waiting": ("·", MUTED)}[agent.state]
-    name = INK if agent.working or (yours and agent.state == "at its prompt") else INK2
-    return [("  └ ", AXIS), (mark + " ", style), (agent.name, name)]
+    yours_to_answer = yours and agent.state == "at its prompt"
+    style = INK if agent.working or yours_to_answer else MUTED
+    name = INK if agent.working or yours_to_answer else INK2
+    return [("  └ ", AXIS), (mark_of(agent, spin) + " ", style), (agent.name, name)]
 
 
 def agent_state(picture: Picture, agent: Agent) -> Segments:
     yours = picture.is_viewer(agent.operator)
-    return {"working": [("working", INK2)],
-            "at its prompt": [("at prompt", INK if yours else INK2)],
-            "waiting": [("waiting", MUTED)]}[agent.state]
+    if agent.state == "at its prompt":
+        style = INK if yours else INK2
+    else:
+        style = INK2 if agent.working else MUTED
+    return [(look(agent).word, style)]
 
 
 def cells(picture: Picture, pull: PullRequest, spin: str = SPIN[0]) -> list[tuple[Segments, Segments, Segments]]:
@@ -388,6 +633,15 @@ def _lines(picture: Picture, pull: PullRequest,
             yours = mine and picture.acts_as(who, end.pull)
             right.append((human_cell(picture, who, yours, end.pull), []))
             right += [(agent_cell(picture, a, spin), [a]) for a in reviewing(picture, end.pull, who)]
+    # An agent here that none of the above drew: its human is not one of those it waits on (they
+    # reviewed already, or came unasked), or this one waits on another. It still counts as an
+    # agent on this pull request, so it is on the row: after those waited on, beneath its human.
+    drawn = {id(agent) for _, agents in right for agent in agents}
+    rest = [a for a in picture.on(pull) if a.role == "review" and id(a) not in drawn]
+    for operator in dict.fromkeys(a.operator.lower() for a in rest):
+        theirs = [a for a in rest if a.operator.lower() == operator]
+        right.append((onlooker_cell(picture, theirs[0].operator, pull), []))
+        right += [(agent_cell(picture, a, spin), [a]) for a in theirs]
     lines = max(len(left), len(right))
     left += [([], [], [])] * (lines - len(left))
     right += [([], [])] * (lines - len(right))
@@ -642,7 +896,7 @@ def _needs_effort(picture: Picture, now: datetime) -> list[Effort]:
         if here.queued:
             queued.append(pull)
         elif here.who and not picture.working(pull):
-            idle = sum(not a.working for a in picture.on(pull))
+            idle = sum(a.idle for a in picture.on(pull))
             mine = picture.mine(pull)
             found[key_of(pull)] = Effort(pull, here, mine, ", ".join(picture.shown(w, pull) for w in here.who),
                                          undecided=not mine and any(picture.undecided(w, pull) for w in here.who),
@@ -652,7 +906,7 @@ def _needs_effort(picture: Picture, now: datetime) -> list[Effort]:
         effort = found.get(key_of(end.pull)) if end is not None else None
         if effort is not None:
             effort.behind.append(pull)
-            effort.waiting += sum(not a.working for a in picture.on(pull))
+            effort.waiting += sum(a.idle for a in picture.on(pull))
     far = datetime.max.replace(tzinfo=timezone.utc)
     return sorted(found.values(), key=lambda e: (e.waiting == 0, e.pull.updated or far))
 

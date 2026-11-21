@@ -34,6 +34,9 @@ class Settings:
                                     # One GitHub sends webhooks for, with nothing amiss, is read every
                                     # Frolic.SAFETY_POLLS times that (Frolic.period)
 
+    grange_port: int = 7788         # where the agent-grange on this Mac listens: GRANGE_PORT in its .env.
+                                    # It is asked on 127.0.0.1 alone
+
     POLL_MOST: ClassVar[int] = 24 * 60
 
     @classmethod
@@ -60,6 +63,10 @@ class Settings:
         if kept != s.poll_minutes:                           # allowance gone in minutes
             log.warning("poll_minutes %d in %s is out of range; using %d", s.poll_minutes, p, kept)
             s.poll_minutes = kept
+        if not 1 <= s.grange_port <= 65535:
+            usual = cls().grange_port
+            log.warning("grange_port %d in %s is not a port; using %d", s.grange_port, p, usual)
+            s.grange_port = usual
         return s
 
     def save(self) -> None:

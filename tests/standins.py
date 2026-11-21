@@ -1,16 +1,21 @@
 # Copyright (C) 2026 Don Patterson
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Stand-ins for GitHub, ngrok, the pull request fetch and the browser, and the small
-helpers the UI tests share. conftest.py puts the stand-ins in place for every test, so no
-test can reach the real GitHub, open a real tunnel or open a page in the real browser."""
+"""Stand-ins for GitHub, ngrok, the pull request fetch, the agent-grange and the browser,
+and the small helpers the UI tests share. conftest.py puts the stand-ins in place for every
+test, so no test can reach the real GitHub, open a real tunnel, ask the grange that may be
+running on this Mac, or open a page in the real browser."""
 import asyncio
 import functools
+import queue
+import threading
+import time
 from datetime import datetime, timezone
 
 from textual.widgets import Input
 
 import main
 from githubapi import GitHubError, Hook, Identity, RepoInfo
+from grange import Farm, GrangeError, Reading, Reported
 from pulls import RepoPulls, parse_pull, stack
 
 TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
@@ -163,6 +168,56 @@ class FakeBrowser:
         if FakeBrowser.broken is not None:
             raise FakeBrowser.broken
         FakeBrowser.opened.append(url)
+
+
+class FakeGrange:
+    """The agent-grange on this Mac. It holds every question, as a grange with nothing new
+    to say does, until a test hands it an answer: `FakeGrange.answers.put(...)` with a
+    Reading, or with a GrangeError for a grange that is down, out of date or in trouble."""
+    answers: "queue.Queue" = queue.Queue()
+    asked: list[tuple[int, int | None]] = []      # each question: the port, and the cursor it came with
+    made: list["FakeGrange"] = []
+    failing: Exception | None = None              # set, every question fails so, once the answers are used up
+
+    def __init__(self, port=7788):
+        self.port, self.closed = port, threading.Event()
+        FakeGrange.made.append(self)
+
+    def read(self, after=None, wait=30):
+        FakeGrange.asked.append((self.port, after))
+        while not self.closed.is_set():
+            try:
+                answer = FakeGrange.answers.get(timeout=0.01)
+            except queue.Empty:
+                if FakeGrange.failing is not None:
+                    raise FakeGrange.failing
+                continue
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        raise GrangeError("closed", "The question was given up.")
+
+    def close(self):
+        self.closed.set()
+
+
+def team(*agents, cursor=1, quiet=()):
+    """A grange's answer: this Mac's grange (djp3's) with `agents`, each (owner, name,
+    state), and one more grange for each other owner among them. `quiet` names the owners
+    whose farm has gone silent."""
+    owners = ["djp3"] + sorted({owner for owner, _, _ in agents} - {"djp3"})
+    return Reading(cursor, "djp3", tuple(
+        Farm(owner, owner in quiet,
+             tuple(Reported(o, name, state, owner in quiet) for o, name, state in agents if o == owner))
+        for owner in owners))
+
+
+async def until(pilot, done, seconds=5.0):
+    """Let the app run until `done()`: for what arrives from a thread of its own."""
+    end = time.monotonic() + seconds
+    while not done():
+        assert time.monotonic() < end, "it never happened"
+        await pilot.pause(0.02)
 
 
 def drive(test):

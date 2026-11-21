@@ -75,7 +75,7 @@ from textual.widgets import Static
 from canvas import Canvas, Segments, cut, plain, seg_len, wash, write
 from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
                      Person, Picture, Row, cells, counts, focuses, humans, in_focus, key_of, labels,
-                     age_reach, age_said, line_agents, mark, move_words, needs_effort, progress, quiet,
+                     age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, progress, quiet,
                      review_cell, reviewers, reviewing, silence, tree)
 from pulls import PullRequest, span
 from theme import (AGE, AXIS, CRIT, DIVIDER, INK, INK2, KEY, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN,
@@ -94,7 +94,6 @@ STRIP = 5                        # the most rows the strip of cards takes: a nam
 PER_COL = 4                      # agents beneath a human before a card takes another column
 BAND = 10                        # rows of the bottom band: the list and the drawer
 X_OWNER, X_STATE, X_WAITS, X_RULE, X_TREE = 1, 18, 33, 51, 53
-ORDER = {"at its prompt": 0, "working": 1, "waiting": 2}
 # The hints at the foot of the screen, each a key and a word or two for what it does. They
 # are drawn as agent-farm's footer is: the key lit, its words beside it (`hint_text`).
 HINTS = [("↑↓", "Pull request"), ("o", "Open on GitHub"), ("PgUp PgDn", "Scroll"), ("n", "Next needing effort"),
@@ -249,8 +248,8 @@ def agent_line(agent: Agent, yours: bool) -> Segments:
     if agent.working:
         return [(SPIN[0] + " ", INK), (said, INK2)]
     if agent.state == "at its prompt":
-        return [("▷ ", WAITING if yours else MUTED), (said, f"bold {INK}" if yours else INK2)]
-    return [("· ", MUTED), (said, MUTED)]
+        return [(mark_of(agent) + " ", WAITING if yours else MUTED), (said, f"bold {INK}" if yours else INK2)]
+    return [(mark_of(agent) + " ", MUTED), (said, MUTED)]
 
 
 def count_marks(yours: int, nudge: int, gap: str = " ") -> Segments:
@@ -286,7 +285,7 @@ def head_line(person: Person) -> Segments:
 def make_card(person: Person, max_cols: int) -> Card:
     """A human and the agents they operate: the ones at a prompt first, then the ones at
     work, then the ones that wait. What does not fit is folded, and the card says so."""
-    agents = sorted(person.agents, key=lambda a: ORDER[a.state])
+    agents = sorted(person.agents, key=lambda a: look(a).order)
     slots = max(1, max_cols) * PER_COL
     folded: list[Agent] = []
     if len(agents) > slots:
@@ -542,12 +541,13 @@ class Board(Screen):
         # The viewer's teams arrive on their own, after the sign-in: they are in it so that the
         # picture is built again when they do. Everything but the readings is compared by value.
         teams, held = app.teams_now()
-        drawn_from = (names, notes, viewer, repr(sorted(app.agents.items())), int(time.time() // 60),
+        drawn_from = (names, notes, viewer, app.reported, int(time.time() // 60),
                       teams, held, list(app.pulls.items()))
         if self.same_sources(drawn_from):             # the focus and selection are still on it, too
             return
         self.drawn_from = drawn_from
-        self.pic = Picture(names, app.pulls, viewer, app.agents, notes, teams=teams, held=held)
+        self.pic = Picture(names, app.pulls, viewer, notes=notes, teams=teams, held=held, reported=app.reported,
+                           numbers=app.agent_numbers)
         self.efforts = needs_effort(self.pic)
         now = time.monotonic()
         cards = {p.login.lower(): plain(head_line(p)) for p in humans(self.pic)}
@@ -1110,8 +1110,8 @@ class Board(Screen):
         out.append(pull.title + "\n", style=INK)
 
         def actor(agent: Agent) -> None:
-            icon, color = {"working": (spin, INK), "at its prompt": ("▷", INK2), "waiting": ("·", MUTED)}[agent.state]
-            out.append(" › ", style=MUTED).append(icon + " ", style=color)
+            color = INK if agent.working else INK2 if agent.state == "at its prompt" else MUTED
+            out.append(" › ", style=MUTED).append(mark_of(agent, spin) + " ", style=color)
             out.append(f"{agent.name} {'at work' if agent.working else agent.state}",
                        style=INK if agent.working else INK2)
 
@@ -1195,7 +1195,11 @@ class Board(Screen):
 
     def ticker(self) -> Text:
         """The last thing that happened, and how long ago; or, for a moment, a word about
-        what the user just did."""
+        what the user just did. And at its right end, for as long as it is so, that the
+        agents are not being shown (Frolic.agents_amiss)."""
+        return self.with_amiss(self.happened())
+
+    def happened(self) -> Text:
         out = Text()
         notice = self.app.notice_now()
         if notice:
@@ -1209,6 +1213,25 @@ class Board(Screen):
         when = "now" if seconds < 2 else f"{span(seconds, fine=True)} ago"
         out.append(f"{when:<9}", style=INK if seconds < 2 else MUTED)
         return out.append(said, style=INK if seconds < 2 else INK2)
+
+    def with_amiss(self, line: Text) -> Text:
+        """The ticker's line with what is amiss with the agents at its right end, when
+        something is. It keeps its place whatever happens on GitHub: the news is cut to make
+        room for it, not the other way about."""
+        amiss = self.app.agents_amiss()
+        if not amiss:
+            return line
+        mark = Text("✗ ", style=CRIT).append(amiss, style=INK2)
+        try:
+            width = self.query_one("#events", Static).size.width
+        except NoMatches:
+            width = 0
+        room = width - mark.cell_len - 3
+        if room < 12:                                 # too narrow for both: what is amiss is the one to keep
+            mark.truncate(max(1, width), overflow="ellipsis")
+            return mark
+        line.truncate(room, overflow="ellipsis", pad=True)
+        return line.append("   ").append_text(mark)
 
     def menu_text(self) -> Text:
         """The repository menu: every repository, with a check mark on the ones on screen."""

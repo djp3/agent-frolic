@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 agent-frolic, the real program: the app, its state, and everything that talks to the
-outside (GitHub, the ngrok tunnel, the Keychain). It has two screens.
+outside (GitHub, the ngrok tunnel, the Keychain, the agent-grange on this Mac). It has two
+screens.
 
   • THE BOARD (board.py) is the main screen: who is on which pull request and what each
     one waits on, drawn from what this app has read.
-  • THE SETUP (the SetupScreen below) is the plumbing, in three parts: the GitHub token
+  • THE SETUP (the SetupScreen below) is the plumbing, in four parts: the GitHub token
     (pasted once, checked with GitHub, kept in the Keychain), the repositories (added by
-    name or address, kept in repos.json, shown or hidden), and the webhooks (an ngrok
+    name or address, kept in repos.json, shown or hidden), the webhooks (an ngrok
     tunnel to a receiver on this Mac, and a webhook on each shown repository you
-    administer). Below them is a log, or on p the pull requests as a plain list.
+    administer), and the agents (whether the agent-grange on this Mac answers, and what
+    it reports). Below them is a log, or on p the pull requests as a plain list.
 
 The app starts on the setup while there is no token, otherwise on the board. s goes from
 the board to the setup; s or escape goes back.
@@ -34,14 +36,23 @@ changed may name a team, as it names people, and such a line goes to the log. Un
 are known, a request to a team is held back as nobody's; if they cannot be read, it is
 anyone else's, as if there were no teams.
 
+The team's agents come from the agent-grange on this Mac (grange.py), asked on 127.0.0.1
+alone, from mount to unmount, by a thread of its own: each question is held by the grange
+until its picture changes, so an agent that starts or stops shows within moments. Each
+answer is the whole picture and replaces the last; the board's picture puts each agent on
+the pull request its name says (picture.placed). A Mac with no grange is no trouble: the
+board is then of people and teams alone. When a grange that was answering stops, what it
+last reported stays for a minute and is then let go: the thread that asks keeps that
+minute, and says when it is over.
+
 Setup keys: t paste a token, f forget it, a add a repository, up/down pick one, shift+up /
 shift+down (or [ and ]) move it up or down the list, space show or hide it, x remove it,
 b set its long-lived branches (the ones never drawn as a stack), w set up webhooks,
 W turn them off, r register the hooks again, p switch between the pull requests and the
 log, u read GitHub now, s or escape back to the board, q quit. In the pull request list the arrows and page up / page down scroll.
 
-Everything that talks to GitHub or ngrok runs on a worker thread and reports back to the
-screen; the screen never waits on the network. A secret is read from the Keychain by the
+Everything that talks to GitHub, ngrok or the grange runs on a thread of its own and reports
+back to the screen; the screen never waits on the network. A secret is read from the Keychain by the
 worker that needs it and is not kept on the app: the screen only ever holds its mask.
 """
 from __future__ import annotations
@@ -79,7 +90,8 @@ from apppaths import app_version, log_dir
 from board import Board, fit_hints, remember_change
 from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
-from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, quiet, review_marks
+from grange import Grange, GrangeError, Reading, Reported, Watch
+from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, located_in, quiet, review_marks
 from pulls import PullRequest, RepoPulls, fetch_pulls, is_team, span, stack, team_of, team_slug
 from repos import Repo, RepoStore, parse
 from settings import Settings
@@ -250,7 +262,7 @@ SETUP_LEFT_OUT_FIRST = ["W", "r", "[ ]", "b", "p", "u", "x", "space", "↑↓", 
 
 
 class SetupScreen(Screen):
-    """The three parts of the setup, and the log or the plain list below them. It only
+    """The four parts of the setup, and the log or the plain list below them. It only
     lays the parts out and passes the keys on: the words and the work are the app's."""
 
     AUTO_FOCUS = None                              # nothing holds the keys: the bindings below act
@@ -281,6 +293,8 @@ class SetupScreen(Screen):
         yield Static("─" * 400, classes="rule")
         yield Static(id="hooks", classes="part")
         yield Static("─" * 400, classes="rule")
+        yield Static(id="agents", classes="part")
+        yield Static("─" * 400, classes="rule")
         with VerticalScroll(id="lower"):
             yield Static(id="log")
         yield Static(fit_hints(SETUP_HINTS, SETUP_LEFT_OUT_FIRST, 9999), id="hints", classes="line")
@@ -302,6 +316,7 @@ class SetupScreen(Screen):
         self.query_one("#token", Static).update(app.token_text())
         self.query_one("#repos", Static).update(app.repos_text())
         self.query_one("#hooks", Static).update(app.hooks_text())
+        self.query_one("#agents", Static).update(app.agents_text())
         self.query_one("#log", Static).update(app.pulls_text() if app.view == "pulls" else app.log_text())
         hints = self.query_one("#hints", Static)
         fitted = fit_hints(SETUP_HINTS, SETUP_LEFT_OUT_FIRST, hints.size.width or self.size.width - 4)
@@ -323,6 +338,9 @@ class Frolic(App):
     OPEN_AGAIN_S = 2.0            # o on the same pull request sooner than this after the last o is the key repeating
     NOTICE_S = 3.0                # how long a word about what the user just did takes the ticker's line,
     NOTICE_FAILED_S = 10.0        # and how long when it says that it failed
+    GRANGE_STALE = "agent-grange is out of date: no agents shown · s to fix"     # kept short: they share
+    GRANGE_STALE_YET = "agent-grange is out of date · s to fix"                 # the ticker's line. (YET:
+    GRANGE_LOST = "agent-grange stopped answering: no agents shown"             # its last report still shows)
     CSS = f"""
     Screen {{ background: {PLANE}; color: {INK}; }}
     .line {{ height: 1; margin: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }}
@@ -340,8 +358,12 @@ class Frolic(App):
     Input {{ background: {RAISED}; color: {INK}; border: tall {AXIS}; }}
     Input:focus {{ border: tall {DIVIDER}; }}
     """
-    def __init__(self) -> None:
+    def __init__(self, ask_grange: bool = True) -> None:
+        """`ask_grange` is whether to ask the agent-grange on this Mac for the team's agents.
+        The build's self-check says no: it starts the app to see that it starts, and is to
+        reach nothing while it does."""
         super().__init__()
+        self.ask_grange = ask_grange
         self.settings = Settings.load()
         self.store = RepoStore()
         self.sel = 0
@@ -409,7 +431,19 @@ class Frolic(App):
         self.ticked_at = 0.0                      # when the clock last ticked
         self.tunnel_checked_at = 0.0              # when the tunnel was last checked to lead back here (or
         self.tunnel_checking = False              # opened); and whether such a check is under way
-        self.agents: dict = {}                    # (repository, number) -> the agents on it; nothing reports them yet
+        self.reported: tuple[Reported, ...] = ()  # the team's agents, as the agent-grange on this Mac last
+                                                  # said: the picture puts each on its pull request
+        self.here_for: tuple | None = None        # what `agents_here` last counted from, and its count
+        self.here = 0
+        self.agent_numbers: dict = {}             # the number each agent on the board has ("agent 02"), so
+                                                  # that it keeps it from one report to the next (picture.placed)
+        self.grange_state = "asking" if ask_grange else "off"     # "asking" | "ok" | "down" | "stale" |
+                                                  # "trouble", or "off" when it is not to be asked
+        self.grange_wrong: GrangeError | None = None  # what is wrong, unless it is "asking" or "ok"
+        self.grange_reading: Reading | None = None    # its last answer, for as long as that is believed
+        self.grange_read_at = 0.0                 # when that answer came
+        self.grange_ever = False                  # a grange has answered on that port since the app began
+        self.watch: Watch | None = None           # the thread that asks it, from mount to unmount
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
         self.news: tuple[float, str] | None = None        # the last thing that happened on GitHub, for the
@@ -436,6 +470,8 @@ class Frolic(App):
         self.set_window_title(window_title(self.watched()))
         self.set_interval(1.0, self.tick)
         self.check_stored_token()
+        if self.ask_grange:
+            self.start_grange()
 
     def tick(self) -> None:
         """Once a second: each shown repository whose timer has run out is read again, with
@@ -551,6 +587,91 @@ class Frolic(App):
     def on_unmount(self) -> None:
         self.closing.set()
         self.stop_services()
+        if self.watch is not None:
+            self.watch.stop()             # a question the grange is holding is given up, not waited for
+
+    # ---- the team's agents, from the agent-grange on this Mac ------------------------------
+    def start_grange(self) -> None:
+        """Begin asking the agent-grange on this Mac for the team's agents, and go on asking
+        for as long as the app runs (grange.Watch). On a Mac with no grange nothing answers,
+        the setup says so, and the board is of people and teams alone."""
+        self.watch = Watch(Grange(self.settings.grange_port),
+                           lambda reading: self.later(self.grange_answered, reading),
+                           lambda wrong: self.later(self.grange_failed, wrong),
+                           lambda: self.later(self.forget_agents))
+        self.watch.start()
+
+    def grange_answered(self, reading: Reading) -> None:
+        """The grange's picture of the team: it replaces the one before, whole."""
+        back = self.grange_state != "ok"
+        self.grange_state, self.grange_wrong, self.grange_ever = "ok", None, True
+        self.grange_reading, self.grange_read_at = reading, time.time()
+        self.reported = tuple(reading.reported())
+        if back:
+            granges, agents = len(reading.granges), len(self.reported)
+            self.say(f"agent-grange answers: {granges} grange{'' if granges == 1 else 's'}, "
+                     f"{agents} agent{'' if agents == 1 else 's'}")
+        self.draw()
+
+    def grange_failed(self, wrong: GrangeError) -> None:
+        """The grange did not answer, or refused. It is said once, not at every try. What it
+        last reported stays on the board for a while yet: a grange being restarted is back
+        within a minute. That minute is the watch's to keep (grange.Watch), from its first
+        failure, on a clock that stands still while the Mac sleeps; when it is over the
+        watch says so, and `forget_agents` lets the report go. Finding no grange when none
+        has ever answered is how things are on a Mac without one, and is no trouble; nor
+        is finding something else on its port, which the watch then asks less and less
+        often."""
+        before = self.grange_wrong
+        if before is None or (wrong.kind, wrong.said) != (before.kind, before.said):
+            plain = wrong.kind in ("down", "trouble") and not self.grange_ever
+            self.say(wrong.said, INK2 if plain else INK)
+        self.grange_state, self.grange_wrong = wrong.kind, wrong
+        self.draw()
+
+    def agents_here(self) -> int:
+        """How many of the reported agents are on a pull request the board shows. The setup
+        says it, and is drawn every second: it is worked out again only when the report, the
+        shown repositories or a reading has changed (a new reading is a new object).
+
+        The readings it was counted from are kept, and known again by being the same
+        objects. Known by where they lie in memory alone, one that had been let go could be
+        taken for a later one that came to lie in its place, and the old count be said."""
+        names = tuple(repo.name for repo in self.store.shown())
+        readings = tuple(self.pulls.values())
+        last = self.here_for
+        if not (last is not None and last[0] == self.reported and last[1] == names
+                and len(last[2]) == len(readings) and all(was is now for was, now in zip(last[2], readings))):
+            self.here_for = (self.reported, names, readings)
+            self.here = len(located_in(self.reported, names, self.pulls))
+        return self.here
+
+    def agents_amiss(self) -> str:
+        """What the board says, for as long as it is so, when the agents it would show are
+        not there: the grange is out of date, or one that was answering has stopped and
+        what it last reported has been let go. "" when nothing is amiss, which a Mac with
+        no grange is not.
+
+        Said for as long as it lasts, not for a moment: without their agents, the pull
+        requests teammates' agents are at work on are back among what needs effort, as if
+        nobody were on them, and a notice that has passed leaves nothing to say why."""
+        if self.grange_state == "stale":
+            # What it last reported stays its minute: "no agents shown" is said once that is so.
+            return self.GRANGE_STALE if self.grange_reading is None else self.GRANGE_STALE_YET
+        if self.grange_ever and self.grange_state in ("down", "trouble") and self.grange_reading is None:
+            return self.GRANGE_LOST
+        return ""
+
+    def forget_agents(self) -> None:
+        """The grange has not answered for too long, the watch says: what it last said is no
+        longer shown."""
+        had = len(self.reported)
+        self.grange_reading, self.reported = None, ()
+        self.agent_numbers.clear()
+        if had:
+            self.say(f"agent-grange has not answered for a minute: the {had} "
+                     f"agent{'' if had == 1 else 's'} it reported {'is' if had == 1 else 'are'} no longer shown", INK)
+        self.draw()
 
     # ---- the terminal's title ----------------------------------------------------------
     def watched(self) -> int:
@@ -1449,8 +1570,8 @@ class Frolic(App):
         # Both pictures are of this moment's teams: what changed is what GitHub changed, so the
         # teams becoming known between two readings makes no line here and no wash.
         teams, held = self.teams_now()
-        found = changes(Picture([name], {key: before}, viewer, self.agents, teams=teams, held=held),
-                        Picture([name], {key: got}, viewer, self.agents, teams=teams, held=held), name)
+        found = changes(Picture([name], {key: before}, viewer, teams=teams, held=held),
+                        Picture([name], {key: got}, viewer, teams=teams, held=held), name)
         if not found:
             return
         now = time.time()
@@ -1680,6 +1801,62 @@ class Frolic(App):
             out.append(f" · last {age(receiver.last.at)} ago: {receiver.last.said}", style=INK2)
         return out
 
+    def agents_text(self) -> Text:
+        """The agent-grange on this Mac: whether it answers, and what it reports."""
+        out = Text("4  Agents", style=f"bold {INK}")
+        out.append("\n   grange    ", style=MUTED)
+        port = self.settings.grange_port
+        if self.grange_state == "off":
+            return out.append("not asked in this run", style=INK2)
+        if self.grange_state == "asking":
+            return out.append(f"asking the agent-grange on this Mac (port {port})…", style=INK2)
+        reading, wrong = self.grange_reading, self.grange_wrong
+        # What the grange says of itself is from outside and may be long: each line here is
+        # cut to the one row it has, as a pull request's title is. The log has it whole.
+        wide = self.setup.query_one("#agents", Static).size.width if self.setup.is_mounted else 0
+        room = max(24, (wide or 400) - 15)            # what a line has after its label and its mark
+        if wrong is None:
+            said = f"answers on 127.0.0.1:{port}"
+            out.append("✓ ", style=GOOD).append(said, style=INK)
+            out.append(cut(f" as {reading.grange}", max(0, room - len(said))) if reading.grange else "", style=INK2)
+        elif wrong.kind == "down" and not self.grange_ever:   # as on any Mac without one: no trouble
+            out.append(f"none is running on this Mac (port {port})", style=INK2)
+            return out.append("   agent-grange brings your team's agents onto the board", style=MUTED)
+        elif wrong.kind == "trouble" and not self.grange_ever:
+            # Nothing has answered as a grange since the app began: more likely something else
+            # listens on its port than a grange in trouble. Said, and not as an alarm.
+            said = f"nothing on port {port} of this Mac answers as an agent-grange"
+            out.append(said, style=INK2)
+            return out.append(cut(f"   {wrong.said}", max(0, room - len(said))), style=MUTED)
+        elif wrong.kind == "stale":
+            why = "out of date" + (f": {wrong.why}" if wrong.why else "")
+            out.append("✗ ", style=CRIT).append(cut(why, room), style=INK)
+            out.append("\n   to fix    ", style=MUTED)
+            fix, where = wrong.fix or "update it", "   in the grange's folder: it answers nothing until then"
+            fix = cut(fix, room + 2)                          # this line has no mark before it
+            out.append(fix, style=INK)
+            out.append(where if cell_len(fix) + len(where) <= room + 2 else "", style=MUTED)
+        else:                                                 # trouble, or one that was answering and is gone
+            out.append("✗ ", style=CRIT).append(cut(wrong.said, room), style=INK)
+        if reading is None:
+            return out
+        quiet_farms = sum(farm.farm_stale for farm in reading.granges)
+        granges = len(reading.granges)
+        out.append("\n   team      ", style=MUTED)
+        out.append(f"{granges} grange{'' if granges == 1 else 's'}", style=INK2)
+        if quiet_farms:
+            out.append(f" · {quiet_farms} with no word from its agent-farm", style=INK)
+        if self.grange_state != "ok":
+            out.append(f" · as of {age(self.grange_read_at)} ago", style=MUTED)
+        here, agents = self.agents_here(), len(self.reported)
+        out.append("\n   agents    ", style=MUTED)
+        said = f"{agents} reported" + (f" · {here} on the pull requests shown here" if agents else "")
+        out.append(said, style=INK2)
+        how = "   by the ticket and number in their names: proj-86-pr-98"
+        if agents and len(said) + len(how) <= room + 2:       # said when there is room: the line keeps its row
+            out.append(how, style=MUTED)
+        return out
+
     def log_text(self) -> Text:
         out = Text("log", style=f"bold {INK}")
         out.append("   p shows the pull requests\n", style=MUTED)
@@ -1805,16 +1982,18 @@ def selfcheck() -> int:
 
     It loads the parts a packaged copy could be missing (ngrok's library, the Keychain
     backend, macOS's certificate trust), then starts the app without a screen, with an
-    empty stand-in for the Keychain and empty settings in a temporary folder. So it reads
-    no secret, and with no token the app talks to nobody. Returns 0 when the setup screen
-    drew and HTTPS is judged by macOS."""
+    empty stand-in for the Keychain and empty settings in a temporary folder, and told not
+    to ask the agent-grange. So it reads no secret, and talks to nobody: with no token
+    there is nothing to ask GitHub, and whatever listens on the grange's port on the Mac
+    that builds is left alone. Returns 0 when the setup screen drew and HTTPS is judged by
+    macOS."""
     import ngrok                                               # noqa: F401  only that it loads
     if sys.platform == "darwin":
         from keyring.backends import macOS                     # noqa: F401
     trusted = use_macos_trust()
 
     async def look() -> bool:
-        app = Frolic()
+        app = Frolic(ask_grange=False)
         async with app.run_test(size=(150, 46)) as pilot:
             await pilot.pause()
             shown = "\n".join(strip.text for strip in app.screen._compositor.render_strips())

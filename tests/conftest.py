@@ -1,15 +1,18 @@
 # Copyright (C) 2026 Don Patterson
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared test setup: no test ever touches the real Keychain, the real settings, the real
-list of repositories, the real GitHub or a real tunnel, and none reaches the network."""
+list of repositories, the real GitHub, a real tunnel or the agent-grange that may be running
+on this Mac, and none reaches the network."""
+import queue
 import urllib.request
 
 import pytest
 import truststore
 
+import grange
 import keychain
 import main
-from standins import FakeBrowser, FakeGitHub, FakePulls, FakeTunnel
+from standins import FakeBrowser, FakeGitHub, FakeGrange, FakePulls, FakeTunnel
 
 
 class MemoryKeychain:
@@ -40,7 +43,8 @@ def isolated(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def stand_ins(monkeypatch):
-    """The app talks to stand-ins for GitHub, ngrok, the pull request fetch and the browser."""
+    """The app talks to stand-ins for GitHub, ngrok, the pull request fetch, the agent-grange
+    and the browser."""
     FakeGitHub.hooks_made, FakeGitHub.deleted, FakeGitHub.tokens_seen, FakeTunnel.opened = {}, [], [], []
     FakeGitHub.unreachable, FakeGitHub.renamed, FakeGitHub.gates, FakeGitHub.waiting = 0, {}, {}, set()
     FakeGitHub.teams_listed, FakeGitHub.teams_broken, FakeGitHub.teams_asked = [], None, []
@@ -55,6 +59,12 @@ def stand_ins(monkeypatch):
     monkeypatch.setattr(main, "wait_reachable", lambda url, nonce, **how: True)
     FakeBrowser.opened, FakeBrowser.broken = [], None
     monkeypatch.setattr(main, "open_page", FakeBrowser.open)
+    FakeGrange.answers, FakeGrange.asked, FakeGrange.made, FakeGrange.failing = queue.Queue(), [], [], None
+    monkeypatch.setattr(main, "Grange", FakeGrange)
+    monkeypatch.setattr(grange, "SPACING", 0.0)   # the stand-ins answer at once: no test waits out the gap
+    yield
+    for made in FakeGrange.made:                  # an app a test left running asks no more
+        made.close()
 
 
 @pytest.fixture(autouse=True)
