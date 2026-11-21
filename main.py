@@ -86,7 +86,7 @@ from textual.widgets import Input, Static
 
 import keychain
 from apppaths import app_version, log_dir
-from board import Board, remember_change
+from board import Board, fit_hints, remember_change
 from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
 from grange import GRACE, Grange, GrangeError, Reading, Reported, Watch
@@ -251,11 +251,21 @@ class Confirm(ModalScreen[bool]):
 
 # ---- the setup screen ------------------------------------------------------------------
 
+# The hints at the foot of the setup: each a key and a word or two, drawn as the board's are.
+SETUP_HINTS = [("t", "Token"), ("f", "Forget"), ("a", "Add repo"), ("↑↓", "Pick"), ("[ ]", "Move"),
+               ("space", "Show/hide"), ("x", "Remove"), ("b", "Branches"), ("w", "Webhooks"), ("W", "Off"),
+               ("r", "Hooks"), ("p", "Pulls / log"), ("u", "Update"), ("s", "Board"), ("q", "Quit")]
+# All of them need 157 cells. In a narrower window these are left out, the first first: the
+# ones seldom wanted go before the ones a new user needs. The way to the board and out stay.
+SETUP_LEFT_OUT_FIRST = ["W", "r", "[ ]", "b", "p", "u", "x", "space", "↑↓", "f", "w", "a", "t"]
+
+
 class SetupScreen(Screen):
     """The four parts of the setup, and the log or the plain list below them. It only
     lays the parts out and passes the keys on: the words and the work are the app's."""
 
     AUTO_FOCUS = None                              # nothing holds the keys: the bindings below act
+    hints_shown = ""                               # the key hints as last fitted to the window, as plain text
     BINDINGS = [
         Binding("t", "app.token", show=False), Binding("f", "app.forget_token", show=False),
         Binding("a", "app.add", show=False),
@@ -286,12 +296,13 @@ class SetupScreen(Screen):
         yield Static("─" * 400, classes="rule")
         with VerticalScroll(id="lower"):
             yield Static(id="log")
-        yield Static("t token  f forget  a add repo  ↑↓ pick  [ ] move  space show/hide  x remove  b branches  "
-                     "w webhooks  W off  r hooks  p pulls / log  u update  s board  q quit",
-                     id="hints", classes="line")
+        yield Static(fit_hints(SETUP_HINTS, SETUP_LEFT_OUT_FIRST, 9999), id="hints", classes="line")
 
     def on_mount(self) -> None:
         self.draw()
+
+    def on_resize(self) -> None:
+        self.draw()                               # the hints are fitted to the width
 
     def on_screen_resume(self) -> None:
         self.draw()
@@ -306,6 +317,11 @@ class SetupScreen(Screen):
         self.query_one("#hooks", Static).update(app.hooks_text())
         self.query_one("#agents", Static).update(app.agents_text())
         self.query_one("#log", Static).update(app.pulls_text() if app.view == "pulls" else app.log_text())
+        hints = self.query_one("#hints", Static)
+        fitted = fit_hints(SETUP_HINTS, SETUP_LEFT_OUT_FIRST, hints.size.width or self.size.width - 4)
+        if fitted.plain != self.hints_shown:      # only when the width calls for it
+            self.hints_shown = fitted.plain
+            hints.update(fitted)
 
 
 # ---- the app ---------------------------------------------------------------------------
@@ -333,7 +349,7 @@ class Frolic(App):
     .part {{ height: auto; margin: 0 2; }}
     #lower {{ height: 1fr; margin: 0 2; }}
     #log {{ height: auto; }}
-    #hints {{ color: {MUTED}; }}
+    #hints {{ margin: 0; padding: 0 2; background: {RAISED}; }}
     ModalScreen {{ align: center middle; background: {PLANE} 60%; }}
     #box {{ width: 78; height: auto; padding: 1 2; background: {SURFACE}; border: round {DIVIDER}; }}
     #about {{ margin: 1 0; }}

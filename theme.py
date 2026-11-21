@@ -11,6 +11,12 @@ The colors, in one place. They are the ones the chosen mock-up (mockup/optionx.p
     same bar in INK2, so the two are told apart: time since something, and time until it.
     It was measured, not picked by eye: the gentlest violet that stays apart from INK2 for
     full and for color-blind vision, and from the status colors, the yellow and the blue.
+  • KEY is the key in a hint at the foot of a screen ("q" in "q Quit"), and nothing else.
+    agent-farm's footer has its keys in orange, and that orange is, to the eye, WARN: the
+    amber of a review asked for and a check still running. So the key has a color of its
+    own here, measured as AGE was: a cyan that stays apart from the status colors, the
+    yellow and the violet for full and for color-blind vision. Beside its words (INK2) a
+    key is told by being bold as well, since to some eyes cyan and grey are close.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ GOOD, WARN, SERIOUS, CRIT = "#0ca30c", "#fab219", "#ec835a", "#d03b3b"
 WAITING = "#ffd75f"
 DIVIDER = "#0053AA"
 AGE = "#9f90e6"
+KEY = "#45d3dd"
 
 
 def _parts(color: str) -> tuple[int, int, int]:
