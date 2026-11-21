@@ -561,6 +561,30 @@ async def test_a_grange_out_of_date_is_said_on_the_board_and_the_setup_says_how_
 
 
 @drive
+async def test_what_the_grange_says_of_itself_takes_one_row_a_line_however_long_it_is(isolated):
+    """It is from outside, and may be 256 characters a field. Left to wrap, the part took a
+    dozen rows of a small window and the log beneath it was left one."""
+    a_board()
+    app = main.Frolic()
+    long = out_of_date({"error": "image out of date", "summary": "behind " * 36, "fix": "make update " * 21},
+                       retry=30)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        await to_setup(app, pilot)
+        FakeGrange.answers.put(long)
+        await until(pilot, lambda: app.grange_state == "stale")
+        await pilot.pause(0.2)
+        rows = screen(app).splitlines()
+        top = next(i for i, row in enumerate(rows) if "4  Agents" in row)
+        part = rows[top:next(i for i in range(top, len(rows)) if set(rows[i].strip()) == {"─"})]
+        assert len(part) == 3, part                                # its heading, why, and the fix
+        assert part[1].rstrip().endswith("…") and part[2].rstrip().endswith("…")
+        assert all(len(row.rstrip()) <= 100 for row in part)
+        assert app.setup.query_one("#lower").size.height >= 4      # the log keeps its room
+        assert long.said in [said for _, said, _ in app.lines]     # and has it whole
+
+
+@drive
 async def test_what_was_last_reported_stays_for_a_minute_once_the_grange_stops_answering(isolated):
     a_board()
     app = main.Frolic()

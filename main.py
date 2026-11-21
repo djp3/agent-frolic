@@ -1784,6 +1784,10 @@ class Frolic(App):
         if self.grange_state == "asking":
             return out.append(f"asking the agent-grange on this Mac (port {port})…", style=INK2)
         reading, wrong = self.grange_reading, self.grange_wrong
+        # What the grange says of itself is from outside and may be long: each line here is
+        # cut to the one row it has, as a pull request's title is. The log has it whole.
+        wide = self.setup.query_one("#agents", Static).size.width if self.setup.is_mounted else 0
+        room = max(24, (wide or 400) - 15)            # what a line has after its label and its mark
         if wrong is None:
             out.append("✓ ", style=GOOD).append(f"answers on 127.0.0.1:{port}", style=INK)
             out.append(f" as {reading.grange}" if reading.grange else "", style=INK2)
@@ -1793,15 +1797,19 @@ class Frolic(App):
         elif wrong.kind == "trouble" and not self.grange_ever:
             # Nothing has answered as a grange since the app began: more likely something else
             # listens on its port than a grange in trouble. Said, and not as an alarm.
-            out.append(f"nothing on port {port} of this Mac answers as an agent-grange", style=INK2)
-            return out.append(f"   {wrong.said}", style=MUTED)
+            said = f"nothing on port {port} of this Mac answers as an agent-grange"
+            out.append(said, style=INK2)
+            return out.append(cut(f"   {wrong.said}", max(0, room - len(said))), style=MUTED)
         elif wrong.kind == "stale":
-            out.append("✗ ", style=CRIT).append("out of date" + (f": {wrong.why}" if wrong.why else ""), style=INK)
+            why = "out of date" + (f": {wrong.why}" if wrong.why else "")
+            out.append("✗ ", style=CRIT).append(cut(why, room), style=INK)
             out.append("\n   to fix    ", style=MUTED)
-            out.append(wrong.fix or "update it", style=INK)
-            out.append("   in the grange's folder: it answers nothing until then", style=MUTED)
+            fix, where = wrong.fix or "update it", "   in the grange's folder: it answers nothing until then"
+            fix = cut(fix, room + 2)                          # this line has no mark before it
+            out.append(fix, style=INK)
+            out.append(where if cell_len(fix) + len(where) <= room + 2 else "", style=MUTED)
         else:                                                 # trouble, or one that was answering and is gone
-            out.append("✗ ", style=CRIT).append(wrong.said, style=INK)
+            out.append("✗ ", style=CRIT).append(cut(wrong.said, room), style=INK)
         if reading is None:
             return out
         quiet_farms = sum(farm.farm_stale for farm in reading.granges)
