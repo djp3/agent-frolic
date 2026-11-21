@@ -6,7 +6,6 @@ Sparkle's tools. The script itself, scripts/check_appcast.py and scripts/check_s
 are the real ones. So these show what a release does and what it refuses to do, which a test
 that only reads the script cannot: nothing is tagged or published unless the zip and the feed
 are both signed, and nothing is built with a key that is not the app's."""
-import plistlib
 import shutil
 import subprocess
 import sys
@@ -14,12 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from sparkle_standins import GENERATE_KEYS, appcast, shim
+from sparkle_standins import ANOTHER_KEY, GENERATE_KEYS, PUBLIC_HALF, THE_APPS_KEY, appcast, shim
 
 ROOT = Path(__file__).resolve().parent.parent
-with open(ROOT / "macos" / "Info.plist", "rb") as _f:
-    THE_APPS_KEY = plistlib.load(_f)["SUPublicEDKey"]
-ANOTHER_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="        # made up: thirty-two zero bytes
 VERSION = "9.9.9"
 
 NOTES_A_CALL = '#!/bin/sh\necho "{name} $*" >> "$CALLS"\n'
@@ -44,8 +40,6 @@ BUILD = ('#!/bin/sh\necho "build_app $* WITH_UPDATES=${WITH_UPDATES:-}" >> "$CAL
          'for key in ${BUILD_LOSES:-}; do\n'
          '    /usr/libexec/PlistBuddy -c "Delete :$key" dist/agent-frolic.app/Contents/Info.plist\n'
          "done\n")
-# scripts/sparkle_public_key.sh: the public half of the key file a test names ($FILE_HAS).
-PUBLIC_HALF = '#!/bin/sh\n[ -n "${FILE_HAS:-}" ] || exit 1\necho "$FILE_HAS"\n'
 GENERATE_APPCAST = NOTES_A_CALL.format(name="generate_appcast") + """out=""
 while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done
 cp "$APPCAST" "$out"

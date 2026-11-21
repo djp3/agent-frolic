@@ -6,27 +6,16 @@ own, so no keychain is asked anything, and against a stand-in for the script tha
 an exported key's public half (scripts/sparkle_public_key.sh, which has tests of its own in
 test_release_scripts.py)."""
 import os
-import plistlib
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from sparkle_standins import GENERATE_KEYS, shim
+from sparkle_standins import ANOTHER_KEY, GENERATE_KEYS, PUBLIC_HALF, THE_APPS_KEY, shim
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "check_sparkle_key.sh"
-with open(ROOT / "macos" / "Info.plist", "rb") as _f:
-    THE_APPS_KEY = plistlib.load(_f)["SUPublicEDKey"]
-ANOTHER_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="        # made up: thirty-two zero bytes
-# scripts/sparkle_public_key.sh: it notes the file it was asked about, and answers with the
-# public half it was told that file has ($FILE_HAS), or that the file holds no key.
-PUBLIC_HALF = """#!/bin/sh
-echo "$1" >> "$ASKED_OF_FILE"
-[ -n "${FILE_HAS:-}" ] || { echo "sparkle key: the file is not base64 text" >&2; exit 1; }
-echo "$FILE_HAS"
-"""
 
 @pytest.fixture
 def checkout(tmp_path):
