@@ -609,6 +609,24 @@ def test_a_grange_that_answers_puts_an_end_to_the_longer_waits(monkeypatch):
     assert [w for w in waits if w] == [15, 30, 60, 15, 30]
 
 
+def test_the_longer_waits_begin_at_their_beginning_once_the_minute_of_asking_often_is_over(monkeypatch):
+    """The dozen tries of that minute were counted toward the doubling: the first wait after
+    it was already the longest there is, five minutes, for a grange that may be back at once."""
+    clock = [1000.0]
+    monkeypatch.setattr(grange.time, "monotonic", lambda: clock[0])
+    refused = lambda: GrangeError("trouble", "refused the question (HTTP 500)")          # noqa: E731
+
+    class Ticking(Scripted):
+        def read(self, after=None, wait=grange.WAIT):
+            clock[0] += 5.0                                              # each try comes five seconds on
+            return super().read(after, wait)
+
+    waits = waits_of(Ticking(Reading(4, "djp3", ()), *(refused() for _ in range(16))))
+    often = [w for w in waits if w == grange.RETRY_SOON]
+    assert len(often) == 12                                              # the minute, asked every five seconds
+    assert [w for w in waits if w][12:16] == [15, 30, 60, 120]           # and then from the beginning
+
+
 def test_a_grange_restarted_is_asked_with_whatever_cursor_it_gave_last():
     """Its cursor starts again from 1: the watch compares nothing, it only hands it back."""
     there = Scripted(Reading(812, "djp3", ()), Reading(1, "djp3", ()))

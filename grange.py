@@ -310,12 +310,15 @@ class Watch(threading.Thread):
                     if answering:
                         answering, lost_at = False, time.monotonic()
                     cursor, wait = None, e.retry
-                    troubled = troubled + 1 if e.kind == "trouble" else 0
                     if (lost_at is not None and e.kind in ("down", "trouble")
                             and time.monotonic() - lost_at < GRACE):
-                        wait = min(wait, RETRY_SOON)
-                    elif troubled > 1:
-                        wait = min(wait * 2 ** min(troubled - 1, 16), RETRY_MOST)
+                        # Asked often, and none of these tries counts toward the longer
+                        # waits: those begin at their beginning once this minute is over.
+                        wait, troubled = min(wait, RETRY_SOON), 0
+                    else:
+                        troubled = troubled + 1 if e.kind == "trouble" else 0
+                        if troubled > 1:
+                            wait = min(wait * 2 ** min(troubled - 1, 16), RETRY_MOST)
                     self.on_error(e)
                 else:
                     answering, lost_at, troubled = True, None, 0
