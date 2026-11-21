@@ -26,7 +26,7 @@
 #     NOTARY_KEY_ID / NOTARY_ISSUER_ID / NOTARY_KEY_FILE (an App Store Connect API key)
 #   - the Sparkle key, in the login keychain under the account agent-frolic. Its public half
 #     is SUPublicEDKey in macos/Info.plist:
-#       .sparkle-tools/<ver>/bin/generate_keys --account agent-frolic -p     # prints that public key
+#       "$(scripts/fetch_sparkle_tools.sh)/bin/generate_keys" --account agent-frolic -p     # prints that public key
 #     Apps already installed accept updates signed with this key only, so keep a copy of it
 #     somewhere safe:  generate_keys --account agent-frolic -x <file>  exports it.
 #     SPARKLE_PRIVATE_KEY_FILE=<file> signs with an exported key instead of the keychain's.
