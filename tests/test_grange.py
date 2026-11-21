@@ -337,23 +337,24 @@ def test_a_held_question_is_given_up_at_once_when_the_app_leaves(serve):
 
 
 def held_mid_answer(head: bytes):
-    """A server that sends `head`, the start of an answer, and then stalls. Returns its port
-    and the event that lets it go."""
+    """A server that sends `head`, the start of an answer, and then stalls. Returns its port,
+    the event that lets it go, and the one that says the head has been sent."""
     listening = socket.socket()
     listening.bind(("127.0.0.1", 0))
     listening.listen(1)
-    let_go = threading.Event()
+    let_go, sent = threading.Event(), threading.Event()
 
     def serve_one():
         conn, _ = listening.accept()
         conn.recv(4096)
         conn.sendall(head)
+        sent.set()
         let_go.wait(20)
         conn.close()
         listening.close()
 
     threading.Thread(target=serve_one, daemon=True).start()
-    return listening.getsockname()[1], let_go
+    return listening.getsockname()[1], let_go, sent
 
 
 @pytest.mark.parametrize("head", [
@@ -364,7 +365,7 @@ def held_mid_answer(head: bytes):
 def test_a_question_stalled_in_the_middle_of_its_answer_is_given_up_at_once_too(head):
     """For an answer that says the connection will close, http.client has let go of its
     socket by the time the body is read: this one keeps its own."""
-    port, let_go = held_mid_answer(head)
+    port, let_go, sent = held_mid_answer(head)
     there, ended = Grange(port), []
 
     def ask():
@@ -375,12 +376,11 @@ def test_a_question_stalled_in_the_middle_of_its_answer_is_given_up_at_once_too(
 
     thread = threading.Thread(target=ask, daemon=True)
     thread.start()
-    time.sleep(0.3)                                                      # the head has arrived by now
-    began = time.monotonic()
+    assert sent.wait(5), "the question never arrived"                    # asked, and the head is on its way back
     there.close()
-    thread.join(5)
+    thread.join(5)                                                       # at once: the server holds on for 20s
     let_go.set()
-    assert ended == ["closed"] and time.monotonic() - began < 2
+    assert ended == ["closed"] and not thread.is_alive()
 
 
 def test_closing_as_a_question_ends_is_harmless():
@@ -427,10 +427,12 @@ class Scripted:
 
     def __init__(self, *answers):
         self.answers, self.asked, self.closed = list(answers), [], threading.Event()
+        self.holding = threading.Event()              # the script is done, and a question is being held
 
     def read(self, after=None, wait=grange.WAIT):
         self.asked.append(after)
         if not self.answers:
+            self.holding.set()
             self.closed.wait(10)
             raise GrangeError("closed", "given up")
         answer = self.answers.pop(0)
@@ -444,15 +446,33 @@ class Scripted:
         self.closed.set()
 
 
-def watched(there, on_reading=None, on_error=None):
-    """Run a watch until it has asked every scripted answer and holds; what it handed on."""
+class Noted(threading.Event):
+    """Stands in for the watch's `stopped`: it waits as an Event does, notes each wait it was
+    asked for, and says when the watch has settled down to a long one (`parked`)."""
+
+    def __init__(self):
+        super().__init__()
+        self.waits, self.parked = [], threading.Event()
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if timeout is None or timeout >= 1:
+            self.parked.set()
+        return super().wait(timeout)
+
+
+def watched(there, on_reading=None, on_error=None, noted=None):
+    """Run a watch until it has come to rest: the script is done and a question is being
+    held, or it has settled to a long wait before it asks again. What it handed on. No
+    sleep stands in for "it must have got there by now": the watch says when it has."""
     readings, errors = [], []
     watch = Watch(there, on_reading or readings.append, on_error or errors.append)
+    watch.stopped = noted = noted or Noted()
     watch.start()
-    end = time.monotonic() + 5
-    while there.answers and time.monotonic() < end:
+    end = time.monotonic() + 10
+    while not (there.holding.is_set() or noted.parked.is_set()):
+        assert time.monotonic() < end, f"the watch never came to rest: asked {there.asked}"
         time.sleep(0.005)
-    time.sleep(0.05)
     watch.stop()
     watch.join(5)
     assert not watch.is_alive()
@@ -520,27 +540,28 @@ def test_questions_are_kept_apart_however_fast_the_answers_come(monkeypatch):
 
     there = Timed(*(Reading(0, "djp3", 1, ()) for _ in range(3)))            # a cursor nothing is held for
     readings, errors = watched(there)
-    assert len(readings) == 3 and errors == [] and there.asked[:3] == [None, 0, 0]
-    assert len(asked_at) >= 3 and all(later - sooner >= 0.14 for sooner, later in zip(asked_at, asked_at[1:]))
+    assert len(readings) == 3 and errors == [] and there.asked == [None, 0, 0, 0]
+    assert all(later - sooner >= 0.14 for sooner, later in zip(asked_at, asked_at[1:]))   # never sooner
 
 
 def test_a_question_that_was_held_is_followed_at_once(monkeypatch):
+    """Told by what the watch asked to wait, not by a stopwatch: nothing at all."""
     monkeypatch.setattr(grange, "SPACING", 0.05)
-    asked_at = []
 
     class Held(Scripted):
         def read(self, after=None, wait=grange.WAIT):
-            asked_at.append(time.monotonic())
             if self.answers:
                 time.sleep(0.2)                                          # held longer than the gap
             return super().read(after, wait)
 
-    watched(Held(Reading(4, "djp3", 1, ()), Reading(9, "djp3", 1, ())))
-    assert 0.2 <= asked_at[1] - asked_at[0] < 0.25 + 0.15                # the hold, and no gap on top
+    noted = Noted()
+    readings, _ = watched(Held(Reading(4, "djp3", 1, ()), Reading(9, "djp3", 1, ())), noted=noted)
+    assert len(readings) == 2 and noted.waits == []                      # the hold was gap enough
 
 
 class Recorded(threading.Event):
-    """Stands in for the watch's `stopped`: a wait is noted and over at once."""
+    """Stands in for the watch's `stopped`: a wait is noted and over at once, so that waits
+    of minutes can be read off without being sat through."""
 
     def __init__(self):
         super().__init__()
