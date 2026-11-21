@@ -279,8 +279,12 @@ class Watch(threading.Thread):
     changes. After a failure the next question comes when the error says it is worth it,
     and carries no cursor: whatever is there then is news. A grange that was answering and
     has stopped is asked sooner than that, every RETRY_SOON seconds for GRACE: it may be
-    restarting, and the app keeps what it last said only that long. `stop` ends it at
-    once, a held question included.
+    restarting, and the app keeps what it last said only that long. Trouble that goes on
+    past that, or on a port where no grange ever answered, is asked about less and less
+    often: each try that fails waits twice as long as the one before, RETRY_MOST at the
+    most. It may be something else that listens there, and that is not to be asked every
+    quarter of a minute for as long as the app runs. `stop` ends it at once, a held
+    question included.
 
     It is the grange that sets the pace, by holding a question until it has news. Should
     whatever answers on its port not hold them (it need not be a grange at all), the
@@ -298,6 +302,7 @@ class Watch(threading.Thread):
         cursor: int | None = None
         answering = False                 # its last try was answered
         lost_at: float | None = None      # when a grange that was answering first failed to
+        troubled = 0                      # tries in a row that ended in trouble
         while not self.stopped.is_set():
             wait, asked_at = 0.0, time.monotonic()
             try:
@@ -309,12 +314,15 @@ class Watch(threading.Thread):
                     if answering:
                         answering, lost_at = False, time.monotonic()
                     cursor, wait = None, e.retry
+                    troubled = troubled + 1 if e.kind == "trouble" else 0
                     if (lost_at is not None and e.kind in ("down", "trouble")
                             and time.monotonic() - lost_at < GRACE):
                         wait = min(wait, RETRY_SOON)
+                    elif troubled > 1:
+                        wait = min(wait * 2 ** min(troubled - 1, 16), RETRY_MOST)
                     self.on_error(e)
                 else:
-                    answering, lost_at = True, None
+                    answering, lost_at, troubled = True, None, 0
                     cursor = reading.cursor
                     self.on_reading(reading)
                     wait = max(0.0, SPACING - (time.monotonic() - asked_at))

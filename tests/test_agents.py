@@ -502,6 +502,30 @@ async def test_a_mac_with_no_grange_says_so_once_and_plainly(isolated):
 
 
 @drive
+async def test_something_else_on_the_granges_port_is_said_plainly_and_is_no_alarm(isolated):
+    """A Mac with no grange, and another program on port 7788: as little trouble as none at all."""
+    a_board()
+    app = main.Frolic()
+    refused = "The agent-grange on this Mac refused the question (HTTP 404)."
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        for _ in range(2):
+            FakeGrange.answers.put(GrangeError("trouble", refused, retry=0.01))
+        await until(pilot, lambda: len(FakeGrange.asked) == 3)
+        assert app.grange_state == "trouble" and not app.grange_ever and app.notice_now() == ""
+        assert [(said, style) for _, said, style in app.lines if said == refused] == [(refused, main.INK2)]
+        await to_setup(app, pilot)
+        drawn = screen(app)
+        assert "nothing on port 7788 of this Mac answers as an agent-grange" in drawn and "✗" not in drawn
+        FakeGrange.answers.put(team(*THE_TEAM))                  # a grange after all
+        await until(pilot, lambda: app.grange_state == "ok")
+        FakeGrange.answers.put(GrangeError("trouble", refused, retry=30))
+        await until(pilot, lambda: app.grange_state == "trouble")
+        await pilot.pause(0.1)
+        assert app.grange_ever and f"✗ {refused}" in screen(app)  # one that was answering is amiss
+
+
+@drive
 async def test_a_grange_out_of_date_is_said_on_the_board_and_the_setup_says_how_to_fix_it(isolated):
     a_board()
     app = main.Frolic()

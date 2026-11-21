@@ -539,6 +539,52 @@ def test_a_question_that_was_held_is_followed_at_once(monkeypatch):
     assert 0.2 <= asked_at[1] - asked_at[0] < 0.25 + 0.15                # the hold, and no gap on top
 
 
+class Recorded(threading.Event):
+    """Stands in for the watch's `stopped`: a wait is noted and over at once."""
+
+    def __init__(self):
+        super().__init__()
+        self.waits = []
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        return self.is_set()
+
+
+def waits_of(there) -> list:
+    """How long the watch waited after each of the scripted answers, in turn."""
+    watch = Watch(there, lambda reading: None, lambda wrong: None)
+    watch.stopped = waited = Recorded()
+    watch.start()
+    end = time.monotonic() + 5
+    while there.answers and time.monotonic() < end:
+        time.sleep(0.005)
+    watch.stop()
+    watch.join(5)
+    assert not watch.is_alive()
+    return waited.waits
+
+
+def test_trouble_that_goes_on_is_asked_about_less_and_less_often():
+    """Something else may listen on the grange's port: it is not to be asked every quarter
+    of a minute for as long as the app runs."""
+    refused = lambda: GrangeError("trouble", "refused the question (HTTP 404)")          # noqa: E731
+    waits = waits_of(Scripted(*(refused() for _ in range(8))))
+    assert waits[:8] == [15, 30, 60, 120, 240, 300, 300, 300] and max(waits) == grange.RETRY_MOST
+
+
+def test_no_grange_at_all_is_asked_for_at_the_same_slow_pace_throughout():
+    waits = waits_of(Scripted(*(GrangeError("down", "nothing there", retry=grange.RETRY_DOWN) for _ in range(4))))
+    assert waits[:4] == [60, 60, 60, 60]
+
+
+def test_a_grange_that_answers_puts_an_end_to_the_longer_waits(monkeypatch):
+    monkeypatch.setattr(grange, "GRACE", 0.0)                             # so the minute of asking often is over
+    refused = lambda: GrangeError("trouble", "refused the question (HTTP 500)")          # noqa: E731
+    waits = waits_of(Scripted(refused(), refused(), refused(), Reading(4, "djp3", 1, ()), refused(), refused()))
+    assert [w for w in waits if w] == [15, 30, 60, 15, 30]
+
+
 def test_a_grange_restarted_is_asked_with_whatever_cursor_it_gave_last():
     """Its cursor starts again from 1: the watch compares nothing, it only hands it back."""
     there = Scripted(Reading(812, "djp3", 1, ()), Reading(1, "djp3", 2, ()))

@@ -425,6 +425,7 @@ class Frolic(App):
         self.grange_wrong: GrangeError | None = None  # what is wrong, unless it is "asking" or "ok"
         self.grange_reading: Reading | None = None    # its last answer, for as long as that is believed
         self.grange_read_at = 0.0                 # when that answer came
+        self.grange_ever = False                  # a grange has answered on that port since the app began
         self.grange_failed_at = 0.0               # when it first failed to answer, since it last did: by
                                                   # time.monotonic(), the clock the watch counts on
         self.watch: Watch | None = None           # the thread that asks it, from mount to unmount
@@ -594,7 +595,7 @@ class Frolic(App):
     def grange_answered(self, reading: Reading) -> None:
         """The grange's picture of the team: it replaces the one before, whole."""
         back = self.grange_state != "ok"
-        self.grange_state, self.grange_wrong = "ok", None
+        self.grange_state, self.grange_wrong, self.grange_ever = "ok", None, True
         self.grange_reading, self.grange_read_at, self.grange_failed_at = reading, time.time(), 0.0
         self.reported = tuple(reading.reported())
         if self.notice is not None and self.notice[1] in (self.GRANGE_STALE, self.GRANGE_LOST):
@@ -612,12 +613,13 @@ class Frolic(App):
         failure, not from its last answer: after the Mac has slept that answer is hours
         old, and the grange is asked again within moments of waking. Finding no grange
         when none has ever answered is how things are on a Mac without one, and is no
-        trouble."""
+        trouble; nor is finding something else on its port, which the watch then asks
+        less and less often."""
         before = self.grange_wrong
         if not self.grange_failed_at:
             self.grange_failed_at = time.monotonic()
         if before is None or (wrong.kind, wrong.said) != (before.kind, before.said):
-            plain = wrong.kind == "down" and self.grange_reading is None
+            plain = wrong.kind in ("down", "trouble") and not self.grange_ever
             self.say(wrong.said, INK2 if plain else INK)
             if wrong.kind == "stale":
                 self.announce(self.GRANGE_STALE, self.NOTICE_FAILED_S)
@@ -1775,9 +1777,14 @@ class Frolic(App):
         if wrong is None:
             out.append("✓ ", style=GOOD).append(f"answers on 127.0.0.1:{port}", style=INK)
             out.append(f" as {reading.grange}" if reading.grange else "", style=INK2)
-        elif wrong.kind == "down" and reading is None:        # as on any Mac without one: no trouble
+        elif wrong.kind == "down" and not self.grange_ever:   # as on any Mac without one: no trouble
             out.append(f"none is running on this Mac (port {port})", style=INK2)
             return out.append("   agent-grange brings your team's agents onto the board", style=MUTED)
+        elif wrong.kind == "trouble" and not self.grange_ever:
+            # Nothing has answered as a grange since the app began: more likely something else
+            # listens on its port than a grange in trouble. Said, and not as an alarm.
+            out.append(f"nothing on port {port} of this Mac answers as an agent-grange", style=INK2)
+            return out.append(f"   {wrong.said}", style=MUTED)
         elif wrong.kind == "stale":
             out.append("✗ ", style=CRIT).append("out of date" + (f": {wrong.why}" if wrong.why else ""), style=INK)
             out.append("\n   to fix    ", style=MUTED)
