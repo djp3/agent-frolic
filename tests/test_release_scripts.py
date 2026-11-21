@@ -71,6 +71,16 @@ def test_a_release_stops_unless_the_appcast_itself_is_signed_and_the_signature_i
     assert "signed appcast carries them" not in RELEASE                 # it said so when only the zip was signed
 
 
+def test_sparkles_helpers_are_signed_as_sparkle_says_to_sign_them():
+    """Each by itself and then the framework: only the downloader keeps its entitlements."""
+    sign = (ROOT / "scripts" / "sign_app.sh").read_text()
+    steps = [line.strip() for line in sign.splitlines() if line.startswith("sign ") and "$FW" in line]
+    assert steps == ['sign "$FW/Versions/B/XPCServices/Installer.xpc"',
+                     'sign --preserve-metadata=entitlements "$FW/Versions/B/XPCServices/Downloader.xpc"',
+                     'sign "$FW/Versions/B/Autoupdate"', 'sign "$FW/Versions/B/Updater.app"', 'sign "$FW"']
+    assert "--deep" not in "".join(line for line in sign.splitlines() if line.lstrip().startswith("sign "))
+
+
 @needs_swift
 def test_an_exported_keys_public_half_is_the_one_ed25519_gives_its_seed(tmp_path):
     got = public_half(tmp_path, SEED)
