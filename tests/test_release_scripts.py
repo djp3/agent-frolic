@@ -71,6 +71,19 @@ def test_a_release_stops_unless_the_appcast_itself_is_signed_and_the_signature_i
     assert "signed appcast carries them" not in RELEASE                 # it said so when only the zip was signed
 
 
+def test_only_a_release_carries_the_feed_a_copy_built_by_hand_does_not_update_itself():
+    """With the feed in it, a copy built to try a change would offer the published release."""
+    assert 'if [ "${WITH_UPDATES:-0}" != 1 ]; then' in BUILD
+    taken_out = BUILD[BUILD.index('if [ "${WITH_UPDATES:-0}" != 1 ]; then'):]
+    taken_out = taken_out[:taken_out.index("\nfi\n")]
+    for key in ("SUFeedURL", "SUEnableAutomaticChecks", "SUScheduledCheckInterval"):
+        assert f'-c "Delete :{key}"' in taken_out
+        assert key in info_plist()                                     # and a release has them
+    assert 'WITH_UPDATES=1 PYTHON="$PYTHON" CODESIGN_IDENTITY="$IDENTITY" scripts/build_app.sh' in RELEASE
+    delegate = (ROOT / "macos" / "Sources" / "AgentFrolic" / "AppDelegate.swift").read_text()
+    assert 'guard !isDevelopmentRun, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil' in delegate
+
+
 def test_sparkles_helpers_are_signed_as_sparkle_says_to_sign_them():
     """Each by itself and then the framework: only the downloader keeps its entitlements."""
     sign = (ROOT / "scripts" / "sign_app.sh").read_text()

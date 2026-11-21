@@ -127,7 +127,8 @@ step "build"
 # A release always rebuilds the Python side: SKIP_PYTHON=1 left over in the shell must not
 # ship an older build of it. A dry run may reuse it.
 [ "$DRY_RUN" = 1 ] || export SKIP_PYTHON=0
-PYTHON="$PYTHON" CODESIGN_IDENTITY="$IDENTITY" scripts/build_app.sh
+# WITH_UPDATES=1: this copy is the one that is to update itself. A dry run builds the same.
+WITH_UPDATES=1 PYTHON="$PYTHON" CODESIGN_IDENTITY="$IDENTITY" scripts/build_app.sh
 
 if [ "$DRY_RUN" = 1 ]; then
     step "notarize: skipped (dry run)"

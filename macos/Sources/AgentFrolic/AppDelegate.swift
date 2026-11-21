@@ -88,10 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         startCore()
     }
 
-    /// Only the assembled app updates itself: a `swift run` has no Info.plist, so no feed
-    /// and no key to check an update against.
+    /// Only a released copy updates itself. A `swift run` has no Info.plist, so no feed and
+    /// no key to check an update against. And a copy assembled by scripts/build_app.sh
+    /// outside a release is given no feed, so that one built to try a change does not offer
+    /// to replace itself with the published release.
     private func setupUpdater() {
-        guard !isDevelopmentRun else { return }
+        guard !isDevelopmentRun, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return }
         updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     }
 
@@ -219,7 +221,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         appMenu.addItem(withTitle: "About agent-frolic",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        // With no updater (a development run) the item has no target and stays greyed out.
+        // With no updater (a development run, or a copy that is not a release) the item has no
+        // target and stays greyed out.
         let check = NSMenuItem(title: "Check for Updates…",
                                action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         check.target = updater

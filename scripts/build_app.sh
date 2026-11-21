@@ -15,6 +15,8 @@
 # CFBundleVersion (Sparkle compares the latter; dotted numbers compare naturally).
 #
 # This builds the app; scripts/release.sh notarizes it and publishes it as an update.
+# Only a release updates itself (WITH_UPDATES=1, which release.sh sets): a copy built here by
+# hand is given no feed, so it never asks GitHub and never offers to replace itself.
 # HTTPS certificates are judged by macOS (truststore), not by the certificate file of the
 # Python it was built with, which another Mac may not have; the self-check proves it.
 set -euo pipefail
@@ -88,6 +90,14 @@ cp LICENSE NOTICE "$APP/Contents/Resources/"
 cp -R credits "$APP/Contents/Resources/credits"
 scripts/check_credits.sh "$APP/Contents/Resources/credits"
 sed "s/__VERSION__/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
+if [ "${WITH_UPDATES:-0}" != 1 ]; then
+    # A copy built to try a change is not to replace itself with the published release, which
+    # is what it would offer once a day with the feed in it. Without a feed the app starts
+    # no updater at all (AppDelegate.setupUpdater), and Check for Updates stays grey.
+    /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" -c "Delete :SUEnableAutomaticChecks" \
+        -c "Delete :SUScheduledCheckInterval" "$APP/Contents/Info.plist"
+    echo "no update feed in this copy: it is not a release (WITH_UPDATES=1 makes one that updates itself)"
+fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 step "macOS minimum"
