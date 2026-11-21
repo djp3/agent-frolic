@@ -24,4 +24,5 @@ What that license does not cover:
 
   - Other people's programs that the app carries inside it (Python, Textual, Sparkle,
     SwiftTerm and the rest). Each remains under its own license. The texts of Sparkle's
-    and SwiftTerm's are in the app, in Contents/Resources/licenses.
+    and SwiftTerm's are in the app, beside its own: LICENSE-Sparkle and LICENSE-SwiftTerm
+    in Contents/Resources.

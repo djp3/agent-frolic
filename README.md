@@ -310,5 +310,5 @@ The artwork has licenses of its own: the app icon's rooster is from
 
 The app has other people's programs inside it, each under its own license. The texts of
 [Sparkle](https://sparkle-project.org)'s and
-[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)'s are in the app, in
-`Contents/Resources/licenses`.
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)'s are in the app, beside its own:
+`LICENSE-Sparkle` and `LICENSE-SwiftTerm` in `Contents/Resources`.

@@ -49,13 +49,14 @@ def test_the_app_carries_the_licenses_of_the_packages_its_host_links():
     packages the copy was built from, and a build without one stops."""
     build = (ROOT / "scripts" / "build_app.sh").read_text()
     assert "for package in Sparkle SwiftTerm; do" in build
-    assert 'cp "macos/.build/checkouts/$package/LICENSE" "$APP/Contents/Resources/licenses/$package.txt"' in build
+    assert 'cp "macos/.build/checkouts/$package/LICENSE" "$APP/Contents/Resources/LICENSE-$package"' in build
     assert '[ -s "macos/.build/checkouts/$package/LICENSE" ]' in build and "exit 1" in build
     package = (ROOT / "macos" / "Package.swift").read_text()
     linked = {line.split('name: "')[1].split('"')[0] for line in package.splitlines() if ".product(name:" in line}
     assert linked == {"Sparkle", "SwiftTerm"}                           # one more linked is one more license
     notice = " ".join((ROOT / "NOTICE").read_text().split())
-    assert "The texts of Sparkle's and SwiftTerm's are in the app, in Contents/Resources/licenses." in notice
+    assert ("The texts of Sparkle's and SwiftTerm's are in the app, beside its own: LICENSE-Sparkle and "
+            "LICENSE-SwiftTerm in Contents/Resources.") in notice
 
 
 def test_the_app_carries_the_license_and_says_so():
