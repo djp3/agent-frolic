@@ -44,7 +44,13 @@ fi
 step "host app: swift build"
 BIN=macos/.build/release/AgentFrolic
 rm -f "$BIN"                                   # so an existing binary can only come from this build
-( cd macos && swift build -c release --product AgentFrolic 2>&1 | grep -E "error|warning: unre|Build complete"
+# Only the versions Package.resolved pins: left to itself, swift build moves to a newer
+# Sparkle when Package.swift allows one, and writes that into Package.resolved as it goes.
+# The tools a release signs with were chosen for the pinned version (fetch_sparkle_tools.sh),
+# so the framework would no longer be the one they belong to. This way a newer one stops
+# the build, and bumping Sparkle stays a change someone makes: the pin and its hashes.
+( cd macos && swift build -c release --product AgentFrolic --only-use-versions-from-resolved-file 2>&1 \
+      | grep -E "error|warning: unre|Build complete"
   [ "${PIPESTATUS[0]}" -eq 0 ] )              # keep the compiler's verdict, not grep's
 [ -x "$BIN" ] || { echo "swift build did not produce $BIN" >&2; exit 1; }
 # Sparkle comes as a binary framework that SwiftPM downloads next to the build.
