@@ -6,6 +6,7 @@ installed copies unable to update, or find a mistake only after the notarization
 import base64
 import json
 import plistlib
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -198,18 +199,57 @@ def test_closing_the_boards_window_ends_the_app_whatever_else_is_open():
     assert "if coreRunning { terminal.terminate() }" in delegate       # and ending the app ends the board
 
 
+# A reader that may leave before its writer has finished: the writer is then cut off, the pipe
+# fails under pipefail, and in an assignment under `set -e` the script ends with nothing said.
+LEAVES_EARLY = [
+    re.compile(r"head\b"),                                               # after its lines
+    re.compile(r"grep\b[^|]*\s(-[a-zA-Z]*[qlLm]|--quiet|--silent|--max-count|--files-with)"),   # at a match
+    re.compile(r"sed\b[^|]*(^|[\s;'\"{])[0-9$]*q\b"),                      # at its q
+    re.compile(r"awk\b[^|]*\bexit\b"),                                   # at its exit
+]
+
+
+def leaves_early(line: str) -> str:
+    """The first reader on this line of shell that may leave early, or "" when none does."""
+    for reader in re.split(r"(?<!\|)\|(?!\|)", line)[1:]:
+        reader = reader.strip()
+        if any(pattern.match(reader) for pattern in LEAVES_EARLY):
+            return reader
+    return ""
+
+
+@pytest.mark.parametrize("line", [
+    'found=$(find . -name x | head -1)', 'first=$(list | head -n 1)', 'if file -b "$f" | grep -q "Mach-O"; then',
+    'list | grep -m1 wanted', 'list | grep --max-count=1 wanted', 'list | grep -l wanted', 'list | sed q',
+    "list | sed -n '3q;p'", "ID=$(security find-identity | awk '/Developer ID/ {print $2; exit}')",
+    "list | awk '{ print $2; exit }'", "a | sort | head -3"])
+def test_a_reader_that_may_leave_early_is_known_however_it_is_written(line):
+    assert leaves_early(line), line
+
+
+@pytest.mark.parametrize("line", [
+    'found=$(find . -name x -print -quit)', "ID=$(security find-identity | awk '/Developer ID/ && !n++ {print $2}')",
+    'list | sort | while read -r f; do', '[ "$(shasum -a 256 "$f" | cut -d" " -f1)" = "$WANT" ]',
+    'printf "%s\\n" "$HAVE" | sed "s/^/    /" >&2', 'case "${KEY:-}" in ""|/*|-) ;; *) KEY="$PWD/$KEY" ;; esac',
+    'a || b', 'grep -q wanted file || exit 1', '[ "$(head -c 8 "$picture" | xxd -p)" = 89504e47 ]',
+    "list | grep -E 'error|warning' | tr a b", "list | sed 's/quit/q/'"])
+def test_a_reader_that_reads_to_the_end_is_left_alone(line):
+    assert not leaves_early(line), line
+
+
 def test_no_pipe_in_the_scripts_can_end_one_of_them_unheard():
-    """Under pipefail a pipeline fails when its reader leaves early and the writer is cut off:
-    `file … | grep -q`, `find … | head -1`, an awk that exits at its first match. In a test
-    that reads as "no"; in an assignment, under `set -e`, it ends the script with nothing said."""
+    """Every pipe in every script that runs under pipefail, read for the hazard itself and
+    not for the spellings that were once there."""
     sign = (ROOT / "scripts" / "sign_app.sh").read_text()
     assert 'kind=$(file -b "$f")' in sign and 'case "$kind" in *Mach-O*) sign "$f" ;; esac' in sign
+    looked_at = 0
     for script in sorted((ROOT / "scripts").glob("*.sh")):
-        code = "\n".join(line for line in script.read_text().splitlines() if not line.lstrip().startswith("#"))
-        if "pipefail" not in code:
+        lines = [line for line in script.read_text().splitlines() if not line.lstrip().startswith("#")]
+        if not any("pipefail" in line for line in lines):
             continue
-        assert "| grep -q" not in code, script.name
-        assert "| head -1)" not in code, script.name                    # in an assignment
-        for line in code.splitlines():
-            if "| awk" in line and "$(" in line:
-                assert "exit}" not in line.split("| awk", 1)[1], f"{script.name}: {line.strip()[:80]}"
+        looked_at += 1
+        for line in lines:
+            assert not leaves_early(line), f"{script.name}: `{leaves_early(line)}` may leave early: {line.strip()[:90]}"
+    assert looked_at >= 5
+
+
