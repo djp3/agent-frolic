@@ -1,8 +1,8 @@
 #!/bin/bash
 # Copyright (C) 2026 Don Patterson
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Find the tools of the Sparkle the app links against (generate_appcast, generate_keys,
-# sign_update), check them, and print the directory that holds their bin/.
+# Print the folder that holds the tools of the Sparkle the app links against: its bin/ has
+# generate_appcast, generate_keys and sign_update. They are checked before it is printed.
 #
 # They are the ones SwiftPM fetched together with the framework, for the version pinned in
 # macos/Package.resolved: macos/.build/artifacts/.../bin. So the framework inside the app

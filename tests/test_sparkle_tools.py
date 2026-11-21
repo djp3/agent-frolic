@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Don Patterson
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""scripts/fetch_sparkle_tools.sh: which of Sparkle's tools a release is signed with. They
+"""scripts/sparkle_tools.sh: which of Sparkle's tools a release is signed with. They
 are the ones SwiftPM fetched with the framework, and each must be the pinned file every
 time, since one of them is handed the key every installed copy trusts."""
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = ROOT / "scripts" / "fetch_sparkle_tools.sh"
+SCRIPT = ROOT / "scripts" / "sparkle_tools.sh"
 TOOLS = ("generate_appcast", "generate_keys", "sign_update")
 
 

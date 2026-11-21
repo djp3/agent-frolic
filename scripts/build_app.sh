@@ -30,7 +30,10 @@ APP=dist/agent-frolic.app
 # ad-hoc. A Keychain item belongs to the signature of the program that made it, so builds
 # signed the same way every time read the app's secrets without asking again; an ad-hoc
 # build is a new program to the Keychain each time it is rebuilt.
-IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ {print $2; exit}')}
+# (The awk reads to the end and prints its first match: one that left at the first match
+# would fail the pipeline under pipefail when `security` still had lines to write, and the
+# assignment would end the script with nothing said.)
+IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ && !n++ {print $2}')}
 IDENTITY=${IDENTITY:--}
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -48,7 +51,7 @@ BIN=macos/.build/release/AgentFrolic
 rm -f "$BIN"                                   # so an existing binary can only come from this build
 # Only the versions Package.resolved pins: left to itself, swift build moves to a newer
 # Sparkle when Package.swift allows one, and writes that into Package.resolved as it goes.
-# The tools a release signs with were chosen for the pinned version (fetch_sparkle_tools.sh),
+# The tools a release signs with were chosen for the pinned version (sparkle_tools.sh),
 # so the framework would no longer be the one they belong to. This way a newer one stops
 # the build, and bumping Sparkle stays a change someone makes: the pin and its hashes.
 ( cd macos && swift build -c release --product AgentFrolic --only-use-versions-from-resolved-file 2>&1 \
@@ -56,7 +59,9 @@ rm -f "$BIN"                                   # so an existing binary can only 
   [ "${PIPESTATUS[0]}" -eq 0 ] )              # keep the compiler's verdict, not grep's
 [ -x "$BIN" ] || { echo "swift build did not produce $BIN" >&2; exit 1; }
 # Sparkle comes as a binary framework that SwiftPM downloads next to the build.
-SPARKLE_FW=$(find macos/.build/artifacts -type d -name Sparkle.framework -path "*macos-*" | head -1)
+# -print -quit, not `| head -1`: under pipefail a find cut off by head fails the pipeline,
+# and the assignment would end the script with nothing said.
+SPARKLE_FW=$(find macos/.build/artifacts -type d -name Sparkle.framework -path "*macos-*" -print -quit)
 [ -d "$SPARKLE_FW" ] || { echo "Sparkle.framework not found under macos/.build/artifacts" >&2; exit 1; }
 
 step "icon"
@@ -74,16 +79,19 @@ step "assemble $APP ($VERSION)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AgentFrolic"
-# The app finds Sparkle through the rpath Package.swift sets, @executable_path/../Frameworks.
-# An absolute one, into the folder it was built in, has no place in a copy that goes to other
-# Macs. The Swift toolchain in use records none, so this takes nothing out. It is a guard:
-# should a toolchain ever record one, it is taken out here, and the build says so.
-otool -l "$APP/Contents/MacOS/AgentFrolic" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}' | while read -r rp; do
-    case "$rp" in /*)
-        install_name_tool -delete_rpath "$rp" "$APP/Contents/MacOS/AgentFrolic"
-        echo "took out an rpath into the build folder: $rp" ;;
-    esac
+# Where the app looks for Sparkle.framework. It needs one place, the one Package.swift sets:
+# its own Contents/Frameworks. SwiftPM adds @loader_path, beside the executable, where a
+# `swift run` finds the framework and the finished app has nothing; an absolute path into
+# the build folder, should a toolchain ever record one, has no place in a copy that goes to
+# other Macs. Whatever else is there is taken out, and the build stops unless the one that
+# matters is what is left: the app would not start.
+EXE="$APP/Contents/MacOS/AgentFrolic"
+NEEDED="@executable_path/../Frameworks"
+rpaths() { otool -l "$EXE" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}'; }
+rpaths | while read -r rp; do
+    [ "$rp" = "$NEEDED" ] || install_name_tool -delete_rpath "$rp" "$EXE"
 done
+[ "$(rpaths)" = "$NEEDED" ] || { echo "the app's executable looks for its frameworks in: $(rpaths | tr '\n' ' '); it must be $NEEDED alone" >&2; exit 1; }
 cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
 cp -R dist/python/agent-frolic-core "$APP/Contents/Resources/agent-frolic-core"
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"

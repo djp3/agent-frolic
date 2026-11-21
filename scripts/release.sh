@@ -30,7 +30,7 @@
 #     NOTARY_KEY_ID / NOTARY_ISSUER_ID / NOTARY_KEY_FILE (an App Store Connect API key)
 #   - the Sparkle key, in the login keychain under the account agent-frolic. Its public half
 #     is SUPublicEDKey in macos/Info.plist:
-#       "$(scripts/fetch_sparkle_tools.sh)/bin/generate_keys" --account agent-frolic -p     # prints that public key
+#       "$(scripts/sparkle_tools.sh)/bin/generate_keys" --account agent-frolic -p     # prints that public key
 #     Apps already installed accept updates signed with this key only, so keep a copy of it
 #     somewhere safe:  generate_keys --account agent-frolic -x <file>  exports it.
 #     SPARKLE_PRIVATE_KEY_FILE=<file> signs with an exported key instead of the keychain's.
@@ -43,6 +43,8 @@
 #   git add VERSION release-notes && git commit -m "Release 0.2.0"
 #   scripts/release.sh
 set -euo pipefail
+# A key file named from where this was called must still be found once we have moved.
+case "${SPARKLE_PRIVATE_KEY_FILE:-}" in ""|/*) ;; *) SPARKLE_PRIVATE_KEY_FILE="$PWD/$SPARKLE_PRIVATE_KEY_FILE" ;; esac
 cd "$(dirname "$0")/.."
 
 VERSION=$(tr -d '[:space:]' < VERSION)
@@ -61,9 +63,11 @@ die() { echo "release: $*" >&2; exit 1; }
 step "preflight $TAG"
 # Sign by certificate hash rather than by name: a keychain can hold two certificates with
 # the same name (a renewed one beside the old), and codesign rejects an ambiguous name.
-IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk '/Developer ID Application/ {print $2; exit}')}
+# No awk here stops at its first match: under pipefail, a `security` cut off while it still
+# had lines to write fails the pipeline, and the assignment would end the script unheard.
+IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk '/Developer ID Application/ && !n++ {print $2}')}
 [ -n "$IDENTITY" ] || die "no 'Developer ID Application' identity in the keychain (or set CODESIGN_IDENTITY)"
-IDENTITY_NAME=$(security find-identity -v -p codesigning | awk -F'"' -v h="$IDENTITY" '$0 ~ h {print $2; exit}')
+IDENTITY_NAME=$(security find-identity -v -p codesigning | awk -F'"' -v h="$IDENTITY" '$0 ~ h && !n++ {print $2}')
 [ -s "$NOTES" ] || die "no release notes in $NOTES; write what is new in $VERSION first"
 NOTES_SUFFIX=""
 if [ "$DRY_RUN" = 1 ]; then
@@ -90,32 +94,18 @@ $DIRTY"
         NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
     fi
 fi
-TOOLS=$(scripts/fetch_sparkle_tools.sh)
-# The key this release will be signed with must be the one whose public half the app carries
-# (SUPublicEDKey): installed copies accept no other. Looked at here, where it takes a moment,
-# and not left to generate_appcast, which comes after the build and the notarization and
-# only leaves the signature out. A dry run looks too: it is how a key is tried.
-PUBLIC_KEY=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" macos/Info.plist 2>/dev/null) \
-    || die "macos/Info.plist has no SUPublicEDKey"
+TOOLS=$(scripts/sparkle_tools.sh)
 if [ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
-    [ -r "$SPARKLE_PRIVATE_KEY_FILE" ] || die "cannot read SPARKLE_PRIVATE_KEY_FILE ($SPARKLE_PRIVATE_KEY_FILE)"
     SPARKLE_KEY_ARGS=(--ed-key-file "$SPARKLE_PRIVATE_KEY_FILE")
-    KEY_FROM="the key in $SPARKLE_PRIVATE_KEY_FILE"
-    HELD_KEY=$(scripts/sparkle_public_key.sh "$SPARKLE_PRIVATE_KEY_FILE") \
-        || die "$SPARKLE_PRIVATE_KEY_FILE does not hold a Sparkle key (as generate_keys -x exports one)"
 else
     SPARKLE_KEY_ARGS=(--account "$SPARKLE_ACCOUNT")
-    KEY_FROM="the key in the login keychain under the account '$SPARKLE_ACCOUNT'"
-    HELD_KEY=$("$TOOLS/bin/generate_keys" --account "$SPARKLE_ACCOUNT" -p 2>/dev/null) \
-        || die "no Sparkle key in the login keychain under the account '$SPARKLE_ACCOUNT'
-(SPARKLE_ACCOUNT=<name> names another, SPARKLE_PRIVATE_KEY_FILE=<file> signs with an exported key)"
 fi
-[ "$HELD_KEY" = "$PUBLIC_KEY" ] || die "$KEY_FROM is not the one the app trusts:
-its public half is $HELD_KEY, and SUPublicEDKey in macos/Info.plist is $PUBLIC_KEY.
-Installed copies would refuse an update signed with it."
 echo "identity: ${IDENTITY_NAME:-$IDENTITY} ($IDENTITY)"
 echo "sparkle tools: $TOOLS"
-echo "sparkle key: $KEY_FROM, the one the app trusts"
+# The key is not used until the appcast is written, after the build and the notary. Look at
+# it now: a missing key, or one that is not the app's, should not cost a whole run to find.
+# A dry run looks too: it is how a key is tried.
+SPARKLE_ACCOUNT="$SPARKLE_ACCOUNT" scripts/check_sparkle_key.sh "$TOOLS" || die "the Sparkle key is not usable; nothing was built"
 
 step "locked packages"
 # The app is built from a new venv holding exactly requirements.lock, every file checked
@@ -129,6 +119,9 @@ step "build"
 [ "$DRY_RUN" = 1 ] || export SKIP_PYTHON=0
 # WITH_UPDATES=1: this copy is the one that is to update itself. A dry run builds the same.
 WITH_UPDATES=1 PYTHON="$PYTHON" CODESIGN_IDENTITY="$IDENTITY" scripts/build_app.sh
+# The tools were checked in preflight, and the build has had SwiftPM at its packages since.
+# They are about to be handed the key: check them again, where they lie now.
+TOOLS=$(scripts/sparkle_tools.sh)
 
 if [ "$DRY_RUN" = 1 ]; then
     step "notarize: skipped (dry run)"
@@ -148,23 +141,21 @@ mkdir -p dist/appcast
 ditto -c -k --keepParent "$APP" "$ZIP"
 cp "$ZIP" dist/appcast/
 # generate_appcast pairs notes with the archive whose name they share, and embeds them, so
-# nothing else needs hosting. It signs the zip always, and the appcast as a whole, notes and
-# all, because the app in the zip says it requires that (SURequireSignedFeed): the feed's
-# signature is the comment at its end.
+# the appcast's own signature covers them and nothing else needs hosting.
 cp "$NOTES" "dist/appcast/$(basename "$ZIP" .zip).md"
 "$TOOLS/bin/generate_appcast" "${SPARKLE_KEY_ARGS[@]}" \
     --download-url-prefix "https://github.com/$REPO/releases/download/$TAG/" \
     --link "https://github.com/$REPO/releases" \
     --embed-release-notes \
     -o dist/appcast/appcast.xml dist/appcast
-grep -q "sparkle:edSignature" dist/appcast/appcast.xml || die "appcast.xml carries no EdDSA signature for the zip"
-grep -q '<description sparkle:format="markdown">' dist/appcast/appcast.xml || die "appcast.xml carries no release notes"
-# The appcast's own signature: without it, every copy from this release on would refuse the
-# feed and stay where it is. Present, and good: Sparkle's tool checks it as the app will.
-grep -q "<!-- sparkle-signatures:" dist/appcast/appcast.xml \
-    || die "appcast.xml is not signed as a whole: is SURequireSignedFeed still set in macos/Info.plist?"
+# Two signatures, and neither is taken on trust. The zip's is in its enclosure. The feed's own
+# covers the rest (which version, which macOS, the notes), and generate_appcast leaves it out
+# when the app does not ask for a signed feed, and both out when the key is not the app's. A
+# search for "edSignature" finds the first and says nothing of the second. Without the
+# feed's, every copy from this release on would refuse the feed and stay where it is.
+scripts/check_appcast.py dist/appcast/appcast.xml || die "appcast.xml is not signed as the app requires"
 "$TOOLS/bin/sign_update" --verify "${SPARKLE_KEY_ARGS[@]}" dist/appcast/appcast.xml >/dev/null \
-    || die "the signature on appcast.xml does not check out"
+    || die "the signature on appcast.xml does not verify with the key it was just signed with"
 { cat "$NOTES"; printf '%s\n' "$NOTES_SUFFIX"; } > dist/release-notes.md
 
 if [ "$DRY_RUN" = 1 ]; then

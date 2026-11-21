@@ -4,6 +4,7 @@
 build_app.sh, sign_app.sh and macos/Info.plist): the things that, got wrong, leave
 installed copies unable to update, or find a mistake only after the notarization."""
 import base64
+import json
 import plistlib
 import shutil
 import subprocess
@@ -39,18 +40,8 @@ def test_the_build_keeps_to_the_versions_that_are_pinned():
     assert "swift build -c release --product AgentFrolic --only-use-versions-from-resolved-file" in BUILD
 
 
-def test_the_key_is_looked_at_before_anything_is_built_whichever_way_it_is_given():
-    """A wrong key found after the notarization costs a quarter of an hour: here, a moment."""
-    preflight = RELEASE[:RELEASE.index('step "locked packages"')]
-    assert '"$TOOLS/bin/generate_keys" --account "$SPARKLE_ACCOUNT" -p' in preflight          # the keychain's
-    assert 'scripts/sparkle_public_key.sh "$SPARKLE_PRIVATE_KEY_FILE"' in preflight            # an exported one
-    assert '[ "$HELD_KEY" = "$PUBLIC_KEY" ] || die' in preflight
-    assert 'PlistBuddy -c "Print :SUPublicEDKey" macos/Info.plist' in preflight
-    dry = preflight.index('if [ "$DRY_RUN" = 1 ]')
-    assert preflight.index("HELD_KEY=") > preflight.index("\nfi\n", dry)                       # a dry run looks too
-
-
-# ---- the appcast is signed as a whole, and the app requires it -------------------------
+# What a release does with the key and the appcast is shown by running it: test_release.py,
+# test_sparkle_key.py and test_check_appcast.py. Here: what the app itself asks for.
 
 def test_the_app_requires_a_signed_appcast_and_a_checked_update_and_has_both_or_neither():
     """Sparkle refuses to start with the first and not the second: no update would ever come."""
@@ -59,20 +50,10 @@ def test_the_app_requires_a_signed_appcast_and_a_checked_update_and_has_both_or_
     assert plist["SUPublicEDKey"] and plist["SUFeedURL"].startswith("https://")
 
 
-def test_a_release_stops_unless_the_appcast_itself_is_signed_and_the_signature_is_good():
-    """Signing the zip alone leaves the appcast, which names the zip and carries the notes,
-    to whoever can change what is served. And an unsigned one would strand every copy."""
-    made = RELEASE.index('"$TOOLS/bin/generate_appcast"')
-    published = RELEASE.index('step "publish $TAG"')
-    for check in ('grep -q "sparkle:edSignature" dist/appcast/appcast.xml',
-                  'grep -q "<!-- sparkle-signatures:" dist/appcast/appcast.xml',     # it follows </rss> on its line
-                  '"$TOOLS/bin/sign_update" --verify "${SPARKLE_KEY_ARGS[@]}" dist/appcast/appcast.xml'):
-        assert made < RELEASE.index(check) < published, check
-    assert "signed appcast carries them" not in RELEASE                 # it said so when only the zip was signed
-
-
 def test_only_a_release_carries_the_feed_a_copy_built_by_hand_does_not_update_itself():
-    """With the feed in it, a copy built to try a change would offer the published release."""
+    """With the feed in it, a copy built to try a change would offer the published release.
+    Not told by how it is signed: on a Mac with a Developer ID in its keychain, a copy built
+    by hand is signed with it as a release is."""
     assert 'if [ "${WITH_UPDATES:-0}" != 1 ]; then' in BUILD
     taken_out = BUILD[BUILD.index('if [ "${WITH_UPDATES:-0}" != 1 ]; then'):]
     taken_out = taken_out[:taken_out.index("\nfi\n")]
@@ -92,6 +73,19 @@ def test_sparkles_helpers_are_signed_as_sparkle_says_to_sign_them():
                      'sign --preserve-metadata=entitlements "$FW/Versions/B/XPCServices/Downloader.xpc"',
                      'sign "$FW/Versions/B/Autoupdate"', 'sign "$FW/Versions/B/Updater.app"', 'sign "$FW"']
     assert "--deep" not in "".join(line for line in sign.splitlines() if line.lstrip().startswith("sign "))
+
+
+def test_the_version_of_sparkle_cannot_drift_between_the_manifest_the_pin_and_the_build():
+    """The manifest gives the least version, the pin the one in use, and the build keeps to
+    the pin. A manifest that asked for more than the pin would make every build fail."""
+    package = (ROOT / "macos" / "Package.swift").read_text()
+    least = package.split('sparkle-project/Sparkle.git", from: "')[1].split('"')[0]
+    resolved = json.loads((ROOT / "macos" / "Package.resolved").read_text())
+    pinned = next(pin["state"]["version"] for pin in resolved["pins"] if pin["identity"] == "sparkle")
+    assert tuple(map(int, least.split("."))) <= tuple(map(int, pinned.split("."))), (least, pinned)
+    tools = (ROOT / "scripts" / "sparkle_tools.sh").read_text()
+    assert "swift package --only-use-versions-from-resolved-file resolve" in tools
+    assert RELEASE.count("TOOLS=$(scripts/sparkle_tools.sh)") == 2      # before the build, and again after it
 
 
 @needs_swift
@@ -121,13 +115,14 @@ def test_a_key_file_that_is_not_there_is_refused(tmp_path):
     assert got.returncode == 1 and got.stdout == "" and "cannot read" in got.stderr
 
 
-def test_the_build_says_what_its_rpath_guard_is_and_when_it_acts():
-    """It claimed SwiftPM records an absolute rpath, and deleted none in silence: none is
-    recorded. It is a guard, says so, and says when it takes one out."""
-    assert "SwiftPM records an absolute rpath" not in BUILD
-    guard = BUILD[BUILD.index("# The app finds Sparkle through the rpath"):BUILD.index('cp -R "$SPARKLE_FW"')]
-    assert "It is a guard" in guard and 'echo "took out an rpath into the build folder: $rp"' in guard
-    assert "2>/dev/null || true" not in guard                           # one it cannot take out stops the build
+def test_the_app_is_left_one_place_to_look_for_its_frameworks_or_the_build_stops():
+    """Its own Contents/Frameworks, which Package.swift sets. Whatever else the toolchain
+    recorded is taken out, and anything but that one left stops the build."""
+    assert "SwiftPM records an absolute rpath" not in BUILD            # it said so, and none is recorded
+    rule = BUILD[BUILD.index("# Where the app looks for Sparkle.framework"):BUILD.index('cp -R "$SPARKLE_FW"')]
+    assert 'NEEDED="@executable_path/../Frameworks"' in rule
+    assert '[ "$rp" = "$NEEDED" ] || install_name_tool -delete_rpath "$rp" "$EXE"' in rule
+    assert '[ "$(rpaths)" = "$NEEDED" ] || {' in rule and "exit 1" in rule
     package = (ROOT / "macos" / "Package.swift").read_text()
     assert '"-rpath", "-Xlinker", "@executable_path/../Frameworks"' in package
 
@@ -142,12 +137,18 @@ def test_closing_the_boards_window_ends_the_app_whatever_else_is_open():
     assert "if coreRunning { terminal.terminate() }" in delegate       # and ending the app ends the board
 
 
-def test_what_is_a_binary_is_not_decided_through_a_pipe_that_closes_early():
-    """Under pipefail, `file … | grep -q` can read as "not a binary" when grep leaves before
-    file has finished, and that file would go unsigned with nothing said."""
+def test_no_pipe_in_the_scripts_can_end_one_of_them_unheard():
+    """Under pipefail a pipeline fails when its reader leaves early and the writer is cut off:
+    `file … | grep -q`, `find … | head -1`, an awk that exits at its first match. In a test
+    that reads as "no"; in an assignment, under `set -e`, it ends the script with nothing said."""
     sign = (ROOT / "scripts" / "sign_app.sh").read_text()
     assert 'kind=$(file -b "$f")' in sign and 'case "$kind" in *Mach-O*) sign "$f" ;; esac' in sign
     for script in sorted((ROOT / "scripts").glob("*.sh")):
         code = "\n".join(line for line in script.read_text().splitlines() if not line.lstrip().startswith("#"))
-        if "pipefail" in code:
-            assert "| grep -q" not in code, script.name
+        if "pipefail" not in code:
+            continue
+        assert "| grep -q" not in code, script.name
+        assert "| head -1)" not in code, script.name                    # in an assignment
+        for line in code.splitlines():
+            if "| awk" in line and "$(" in line:
+                assert "exit}" not in line.split("| awk", 1)[1], f"{script.name}: {line.strip()[:80]}"
