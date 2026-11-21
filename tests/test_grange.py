@@ -197,11 +197,29 @@ def test_an_owner_of_nothing_but_white_space_is_no_owner():
     assert got.reported() == []
 
 
+@pytest.mark.parametrize("owner", ["team/o/platform", "a hidden reviewer", "o/app", "-djp3", "djp3-", "dj--p3",
+                                   "d" * 40, "djp3!", "dj p3", "@djp3", ""])
+def test_an_owner_that_is_not_shaped_as_a_github_login_is_no_owner(owner):
+    """The picture uses an owner as a login: whose card the agent is on, whether a move is
+    theirs. Taken as it came, "team/o/platform" would put an agent on that team's card."""
+    got = grange.parse({"cursor": 1, "granges": [{"grange": "djp3", "agents": [
+        {"owner": owner, "name": "proj-86-pr-98", "state": "busy"},
+        {"owner": "djp3", "name": "proj-86-pr-98", "state": "busy"}]}]})
+    assert got.reported() == [Reported("djp3", "proj-86-pr-98", "busy")]
+
+
+@pytest.mark.parametrize("owner", ["djp3", "DJP3", "d", "mira-k", "a1-b2-c3", "d" * 39])
+def test_a_github_login_is_an_owner(owner):
+    got = grange.parse({"cursor": 1, "granges": [{"grange": "djp3", "agents": [
+        {"owner": owner, "name": "proj-86-pr-98", "state": "busy"}]}]})
+    assert [a.owner for a in got.reported()] == [owner]
+
+
 def test_a_field_is_held_to_the_granges_own_limit():
     got = grange.parse({"cursor": 1, "granges": [{"grange": "g" * 999, "agents": [
-        {"owner": "o" * 999, "name": "n" * 999, "state": "s" * 999}]}]})
+        {"owner": "djp3", "name": "n" * 999, "state": "s" * 999}]}]})
     agent = got.reported()[0]
-    assert [len(got.granges[0].grange), len(agent.owner), len(agent.name), len(agent.state)] == [grange.FIELD] * 4
+    assert [len(got.granges[0].grange), len(agent.name), len(agent.state)] == [grange.FIELD] * 3
 
 
 # ---- what can be wrong -----------------------------------------------------------------

@@ -20,7 +20,8 @@ nowhere else, whatever the settings say.
   • WHAT IS READ IS FROM OUTSIDE. An agent's name was typed on a teammate's Mac. Control
     characters are taken out here, as they are from what GitHub sends, a newline or a tab
     becomes a space (each of these is drawn on one line of the board, and would break
-    it), and an entry that is not shaped as an agent is left out rather than trusted. A state this app has not
+    it), and an entry that is not shaped as an agent is left out rather than trusted:
+    its owner must be shaped as a GitHub login, since that is what it is used as. A state this app has not
     seen is kept as it came: what to draw for it is the picture's to say.
   • WHAT CAN BE WRONG is said in one plain sentence, GrangeError.said, with what kind of
     wrong it is: "down" (nothing is listening: no grange is running, which is how things
@@ -40,6 +41,7 @@ import http.client
 import json
 import logging
 import math
+import re
 import socket
 import threading
 import time
@@ -61,6 +63,10 @@ RETRY_MOST = 300.0                # and the longest wait a grange may ask for
 GRACE = 60.0                      # a grange that was answering and stops is given this long to be back
 RETRY_SOON = 5.0                  # (it may be restarting), and is asked this often meanwhile
 SPACING = 1.0                     # the least from one question to the next, however fast the answers come
+# A GitHub login: letters, digits and single hyphens, not at either end, 39 at the most. An
+# agent's owner is used as one (whose card it is on, whether a move is theirs), so nothing
+# else is taken for an owner: not "team/o/platform", which is how a team is written here.
+LOGIN = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}")
 
 
 @dataclass(frozen=True)
@@ -141,7 +147,7 @@ def parse(data: object) -> Reading:
             if not isinstance(one, dict):
                 continue
             owner, name, state = _text(one.get("owner")), _text(one.get("name")), _text(one.get("state"))
-            if owner and name is not None and state is not None:
+            if owner and LOGIN.fullmatch(owner) and name is not None and state is not None:
                 agents.append(Reported(owner, name, state, stale))
         farms.append(Farm(its_id, _seconds(entry.get("seen_age_s")) or 0.0,
                           _seconds(entry.get("farm_age_s")), stale, tuple(agents)))
