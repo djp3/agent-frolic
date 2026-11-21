@@ -28,11 +28,12 @@ def checkout(tmp_path):
     return tmp_path
 
 
-def run(checkout: Path, **env) -> subprocess.CompletedProcess:
+def run(checkout: Path, cwd: Path | None = None, tools: str | None = None, **env) -> subprocess.CompletedProcess:
+    """Run the script, from `cwd` when given, naming the tools folder as `tools` when given."""
     env = {"PATH": "/usr/bin:/bin", "ASKED": str(checkout / "asked"),
            "ASKED_OF_FILE": str(checkout / "asked-of-file"), **env}
-    return subprocess.run(["/bin/bash", str(checkout / "scripts" / SCRIPT.name), str(checkout / "tools")],
-                          capture_output=True, text=True, env=env)
+    return subprocess.run(["/bin/bash", str(checkout / "scripts" / SCRIPT.name), tools or str(checkout / "tools")],
+                          capture_output=True, text=True, env=env, cwd=cwd)
 
 
 def asked(checkout: Path) -> list:
@@ -100,6 +101,21 @@ def test_a_key_file_whose_key_is_not_the_apps_stops_the_release_as_the_keychains
     done = run(checkout, SPARKLE_PRIVATE_KEY_FILE=str(key), FILE_HAS=ANOTHER_KEY)
     assert done.returncode == 1 and done.stdout == "" and asked(checkout) == []
     assert f"the Sparkle key in {key} is not the one in macos/Info.plist" in done.stderr
+
+
+def test_what_is_named_from_where_it_was_called_is_found_from_there(checkout):
+    """The script moves to the checkout before it does anything. Run by hand from somewhere
+    else, a tools folder or a key file named from there was looked for in the checkout."""
+    elsewhere = checkout / "somewhere" / "else"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "exported.key").write_text("made up")
+    done = run(checkout, cwd=elsewhere, tools="../../tools", ANSWER=THE_APPS_KEY)
+    assert done.returncode == 0, done.stderr                               # the keychain's, by tools named from there
+    assert asked(checkout) == ["--account agent-frolic -p"]
+    done = run(checkout, cwd=elsewhere, tools="../../tools", SPARKLE_PRIVATE_KEY_FILE="exported.key",
+               FILE_HAS=THE_APPS_KEY)
+    assert done.returncode == 0, done.stderr
+    assert (checkout / "asked-of-file").read_text().splitlines() == [str(elsewhere / "exported.key")]
 
 
 def test_a_key_on_standard_input_or_a_pipe_is_refused_for_what_it_is(checkout):
