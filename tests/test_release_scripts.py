@@ -140,3 +140,14 @@ def test_closing_the_boards_window_ends_the_app_whatever_else_is_open():
     assert "(notification.object as? NSWindow) === window" in closing and "NSApp.terminate(nil)" in closing
     assert "w.isReleasedWhenClosed = false" in delegate and "w.delegate = self" in delegate
     assert "if coreRunning { terminal.terminate() }" in delegate       # and ending the app ends the board
+
+
+def test_what_is_a_binary_is_not_decided_through_a_pipe_that_closes_early():
+    """Under pipefail, `file … | grep -q` can read as "not a binary" when grep leaves before
+    file has finished, and that file would go unsigned with nothing said."""
+    sign = (ROOT / "scripts" / "sign_app.sh").read_text()
+    assert 'kind=$(file -b "$f")' in sign and 'case "$kind" in *Mach-O*) sign "$f" ;; esac' in sign
+    for script in sorted((ROOT / "scripts").glob("*.sh")):
+        code = "\n".join(line for line in script.read_text().splitlines() if not line.lstrip().startswith("#"))
+        if "pipefail" in code:
+            assert "| grep -q" not in code, script.name
