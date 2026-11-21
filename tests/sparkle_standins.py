@@ -39,9 +39,10 @@ def appcast(zip_signed: bool = True, feed_signed: bool = True, notes: bool = Tru
 
 
 # Sparkle's generate_keys: it notes how it was asked ($ASKED), and answers what it was told to
-# ($ANSWER), or that there is no key.
+# ($ANSWER). With no answer it fails as the real one does, saying why on standard output, where
+# the answer would have been: that there is no key, or whatever else a test has it say ($FAILS).
 GENERATE_KEYS = """#!/bin/sh
 echo "$*" >> "$ASKED"
-[ -n "${ANSWER:-}" ] || { echo "ERROR: No existing signing key found!" >&2; exit 1; }
+[ -n "${ANSWER:-}" ] || { echo "ERROR: ${FAILS:-No existing signing key found!}"; exit 1; }
 echo "$ANSWER"
 """

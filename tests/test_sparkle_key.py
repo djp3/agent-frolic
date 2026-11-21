@@ -78,6 +78,21 @@ def test_no_key_under_the_account_stops_the_release(checkout):
     assert "no Sparkle key in the login keychain under the account 'agent-frolic'" in done.stderr
 
 
+@pytest.mark.parametrize("fails", [
+    "Access denied. Can't get keys from the keychain.\nGo to Keychain Access.app, lock the login keychain, then "
+    "unlock it again.",
+    "You've cancelled the request to read the key from the Keychain. Please run the tool again.",
+    "The operating system has blocked access to the Keychain."])
+def test_a_key_that_is_there_and_could_not_be_read_is_not_called_missing(checkout, fails):
+    """generate_keys says why on standard output, which was thrown away: a keychain that was
+    locked, or a prompt that was refused, read as "no Sparkle key under the account"."""
+    done = run(checkout, FAILS=fails)
+    assert done.returncode == 1 and done.stdout == ""
+    assert "no Sparkle key in the login keychain" not in done.stderr
+    assert "could not be had from the login keychain. generate_keys said:" in done.stderr
+    assert all(line in done.stderr for line in fails.splitlines())
+
+
 def test_a_key_file_is_looked_for_and_the_keychain_left_alone(checkout):
     key = checkout / "exported.key"
     key.write_text("made up")
