@@ -88,14 +88,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         startCore()
     }
 
-    /// Only the assembled app updates itself: a `swift run` has no Info.plist, so no feed
-    /// and no key to check an update against.
+    /// Only a released copy updates itself. A `swift run` has no Info.plist, so no feed and
+    /// no key to check an update against. And a copy assembled by scripts/build_app.sh
+    /// outside a release is given no feed, so that one built to try a change does not offer
+    /// to replace itself with the published release.
     private func setupUpdater() {
-        guard !isDevelopmentRun else { return }
+        guard !isDevelopmentRun, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return }
         updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// Closing the board's window ends the app, whatever else is open. Left to "after the
+    /// last window closed" alone, the app lived on without a window whenever Sparkle's update
+    /// window was open at that moment, and the board with it: still reading GitHub and
+    /// holding its tunnel, with nothing on screen to show for it and no window to bring back.
+    /// (On the next turn of the run loop, so that the window finishes closing first.)
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
 
     func applicationWillTerminate(_ note: Notification) {
         if coreRunning { terminal.terminate() }
@@ -108,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = defaultTitle
+        // This object keeps the window (`window`, below), so closing it must not release it
+        // as well: a window made in code is released when closed unless told otherwise.
+        w.isReleasedWhenClosed = false
         centeredTitle = CenteredTitle(in: w)
         w.minSize = NSSize(width: 600, height: 300)
         w.tabbingMode = .disallowed
@@ -219,7 +234,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
         appMenu.addItem(withTitle: "About agent-frolic",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        // With no updater (a development run) the item has no target and stays greyed out.
+        // With no updater (a development run, or a copy that is not a release) the item has no
+        // target and stays greyed out.
         let check = NSMenuItem(title: "Check for Updates…",
                                action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         check.target = updater

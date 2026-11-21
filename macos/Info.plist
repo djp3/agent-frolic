@@ -40,7 +40,11 @@
 	<string>https://github.com/djp3/agent-frolic/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>Yo2ld0NMSZHvIf2M6JMWb2E/bTQ9Nv+8dREfkF0CUEY=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
 	<key>SUScheduledCheckInterval</key>
 	<integer>86400</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

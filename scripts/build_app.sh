@@ -15,6 +15,8 @@
 # CFBundleVersion (Sparkle compares the latter; dotted numbers compare naturally).
 #
 # This builds the app; scripts/release.sh notarizes it and publishes it as an update.
+# Only a release updates itself (WITH_UPDATES=1, which release.sh sets): a copy built here by
+# hand is given no feed, so it never asks GitHub and never offers to replace itself.
 # HTTPS certificates are judged by macOS (truststore), not by the certificate file of the
 # Python it was built with, which another Mac may not have; the self-check proves it.
 set -euo pipefail
@@ -28,7 +30,10 @@ APP=dist/agent-frolic.app
 # ad-hoc. A Keychain item belongs to the signature of the program that made it, so builds
 # signed the same way every time read the app's secrets without asking again; an ad-hoc
 # build is a new program to the Keychain each time it is rebuilt.
-IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ {print $2; exit}')}
+# (The awk reads to the end and prints its first match: one that left at the first match
+# would fail the pipeline under pipefail when `security` still had lines to write, and the
+# assignment would end the script with nothing said.)
+IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ && !n++ {print $2}')}
 IDENTITY=${IDENTITY:--}
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -44,11 +49,29 @@ fi
 step "host app: swift build"
 BIN=macos/.build/release/AgentFrolic
 rm -f "$BIN"                                   # so an existing binary can only come from this build
-( cd macos && swift build -c release --product AgentFrolic 2>&1 | grep -E "error|warning: unre|Build complete"
-  [ "${PIPESTATUS[0]}" -eq 0 ] )              # keep the compiler's verdict, not grep's
+# Only the versions Package.resolved pins: left to itself, swift build moves to a newer
+# Sparkle when Package.swift allows one, and writes that into Package.resolved as it goes.
+# The tools a release signs with were chosen for the pinned version (sparkle_tools.sh),
+# so the framework would no longer be the one they belong to. This way a newer one stops
+# the build, and bumping Sparkle stays a change someone makes: the pin and its hashes.
+# The compiler's verdict decides, and not a search of what it printed: piped into grep, a
+# build that printed nothing the search knows would have failed without a word, though it had
+# worked. So what it says goes to a log. If it fails, all of that is shown; if not, the lines
+# worth a glance, and a search that finds none is no failure.
+SWIFT_LOG=build/swift-build.log
+mkdir -p build
+if ! ( cd macos && swift build -c release --product AgentFrolic --only-use-versions-from-resolved-file ) \
+        > "$SWIFT_LOG" 2>&1; then
+    cat "$SWIFT_LOG" >&2
+    echo "swift build failed: what it said is above, and in $SWIFT_LOG" >&2
+    exit 1
+fi
+grep -E "warning: unre|Build complete" "$SWIFT_LOG" || true
 [ -x "$BIN" ] || { echo "swift build did not produce $BIN" >&2; exit 1; }
 # Sparkle comes as a binary framework that SwiftPM downloads next to the build.
-SPARKLE_FW=$(find macos/.build/artifacts -type d -name Sparkle.framework -path "*macos-*" | head -1)
+# -print -quit, not `| head -1`: under pipefail a find cut off by head fails the pipeline,
+# and the assignment would end the script with nothing said.
+SPARKLE_FW=$(find macos/.build/artifacts -type d -name Sparkle.framework -path "*macos-*" -print -quit)
 [ -d "$SPARKLE_FW" ] || { echo "Sparkle.framework not found under macos/.build/artifacts" >&2; exit 1; }
 
 step "icon"
@@ -66,11 +89,22 @@ step "assemble $APP ($VERSION)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AgentFrolic"
-# SwiftPM records an absolute rpath into .build for the Sparkle artifact; the app only
-# needs the @executable_path/../Frameworks one set in Package.swift.
-otool -l "$APP/Contents/MacOS/AgentFrolic" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}' | while read -r rp; do
-    case "$rp" in /*) install_name_tool -delete_rpath "$rp" "$APP/Contents/MacOS/AgentFrolic" 2>/dev/null || true ;; esac
-done
+# Where the app looks for Sparkle.framework. It needs one place, the one Package.swift sets:
+# its own Contents/Frameworks. SwiftPM adds @loader_path, beside the executable, where a
+# `swift run` finds the framework and the finished app has nothing; an absolute path into
+# the build folder, should a toolchain ever record one, has no place in a copy that goes to
+# other Macs. Whatever else is there is taken out, and the build stops unless the one that
+# matters is what is left: the app would not start.
+EXE="$APP/Contents/MacOS/AgentFrolic"
+NEEDED="@executable_path/../Frameworks"
+# One path a line, each whole: otool prints "path <path> (offset <n>)", and a path can hold
+# spaces (a checkout in "My Checkout"), so not awk's $2.
+rpaths() { otool -l "$EXE" | awk '/LC_RPATH/{f=1} f && sub(/^[[:space:]]*path /, "") {sub(/ \(offset [0-9]+\)$/, ""); print; f=0}'; }
+FOUND=$(rpaths)             # read whole before any is taken out: the file changes under otool otherwise
+while IFS= read -r rp; do
+    [ -z "$rp" ] || [ "$rp" = "$NEEDED" ] || install_name_tool -delete_rpath "$rp" "$EXE"
+done <<< "$FOUND"
+[ "$(rpaths)" = "$NEEDED" ] || { echo "the app's executable must look for its frameworks in $NEEDED alone; it looks in:" >&2; rpaths | sed 's/^/    /' >&2; exit 1; }
 cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
 cp -R dist/python/agent-frolic-core "$APP/Contents/Resources/agent-frolic-core"
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
@@ -81,7 +115,26 @@ cp LICENSE NOTICE "$APP/Contents/Resources/"
 # copy of the app: the licenses say so. The build stops if the folder in the app is not whole.
 cp -R credits "$APP/Contents/Resources/credits"
 scripts/check_credits.sh "$APP/Contents/Resources/credits"
+# Other people's programs inside the app come under licenses of their own. Those of the two
+# the Swift host links ask that their text go with every copy: Sparkle's, which has with it
+# the notices of what Sparkle itself carries, and SwiftTerm's. They are taken from the very
+# packages this copy was built from, so they are the licenses of the versions inside it, and
+# go beside the app's own: LICENSE-Sparkle, LICENSE-SwiftTerm. A build that cannot find one
+# stops here: the app must not carry either without it.
+for package in Sparkle SwiftTerm; do
+    [ -s "macos/.build/checkouts/$package/LICENSE" ] \
+        || { echo "no license text for $package under macos/.build/checkouts" >&2; exit 1; }
+    cp "macos/.build/checkouts/$package/LICENSE" "$APP/Contents/Resources/LICENSE-$package"
+done
 sed "s/__VERSION__/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
+if [ "${WITH_UPDATES:-0}" != 1 ]; then
+    # A copy built to try a change is not to replace itself with the published release, which
+    # is what it would offer once a day with the feed in it. Without a feed the app starts
+    # no updater at all (AppDelegate.setupUpdater), and Check for Updates stays grey.
+    /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" -c "Delete :SUEnableAutomaticChecks" \
+        -c "Delete :SUScheduledCheckInterval" "$APP/Contents/Info.plist"
+    echo "no update feed in this copy: it is not a release (WITH_UPDATES=1 makes one that updates itself)"
+fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 step "macOS minimum"

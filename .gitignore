@@ -15,6 +15,7 @@ build/
 dist/
 macos/.build/
 macos/Resources/AppIcon.icns
+# where Sparkle's tools were once downloaded to: a checkout may still have the folder
 .sparkle-tools/
 
 # scratch work
