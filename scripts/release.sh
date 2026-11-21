@@ -108,8 +108,9 @@ echo "identity: ${IDENTITY_NAME:-$IDENTITY} ($IDENTITY)"
 echo "sparkle tools: $TOOLS"
 # The key is not used until the appcast is written, after the build and the notary. Look at
 # it now: a missing key, or one that is not the app's, should not cost a whole run to find.
-# A dry run looks too: it is how a key is tried.
-SPARKLE_ACCOUNT="$SPARKLE_ACCOUNT" scripts/check_sparkle_key.sh "$TOOLS" || die "the Sparkle key is not usable; nothing was built"
+# A dry run looks too: it is how a key is tried. It is asked about the very key the appcast
+# will be signed with, by the arguments that name it: which key is decided once, above.
+scripts/check_sparkle_key.sh "$TOOLS" "${SPARKLE_KEY_ARGS[@]}" || die "the Sparkle key is not usable; nothing was built"
 
 step "locked packages"
 # The app is built from a new venv holding exactly requirements.lock, every file checked

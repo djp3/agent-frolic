@@ -162,7 +162,8 @@ def rpath_step(tmp_path, *rpaths: str) -> tuple[subprocess.CompletedProcess, lis
     done = subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", script, "_", str(exe)], capture_output=True,
                           text=True, timeout=120)
     left = subprocess.run(["otool", "-l", str(exe)], capture_output=True, text=True).stdout.splitlines()
-    return done, [line.split("path ", 1)[1].rsplit(" (offset", 1)[0] for line in left if line.strip().startswith("path ")]
+    return done, [line.split("path ", 1)[1].rsplit(" (offset", 1)[0]
+                  for line in left if line.strip().startswith("path ")]
 
 
 needs_cc = pytest.mark.skipif(shutil.which("cc") is None or shutil.which("otool") is None,

@@ -225,6 +225,15 @@ def test_a_key_file_named_from_where_the_script_was_called_is_still_found(releas
     assert gone.returncode == 1 and "names no file that can be read" in gone.stderr
 
 
+def test_the_key_that_is_checked_is_the_key_that_signs(release):
+    """Which key is decided once, in the release, and the check is handed that decision."""
+    release.run(dry=True, SPARKLE_ACCOUNT="another-account")
+    assert (release.where / "asked").read_text().splitlines() == ["--account another-account -p"]
+    assert "--account another-account" in release.called("generate_appcast")[0]
+    assert release.called("sign_update")[0].startswith("sign_update --verify --account another-account ")
+    assert 'scripts/check_sparkle_key.sh "$TOOLS" "${SPARKLE_KEY_ARGS[@]}"' in (ROOT / "scripts" / "release.sh").read_text()
+
+
 def test_a_key_on_standard_input_is_not_taken_for_a_file_named_dash(release):
     done = release.run(SPARKLE_PRIVATE_KEY_FILE="-")
     assert done.returncode == 1 and "must be a file" in done.stderr

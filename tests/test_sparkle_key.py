@@ -28,12 +28,16 @@ def checkout(tmp_path):
     return tmp_path
 
 
-def run(checkout: Path, cwd: Path | None = None, tools: str | None = None, **env) -> subprocess.CompletedProcess:
-    """Run the script, from `cwd` when given, naming the tools folder as `tools` when given."""
+def run(checkout: Path, cwd: Path | None = None, tools: str | None = None, account: str = "agent-frolic",
+        key_file: str | None = None, **env) -> subprocess.CompletedProcess:
+    """Run the script as a release does: told which key by the arguments it signs with, the
+    keychain's under `account`, or `key_file` when one is given. From `cwd` when given,
+    naming the tools folder as `tools` when given."""
     env = {"PATH": "/usr/bin:/bin", "ASKED": str(checkout / "asked"),
            "ASKED_OF_FILE": str(checkout / "asked-of-file"), **env}
-    return subprocess.run(["/bin/bash", str(checkout / "scripts" / SCRIPT.name), tools or str(checkout / "tools")],
-                          capture_output=True, text=True, env=env, cwd=cwd)
+    which = ["--ed-key-file", key_file] if key_file is not None else ["--account", account]
+    return subprocess.run(["/bin/bash", str(checkout / "scripts" / SCRIPT.name), tools or str(checkout / "tools"),
+                           *which], capture_output=True, text=True, env=env, cwd=cwd)
 
 
 def asked(checkout: Path) -> list:
@@ -52,8 +56,23 @@ def test_the_keychain_is_asked_by_this_apps_account_and_only_for_the_public_half
     without an account, generate_keys answers with that one."""
     run(checkout, ANSWER=THE_APPS_KEY)
     assert asked(checkout) == ["--account agent-frolic -p"]
-    run(checkout, ANSWER=THE_APPS_KEY, SPARKLE_ACCOUNT="another-account")
+    run(checkout, ANSWER=THE_APPS_KEY, account="another-account")
     assert asked(checkout)[-1] == "--account another-account -p"
+
+
+def test_which_key_is_not_this_scripts_to_decide(checkout):
+    """The release decides once and says so in the arguments it signs with. Settings the
+    release reads are nothing to this script: with a say of its own, it could vouch for one
+    key while the appcast was signed with another."""
+    done = run(checkout, ANSWER=THE_APPS_KEY, SPARKLE_ACCOUNT="set-and-ignored", SPARKLE_PRIVATE_KEY_FILE="/nowhere")
+    assert done.returncode == 0 and asked(checkout) == ["--account agent-frolic -p"]
+    script = SCRIPT.read_text()
+    code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+    assert "SPARKLE_ACCOUNT" not in code and "SPARKLE_PRIVATE_KEY_FILE" not in code
+    for wrong in (["--keychain", "x"], ["--account"], []):
+        got = subprocess.run(["/bin/bash", str(checkout / "scripts" / SCRIPT.name), str(checkout / "tools"), *wrong],
+                             capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+        assert got.returncode != 0 and "usage: check_sparkle_key.sh" in got.stderr, wrong
 
 
 def test_a_key_that_is_not_the_apps_stops_the_release(checkout):
@@ -86,10 +105,10 @@ def test_a_key_that_is_there_and_could_not_be_read_is_not_called_missing(checkou
 def test_a_key_file_is_looked_for_and_the_keychain_left_alone(checkout):
     key = checkout / "exported.key"
     key.write_text("made up")
-    done = run(checkout, SPARKLE_PRIVATE_KEY_FILE=str(key), FILE_HAS=THE_APPS_KEY)
+    done = run(checkout, key_file=str(key), FILE_HAS=THE_APPS_KEY)
     assert done.returncode == 0 and str(key) in done.stdout and asked(checkout) == []
     assert (checkout / "asked-of-file").read_text().splitlines() == [str(key)]
-    gone = run(checkout, SPARKLE_PRIVATE_KEY_FILE=str(checkout / "nowhere.key"))
+    gone = run(checkout, key_file=str(checkout / "nowhere.key"))
     assert gone.returncode == 1 and "names no file that can be read" in gone.stderr and asked(checkout) == []
 
 
@@ -98,7 +117,7 @@ def test_a_key_file_whose_key_is_not_the_apps_stops_the_release_as_the_keychains
     generate_appcast, after the build: it leaves the zip unsigned and goes on."""
     key = checkout / "exported.key"
     key.write_text("made up")
-    done = run(checkout, SPARKLE_PRIVATE_KEY_FILE=str(key), FILE_HAS=ANOTHER_KEY)
+    done = run(checkout, key_file=str(key), FILE_HAS=ANOTHER_KEY)
     assert done.returncode == 1 and done.stdout == "" and asked(checkout) == []
     assert f"the Sparkle key in {key} is not the one in macos/Info.plist" in done.stderr
 
@@ -112,7 +131,7 @@ def test_what_is_named_from_where_it_was_called_is_found_from_there(checkout):
     done = run(checkout, cwd=elsewhere, tools="../../tools", ANSWER=THE_APPS_KEY)
     assert done.returncode == 0, done.stderr                               # the keychain's, by tools named from there
     assert asked(checkout) == ["--account agent-frolic -p"]
-    done = run(checkout, cwd=elsewhere, tools="../../tools", SPARKLE_PRIVATE_KEY_FILE="exported.key",
+    done = run(checkout, cwd=elsewhere, tools="../../tools", key_file="exported.key",
                FILE_HAS=THE_APPS_KEY)
     assert done.returncode == 0, done.stderr
     assert (checkout / "asked-of-file").read_text().splitlines() == [str(elsewhere / "exported.key")]
@@ -124,14 +143,14 @@ def test_a_key_on_standard_input_or_a_pipe_is_refused_for_what_it_is(checkout):
     pipe = checkout / "a-pipe"
     os.mkfifo(pipe)
     for given in ("-", str(pipe), "/dev/null"):
-        done = run(checkout, SPARKLE_PRIVATE_KEY_FILE=given)
+        done = run(checkout, key_file=given)
         assert done.returncode == 1 and done.stdout == "" and asked(checkout) == [], given
-        assert "must be a file" in done.stderr and "reads the key more than once" in done.stderr, given
+        assert "the key must be a file" in done.stderr and "reads the key more than once" in done.stderr, given
         assert "names no file" not in done.stderr and not (checkout / "asked-of-file").exists()
 
 
 def test_a_file_that_holds_no_key_stops_the_release(checkout):
     key = checkout / "exported.key"
     key.write_text("not a key")
-    done = run(checkout, SPARKLE_PRIVATE_KEY_FILE=str(key))
+    done = run(checkout, key_file=str(key))
     assert done.returncode == 1 and done.stdout == "" and "does not hold a Sparkle key" in done.stderr
