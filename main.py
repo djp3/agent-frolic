@@ -341,7 +341,8 @@ class Frolic(App):
                                   # stops answering, counted from when it first failed to. The watch
                                   # asks it often for as long (grange.RETRY_SOON)
     GRANGE_STALE = "agent-grange is out of date: no agents shown · s to fix"     # kept short: they share
-    GRANGE_LOST = "agent-grange stopped answering: no agents shown"             # the ticker's line
+    GRANGE_STALE_YET = "agent-grange is out of date · s to fix"                 # the ticker's line. (YET:
+    GRANGE_LOST = "agent-grange stopped answering: no agents shown"             # its last report still shows)
     CSS = f"""
     Screen {{ background: {PLANE}; color: {INK}; }}
     .line {{ height: 1; margin: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }}
@@ -660,7 +661,8 @@ class Frolic(App):
         requests teammates' agents are at work on are back among what needs effort, as if
         nobody were on them, and a notice that has passed leaves nothing to say why."""
         if self.grange_state == "stale":
-            return self.GRANGE_STALE
+            # What it last reported stays its minute: "no agents shown" is said once that is so.
+            return self.GRANGE_STALE if self.grange_reading is None else self.GRANGE_STALE_YET
         if self.grange_ever and self.grange_state in ("down", "trouble") and self.grange_reading is None:
             return self.GRANGE_LOST
         return ""

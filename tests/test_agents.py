@@ -585,6 +585,28 @@ async def test_a_grange_out_of_date_is_said_on_the_board_and_the_setup_says_how_
 
 
 @drive
+async def test_the_board_does_not_say_no_agents_are_shown_while_they_still_are(isolated):
+    """A grange that was answering and is found out of date: what it last reported stays its
+    minute, and the board said "no agents shown" from the first second of it."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(*THE_TEAM))
+        await until(pilot, lambda: app.reported)
+        FakeGrange.answers.put(out_of_date({"error": "image out of date", "fix": "make update"}, retry=30))
+        await until(pilot, lambda: app.grange_state == "stale")
+        await pilot.pause(0.3)
+        assert len(app.reported) == 4 and app.agents_amiss() == "agent-grange is out of date · s to fix"
+        assert "no agents shown" not in ticker(app) and "agent 01" in screen(app)
+        app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # its minute is over
+        app.tick()
+        await pilot.pause(0.3)
+        assert app.reported == () and app.agents_amiss() == "agent-grange is out of date: no agents shown · s to fix"
+        assert ticker(app).endswith("✗ " + app.GRANGE_STALE) and "agent 01" not in screen(app)
+
+
+@drive
 async def test_what_the_grange_says_of_itself_takes_one_row_a_line_however_long_it_is(isolated):
     """It is from outside, and may be 256 characters a field. Left to wrap, the part took a
     dozen rows of a small window and the log beneath it was left one."""
