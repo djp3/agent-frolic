@@ -12,8 +12,8 @@ import keychain
 import main
 from canvas import plain
 from grange import GrangeError, Reported, out_of_date
-from picture import (Focus, Picture, carries, cells, doing, focuses, line_agents, located, named, needs_effort,
-                     placed, progress, words)
+from picture import (Focus, Picture, carries, cells, doing, focuses, line_agents, located, located_in, named,
+                     needs_effort, placed, progress, words)
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
@@ -367,6 +367,24 @@ def test_an_agent_whose_state_is_unknown_has_its_place_on_a_card_and_in_the_orde
     assert board.ORDER["unknown"] > board.ORDER["waiting"]
 
 
+def test_a_picture_is_given_its_agents_or_the_reports_they_come_from_not_both():
+    """Given both it kept the second and dropped the first, without a word."""
+    reported = (Reported("djp3", "proj-86-pr-98", "busy"),)
+    given = picture(*reported).agents
+    with pytest.raises(ValueError, match="not both"):
+        Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", given, reported=reported)
+    assert Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", given).agents == given
+
+
+def test_the_setups_tally_and_the_picture_go_by_the_same_rule():
+    reported = (Reported("djp3", "proj-86-pr-98", "busy"), Reported("kenji", "ops-3-pr-98", "busy"),
+                Reported("djp3", "scratch", "idle"))
+    pulls = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())}
+    for names in (["o/app", "o/web"], ["o/app"], ["O/Web"], []):
+        pic = Picture(names, pulls, "djp3", reported=reported)
+        assert len(located_in(reported, names, pulls)) == sum(len(agents) for agents in pic.agents.values()), names
+
+
 def test_placed_is_what_the_picture_holds():
     reported = (Reported("djp3", "proj-86-pr-98", "busy"),)
     assert picture(*reported).agents == placed(picture(), reported)
@@ -486,6 +504,12 @@ async def test_the_setup_says_what_the_grange_reports(isolated):
         assert "4  Agents" in drawn and "✓ answers on 127.0.0.1:7788 as djp3" in drawn
         assert "3 granges · 1 with no word from its agent-farm" in drawn
         assert "4 reported · 2 on the pull requests shown here" in drawn
+        counted = app.here_for
+        app.setup.draw()
+        assert app.here_for is counted                           # drawn again: not counted again
+        app.show_repo("o/app", False)                            # a repository hidden: counted afresh
+        await pilot.pause(0.1)
+        assert "4 reported · 0 on the pull requests shown here" in screen(app)
         assert [said for _, said, _ in app.lines].count("agent-grange answers: 3 granges, 4 agents") == 1
 
 

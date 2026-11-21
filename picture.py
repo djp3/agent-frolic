@@ -183,6 +183,15 @@ def located(reported: Iterable[Report], pulls: Iterable[PullRequest],
     return out
 
 
+def located_in(reported: Iterable[Report], names: Iterable[str],
+               pulls: Mapping[str, RepoPulls]) -> list[tuple[Report, PullRequest]]:
+    """`located`, from what the app holds: each reported agent that is on a pull request of
+    the repositories named (the ones shown), told among all that have been read. The one
+    place that says which pull requests count, for the picture and for the setup's tally."""
+    shown = [pull for name in names if name.lower() in pulls for pull in pulls[name.lower()].pulls]
+    return located(reported, shown, [pull for got in pulls.values() for pull in got.pulls])
+
+
 Numbers = dict[tuple[Key, str], dict[str, int]]    # (pull request, its human in lower case) -> the number
                                                     # each of their agents there has, by `Agent.ident`
 
@@ -204,8 +213,7 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
     Two sessions with one name cannot be told apart: they are numbered by what they are
     doing, so nothing moves on screen when they trade."""
     crews: dict[tuple[Key, str], list[tuple[Report, PullRequest]]] = {}
-    known = [pull for got in picture.pulls.values() for pull in got.pulls]       # hidden repositories' too
-    for one, pull in located(reported, picture.all(), known):
+    for one, pull in located_in(reported, picture.names, picture.pulls):
         crews.setdefault((key_of(pull), one.owner.lower()), []).append((one, pull))
     out: dict[Key, list[Agent]] = {}
     for (key, owner), crew in crews.items():
@@ -272,15 +280,17 @@ class Picture:
     names: list[str]                               # the shown repositories, in the user's order
     pulls: dict[str, RepoPulls]                    # repository (lower case) -> what was read from it
     viewer: str = ""                               # the viewer's GitHub login, "" when unknown
-    agents: dict[Key, list[Agent]] = field(default_factory=dict)
+    agents: dict[Key, list[Agent]] = field(default_factory=dict)    # the agents on each pull request:
+                                                   # given as they are, or worked out from `reported`.
+                                                   # One or the other: both is a mistake, and is refused
     notes: dict[str, str] = field(default_factory=dict)    # repository (lower case) -> a line to
                                                            # show under it: reading…, or why it failed
     teams: Mapping[str, str] = field(default_factory=dict)     # the teams the viewer is on: "team/org/
                                                            # slug" in lower case -> the name people read
     held: bool = False                             # the viewer's teams are still being read: until
                                                    # they are known, a team's request is nobody's
-    reported: tuple = ()                           # the agents the grange reports (Report): given
-                                                   # these, `agents` is worked out from them
+    reported: tuple[Report, ...] = ()              # the agents the grange reports: given these,
+                                                   # `agents` is worked out from them (`placed`)
     numbers: Numbers | None = field(default=None, repr=False, compare=False)    # the numbers their agents
                                                    # had before, kept by whoever builds one picture after
                                                    # another (`placed` brings it up to date)
@@ -301,6 +311,11 @@ class Picture:
                 owner = got.repo.split("/", 1)[0].lower()
                 self.orgs[owner] = self.orgs.get(owner, False) or any(got.rights)
         if self.reported:
+            if self.agents:
+                raise ValueError("a picture is given its agents, or the reports they are worked out from: not both")
+            # Last, when the standings and the organizations are settled: `placed` asks the
+            # picture where each pull request stands and whether a move is the viewer's, and
+            # nothing it asks reads the agents it is about to set.
             self.agents = placed(self, self.reported, self.numbers)
 
     def read(self) -> list[RepoPulls]:

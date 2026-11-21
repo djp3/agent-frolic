@@ -90,7 +90,7 @@ from board import Board, remember_change
 from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
 from grange import GRACE, Grange, GrangeError, Reading, Reported, Watch
-from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, located, quiet, review_marks
+from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, located_in, quiet, review_marks
 from pulls import PullRequest, RepoPulls, fetch_pulls, is_team, span, stack, team_of, team_slug
 from repos import Repo, RepoStore, parse
 from settings import Settings
@@ -418,6 +418,8 @@ class Frolic(App):
         self.tunnel_checking = False              # opened); and whether such a check is under way
         self.reported: tuple[Reported, ...] = ()  # the team's agents, as the agent-grange on this Mac last
                                                   # said: the picture puts each on its pull request
+        self.here_for: tuple | None = None        # what `agents_here` last counted from, and its count
+        self.here = 0
         self.agent_numbers: dict = {}             # the number each agent on the board has ("agent 02"), so
                                                   # that it keeps it from one report to the next (picture.placed)
         self.grange_state = "asking" if ask_grange else "off"     # "asking" | "ok" | "down" | "stale" |
@@ -621,6 +623,16 @@ class Frolic(App):
             self.say(wrong.said, INK2 if plain else INK)
         self.grange_state, self.grange_wrong = wrong.kind, wrong
         self.draw()
+
+    def agents_here(self) -> int:
+        """How many of the reported agents are on a pull request the board shows. The setup
+        says it, and is drawn every second: it is worked out again only when the report, the
+        shown repositories or a reading has changed (a new reading is a new object)."""
+        names = tuple(repo.name for repo in self.store.shown())
+        asked = (self.reported, names, tuple(map(id, self.pulls.values())))
+        if self.here_for != asked:
+            self.here_for, self.here = asked, len(located_in(self.reported, names, self.pulls))
+        return self.here
 
     def agents_amiss(self) -> str:
         """What the board says, for as long as it is so, when the agents it would show are
@@ -1820,10 +1832,7 @@ class Frolic(App):
             out.append(f" · {quiet_farms} with no word from its agent-farm", style=INK)
         if self.grange_state != "ok":
             out.append(f" · as of {age(self.grange_read_at)} ago", style=MUTED)
-        shown = [pull for name in (repo.name.lower() for repo in self.store.shown()) if name in self.pulls
-                 for pull in self.pulls[name].pulls]
-        known = [pull for got in self.pulls.values() for pull in got.pulls]
-        here, agents = len(located(self.reported, shown, known)), len(self.reported)
+        here, agents = self.agents_here(), len(self.reported)
         out.append("\n   agents    ", style=MUTED)
         out.append(f"{agents} reported", style=INK2)
         if agents:
