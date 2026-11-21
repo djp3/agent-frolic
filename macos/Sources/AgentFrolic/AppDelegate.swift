@@ -99,6 +99,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// Closing the board's window ends the app, whatever else is open. Left to "after the
+    /// last window closed" alone, the app lived on without a window whenever Sparkle's update
+    /// window was open at that moment, and the board with it: still reading GitHub and
+    /// holding its tunnel, with nothing on screen to show for it and no window to bring back.
+    /// (On the next turn of the run loop, so that the window finishes closing first.)
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
+
     func applicationWillTerminate(_ note: Notification) {
         if coreRunning { terminal.terminate() }
     }
@@ -110,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Loca
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = defaultTitle
+        // This object keeps the window (`window`, below), so closing it must not release it
+        // as well: a window made in code is released when closed unless told otherwise.
+        w.isReleasedWhenClosed = false
         centeredTitle = CenteredTitle(in: w)
         w.minSize = NSSize(width: 600, height: 300)
         w.tabbingMode = .disallowed

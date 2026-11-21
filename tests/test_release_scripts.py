@@ -130,3 +130,13 @@ def test_the_build_says_what_its_rpath_guard_is_and_when_it_acts():
     assert "2>/dev/null || true" not in guard                           # one it cannot take out stops the build
     package = (ROOT / "macos" / "Package.swift").read_text()
     assert '"-rpath", "-Xlinker", "@executable_path/../Frameworks"' in package
+
+
+def test_closing_the_boards_window_ends_the_app_whatever_else_is_open():
+    """With Sparkle's update window open, "after the last window closed" never comes."""
+    delegate = (ROOT / "macos" / "Sources" / "AgentFrolic" / "AppDelegate.swift").read_text()
+    closing = delegate[delegate.index("func windowWillClose(_ notification: Notification)"):]
+    closing = closing[:closing.index("\n    }\n")]
+    assert "(notification.object as? NSWindow) === window" in closing and "NSApp.terminate(nil)" in closing
+    assert "w.isReleasedWhenClosed = false" in delegate and "w.delegate = self" in delegate
+    assert "if coreRunning { terminal.terminate() }" in delegate       # and ending the app ends the board
