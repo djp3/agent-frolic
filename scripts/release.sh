@@ -87,13 +87,31 @@ $DIRTY"
     fi
 fi
 TOOLS=$(scripts/fetch_sparkle_tools.sh)
+# The key this release will be signed with must be the one whose public half the app carries
+# (SUPublicEDKey): installed copies accept no other. Looked at here, where it takes a moment,
+# and not left to generate_appcast, which comes after the build and the notarization and
+# only leaves the signature out. A dry run looks too: it is how a key is tried.
+PUBLIC_KEY=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" macos/Info.plist 2>/dev/null) \
+    || die "macos/Info.plist has no SUPublicEDKey"
 if [ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
+    [ -r "$SPARKLE_PRIVATE_KEY_FILE" ] || die "cannot read SPARKLE_PRIVATE_KEY_FILE ($SPARKLE_PRIVATE_KEY_FILE)"
     SPARKLE_KEY_ARGS=(--ed-key-file "$SPARKLE_PRIVATE_KEY_FILE")
+    KEY_FROM="the key in $SPARKLE_PRIVATE_KEY_FILE"
+    HELD_KEY=$(scripts/sparkle_public_key.sh "$SPARKLE_PRIVATE_KEY_FILE") \
+        || die "$SPARKLE_PRIVATE_KEY_FILE does not hold a Sparkle key (as generate_keys -x exports one)"
 else
     SPARKLE_KEY_ARGS=(--account "$SPARKLE_ACCOUNT")
+    KEY_FROM="the key in the login keychain under the account '$SPARKLE_ACCOUNT'"
+    HELD_KEY=$("$TOOLS/bin/generate_keys" --account "$SPARKLE_ACCOUNT" -p 2>/dev/null) \
+        || die "no Sparkle key in the login keychain under the account '$SPARKLE_ACCOUNT'
+(SPARKLE_ACCOUNT=<name> names another, SPARKLE_PRIVATE_KEY_FILE=<file> signs with an exported key)"
 fi
+[ "$HELD_KEY" = "$PUBLIC_KEY" ] || die "$KEY_FROM is not the one the app trusts:
+its public half is $HELD_KEY, and SUPublicEDKey in macos/Info.plist is $PUBLIC_KEY.
+Installed copies would refuse an update signed with it."
 echo "identity: ${IDENTITY_NAME:-$IDENTITY} ($IDENTITY)"
 echo "sparkle tools: $TOOLS"
+echo "sparkle key: $KEY_FROM, the one the app trusts"
 
 step "locked packages"
 # The app is built from a new venv holding exactly requirements.lock, every file checked
