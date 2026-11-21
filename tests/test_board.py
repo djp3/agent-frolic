@@ -17,6 +17,7 @@ from rich.cells import cell_len
 import board
 import keychain
 import main
+import theme
 from repos import RepoStore
 from settings import Settings
 from githubapi import Team
@@ -634,16 +635,69 @@ async def wheel(pilot, event, times=1, over="#map", offset=(60, 4)):
 
 
 def test_the_hints_leave_out_the_least_needed_first_and_keep_setup_and_quit():
-    full = board.HINT_GAP.join(board.HINTS)
-    assert board.hint_line(cell_len(full)) == full
-    assert board.hint_line(116) == ("↑↓ pull request   o open on GitHub   PgUp PgDn scroll   "
-                                    "n next needing effort   tab focus   s setup   q quit")
-    last = "s setup   q quit"
+    every = [f"{key} {does}" for key, does in board.HINTS]
+    full = board.HINT_GAP.join(every)
+    assert board.hint_line(cell_len(full)).plain == full
+    assert board.hint_line(102).plain == ("↑↓ Pull request  o Open on GitHub  PgUp PgDn Scroll  "
+                                          "n Next needing effort  tab Focus  s Setup  q Quit")
+    last = "s Setup  q Quit"
     for width in range(cell_len(last), cell_len(full) + 1):
-        line = board.hint_line(width)
+        line = board.hint_line(width).plain
         shown = line.split(board.HINT_GAP)
         assert cell_len(line) <= width and line.endswith(last), width
-        assert shown == [h for h in board.HINTS if h in shown], width              # in their order
+        assert shown == [h for h in every if h in shown], width                    # in their order
+
+
+def test_a_hints_key_is_lit_and_its_words_are_plain():
+    """As agent-farm's footer is: the key bold and in the key's color, the words beside it."""
+    line = board.hint_text([("q", "Quit"), ("PgUp PgDn", "Scroll")])
+    assert line.plain == "q Quit  PgUp PgDn Scroll"
+    drawn = [(line.plain[span.start:span.end], str(span.style)) for span in line.spans]
+    assert drawn == [("q", f"bold {board.KEY}"), (" Quit", board.INK2),
+                     ("PgUp PgDn", f"bold {board.KEY}"), (" Scroll", board.INK2)]
+
+
+def test_the_keys_color_is_no_color_that_already_means_something():
+    """Not a status, not the yellow of what is yours, not an age's violet, not the ink of words."""
+    taken = (theme.GOOD, theme.WARN, theme.SERIOUS, theme.CRIT, theme.WAITING, theme.AGE, theme.DIVIDER,
+             theme.INK, theme.INK2, theme.MUTED)
+    assert theme.KEY.lower() not in {color.lower() for color in taken}
+
+
+def test_the_setups_hints_leave_out_the_seldom_wanted_first_and_keep_the_board_and_quit():
+    every = [f"{key} {does}" for key, does in main.SETUP_HINTS]
+    full = board.HINT_GAP.join(every)
+
+    def fitted(width):
+        return board.fit_hints(main.SETUP_HINTS, main.SETUP_LEFT_OUT_FIRST, width).plain
+
+    assert fitted(cell_len(full)) == full and fitted(cell_len(full) - 1) == full.replace("W Off  ", "")
+    last = "s Board  q Quit"
+    for width in range(cell_len(last), cell_len(full) + 1):
+        shown = fitted(width).split(board.HINT_GAP)
+        assert cell_len(fitted(width)) <= width and fitted(width).endswith(last), width
+        assert shown == [h for h in every if h in shown], width                    # in their order
+    assert set(main.SETUP_LEFT_OUT_FIRST) == {key for key, _ in main.SETUP_HINTS} - {"s", "q"}
+
+
+@drive
+async def test_the_setups_foot_is_fitted_to_the_window_with_its_keys_lit(isolated):
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 46)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        foot = screen(app).splitlines()[-1]
+        assert "s Board  q Quit" in foot and "t Token" in foot and "…" not in foot
+        assert "W Off" not in foot                                                 # the seldom wanted went first
+        await pilot.resize_terminal(170, 46)                                       # widened: all of them
+        await settle(app, pilot)
+        assert board.hint_text(main.SETUP_HINTS).plain in screen(app).splitlines()[-1]
+        drawn = next(strip for strip in app.screen._compositor.render_strips() if "q Quit" in strip.text)
+        lit = "".join(seg.text if seg.style and seg.style.bold and seg.style.color
+                      and seg.style.color.get_truecolor().hex.lower() == board.KEY.lower() else " " for seg in drawn)
+        assert lit.split() == "t f a ↑↓ [ ] space x b w W r p u s q".split()       # the keys, and only the keys
 
 
 @drive
@@ -653,11 +707,15 @@ async def test_a_narrow_window_still_shows_how_to_reach_the_setup_and_quit(isola
     async with app.run_test(size=(120, 46)) as pilot:
         await settle(app, pilot)
         hints = screen(app).splitlines()[-1]
-        assert "s setup   q quit" in hints and "…" not in hints
-        assert "d drawer" not in hints                                             # the least needed went first
+        assert "s Setup  q Quit" in hints and "…" not in hints
+        assert "d Drawer" not in hints                                             # the least needed went first
         await pilot.resize_terminal(170, 46)                                       # widened: all of them
         await settle(app, pilot)
-        assert board.HINT_GAP.join(board.HINTS) in screen(app).splitlines()[-1]
+        assert board.hint_line(9999).plain in screen(app).splitlines()[-1]
+        foot = next(strip for strip in app.screen._compositor.render_strips() if "q Quit" in strip.text)
+        lit = "".join(seg.text if seg.style and seg.style.bold and seg.style.color
+                      and seg.style.color.get_truecolor().hex.lower() == board.KEY.lower() else " " for seg in foot)
+        assert lit.split() == "↑↓ o PgUp PgDn n tab esc m u d s q".split()         # the keys, and only the keys
 
 
 @drive
@@ -1017,7 +1075,7 @@ async def test_o_opens_the_selected_pull_requests_page_and_tab_steps_the_focus(i
     async with app.run_test(size=(150, 46)) as pilot:
         await settle(app, pilot)
         app.OPEN_AGAIN_S = 0                                                  # (a key held down has its own test)
-        assert "o open on GitHub" in screen(app) and "tab focus" in screen(app)
+        assert "o Open on GitHub" in screen(app) and "tab Focus" in screen(app)
         await pilot.press("o")
         await settle(app, pilot)
         assert FakeBrowser.opened == ["https://github.com/djp3/agent-frolic/pull/12"]   # the selected one, and

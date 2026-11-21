@@ -16,7 +16,7 @@ board: see [below](#made-to-work-with-agent-farm-and-agent-grange).
 **[Download for Mac](https://github.com/djp3/agent-frolic/releases/latest)** · macOS 27+ on
 Apple silicon · free and open source
 
-![agent-frolic showing the open pull requests of two repositories: a card for each person and team something waits on, the pull requests drawn as stacks, each with its age as a bar and a figure, each repository's line ending in the countdown to its next read, what needs effort, and the drawer for the selected one](docs/screenshot.png)
+![agent-frolic showing the open pull requests of two repositories: a card for each person and team something waits on, the pull requests drawn as stacks, each with its age as a bar and a figure, each repository's line ending in the countdown to its next read, what needs effort, the drawer for the selected one, and the keys along the foot](docs/screenshot.png)
 
 ### What is yours to move is yellow
 
@@ -133,6 +133,8 @@ From top to bottom:
   the minutes left, counted up to nought (`-4m`).
 - **The band**: what needs effort, and the drawer for the selected pull request.
 - **The ticker**: the last thing that happened.
+- **The foot**: the keys, each lit, with what it does beside it. In a narrow window the least
+  needed are left out; the way to the setup and the way out always stay.
 
 The title bar reads 🐓 agent-frolic and the version (v0.1.4, say), then one 🔨 for each
 repository being watched (on screen, with a token GitHub has accepted), so the Dock, Mission
