@@ -50,7 +50,9 @@ GENERATE_APPCAST = NOTES_A_CALL.format(name="generate_appcast") + """out=""
 while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done
 cp "$APPCAST" "$out"
 """
-SIGN_UPDATE = NOTES_A_CALL.format(name="sign_update") + "exit ${VERIFIES:-0}\n"
+# Sparkle's sign_update: when it fails ($VERIFIES) it says why on standard output ($SAYS), as the real one does.
+SIGN_UPDATE = (NOTES_A_CALL.format(name="sign_update")
+               + '[ "${VERIFIES:-0}" = 0 ] || echo "${SAYS:-Error: failed to verify}"\nexit ${VERIFIES:-0}\n')
 # scripts/sparkle_tools.sh refuses on its $TOOLS_REFUSED_AT'th call, when that is set.
 TOOLS_OR_NOT = """n=$(grep -c '^sparkle_tools' "$CALLS")
 if [ "$n" = "${TOOLS_REFUSED_AT:-}" ]; then echo "refusing to use it" >&2; exit 1; fi
@@ -185,6 +187,25 @@ def test_a_feed_whose_signature_does_not_verify_is_not_published(release):
     done = release.run(VERIFIES="1")
     assert done.returncode == 1 and "the signature on appcast.xml does not verify" in done.stderr
     assert not (release.called("git tag") or release.called("git push") or release.called("gh release create"))
+
+
+@pytest.mark.parametrize("says", ["ERROR! Access denied. Can't get keys from the keychain.",
+                                  "ABORTED! You've cancelled the request to read the key from the Keychain.",
+                                  "1097 bytes were expected to be signed, but actually read 1103 bytes."])
+def test_why_the_appcast_did_not_verify_is_said_in_sign_updates_own_words(release, says):
+    """It says why on standard output, which was thrown away: a keychain prompt that was
+    refused, after the build and the notary, read as a signature that was wrong."""
+    done = release.run(VERIFIES="1", SAYS=says)
+    assert done.returncode == 1 and "sign_update said:" in done.stderr and says in done.stderr
+    assert release.nothing_left_this_mac() or release.called("xcrun notarytool submit")   # notarized, not published
+    assert not (release.called("git tag") or release.called("gh release create"))
+
+
+def test_a_key_that_sign_update_could_not_read_is_never_repeated_in_what_is_shown(release):
+    secret = "bm90IGEga2V5IGJ1dCBzZWNyZXQgYWxsIHRoZSBzYW1l"
+    done = release.run(VERIFIES="1", SAYS=f"ERROR! Failed to decode base64 encoded key data from: {secret}")
+    assert done.returncode == 1 and secret not in done.stderr + done.stdout
+    assert "key data from: (not shown)" in done.stderr
 
 
 @pytest.mark.parametrize("answer, said", [(ANOTHER_KEY, "is not the one in macos/Info.plist"),

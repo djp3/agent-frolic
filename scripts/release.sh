@@ -174,8 +174,14 @@ cp "$NOTES" "dist/appcast/$(basename "$ZIP" .zip).md"
 # search for "edSignature" finds the first and says nothing of the second. Without the
 # feed's, every copy from this release on would refuse the feed and stay where it is.
 scripts/check_appcast.py dist/appcast/appcast.xml || die "appcast.xml is not signed as the app requires"
-"$TOOLS/bin/sign_update" --verify "${SPARKLE_KEY_ARGS[@]}" dist/appcast/appcast.xml >/dev/null \
-    || die "the signature on appcast.xml does not verify with the key it was just signed with"
+# sign_update says why on its standard output, so that is kept, and shown when it fails: a
+# keychain prompt that was refused is not a signature that is wrong. One thing it may say
+# repeats a key it could not read, and that line is never shown.
+if ! VERIFIED=$("$TOOLS/bin/sign_update" --verify "${SPARKLE_KEY_ARGS[@]}" dist/appcast/appcast.xml 2>&1); then
+    VERIFIED=$(printf '%s\n' "$VERIFIED" | sed -e 's/\(key data from:\).*/\1 (not shown)/' -e 's/^/    /')
+    die "the signature on appcast.xml does not verify with the key it was just signed with. sign_update said:
+$VERIFIED"
+fi
 { cat "$NOTES"; printf '%s\n' "$NOTES_SUFFIX"; } > dist/release-notes.md
 
 if [ "$DRY_RUN" = 1 ]; then
