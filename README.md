@@ -74,7 +74,8 @@ one. The only thing it writes on GitHub is its own webhook, on the repositories 
 2. Open it. The app is notarized, so it opens like any other download.
 
 Updates take care of themselves: the app checks GitHub once a day and offers each new release
-with its notes. **agent-frolic ▸ Check for Updates…** checks now.
+with its notes. **agent-frolic ▸ Check for Updates…** checks now. An update is accepted only
+when it is signed with this project's key, and so is the list that announces it.
 
 You need macOS 27 or later on Apple silicon, and a GitHub token. On macOS 26 or earlier the
 app does not open: macOS says it needs a newer system. The Python inside it is built for
@@ -296,7 +297,8 @@ python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements.
 .venv/bin/python -m pytest        # the tests: no network, no real Keychain
 ```
 
-`scripts/build_app.sh` builds the Mac app, and `scripts/release.sh` cuts a release.
+`scripts/build_app.sh` builds the Mac app, and `scripts/release.sh` cuts a release. A copy you
+build yourself does not update itself: only a release carries the address of the updates.
 
 ## License
 
@@ -305,3 +307,8 @@ GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 The artwork has licenses of its own: the app icon's rooster is from
 [Noto Emoji](https://github.com/googlefonts/noto-emoji). See
 [credits/README.txt](credits/README.txt).
+
+The app has other people's programs inside it, each under its own license. The texts of
+[Sparkle](https://sparkle-project.org)'s and
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)'s are in the app, in
+`Contents/Resources/licenses`.
