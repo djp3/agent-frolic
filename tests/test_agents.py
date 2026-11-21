@@ -13,8 +13,9 @@ import keychain
 import main
 from canvas import plain
 from grange import GrangeError, Reported, out_of_date
-from picture import (Focus, Picture, carries, cells, doing, focuses, line_agents, located, located_in, named,
-                     needs_effort, placed, progress, words)
+import picture as pictures
+from picture import (LOOKS, Agent, Focus, Person, Picture, agent_cell, agent_state, carries, cells, doing, focuses,
+                     line_agents, located, located_in, look, named, needs_effort, placed, progress, words)
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
@@ -374,7 +375,48 @@ def test_no_agent_is_drawn_twice_on_a_row():
 def test_an_agent_whose_state_is_unknown_has_its_place_on_a_card_and_in_the_order():
     unknown = picture(Reported("mira", "proj-12-pr-7", "busy", True)).agents[("o/app", 7)][0]
     assert plain(board.agent_line(unknown, yours=False)) == "? #7"
-    assert board.ORDER["unknown"] > board.ORDER["waiting"]
+    assert look(unknown).order > LOOKS["waiting"].order
+
+
+def test_every_state_is_drawn_from_the_one_table_wherever_it_is_drawn():
+    """Its mark, its word and its place on a card were written out in five places."""
+    pic = picture()
+    for state, its in LOOKS.items():
+        agent = Agent("djp3", "01", "o/app", 98, "author", state)
+        mark = its.mark or "⠋"
+        assert plain(agent_cell(pic, agent)) == f"  └ {mark} agent 01" and plain(agent_state(pic, agent)) == its.word
+        assert plain(board.agent_line(agent, yours=True)) == f"{mark} #98"
+    card = board.make_card(Person("djp3", "you", agents=[Agent("djp3", f"{n:02d}", "o/app", n, "author", state)
+                                                         for n, state in enumerate(reversed(list(LOOKS)), 1)]), 1)
+    assert [plain(line).split()[0] for line, _ in card.cols[0]] == ["▷", "⠋", "·", "?"]   # in the table's order
+
+
+def test_a_state_with_no_look_of_its_own_is_drawn_as_unknown_and_never_fails():
+    """A drawing that fails is swallowed where the screen is drawn: the board would stand
+    still, with nothing to say why."""
+    pic, odd = picture(), Agent("djp3", "01", "o/app", 98, "author", "dozing")
+    assert plain(agent_cell(pic, odd)) == "  └ ? agent 01" and plain(agent_state(pic, odd)) == "unknown"
+    assert plain(board.agent_line(odd, yours=False)) == "? #98" and look(odd) is LOOKS["unknown"]
+    board.make_card(Person("djp3", "you", agents=[odd]), 1)
+
+
+@drive
+async def test_a_state_with_no_look_of_its_own_does_not_stop_the_board(isolated, monkeypatch):
+    monkeypatch.setattr(pictures, "doing", lambda picture, one, pull, role: "dozing")
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "proj-86-pr-98 fix tests", "busy")))
+        await until(pilot, lambda: app.reported)
+        for _ in range(3):
+            await pilot.press("down")                            # to #98, so that the drawer has it
+            await pilot.pause(0.1)
+            if app.board.sel == ("o/app", 98):
+                break
+        await pilot.pause(0.3)
+        drawn = screen(app)
+        assert "└ ? agent 01" in drawn and "? #98" in drawn and "you › ? agent 01 dozing" in drawn
 
 
 def test_a_picture_is_given_its_agents_or_the_reports_they_come_from_not_both():

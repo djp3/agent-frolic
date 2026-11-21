@@ -110,6 +110,36 @@ class Agent:
         return (self.operator.lower(), self.repo.lower(), self.number, self.ident or self.serial)
 
 
+@dataclass(frozen=True)
+class Look:
+    """How one state of an agent is drawn, wherever it is drawn."""
+    mark: str                     # before its name; "" for the dots that turn while it works (SPIN)
+    word: str                     # in the state column
+    order: int                    # on its human's card: the ones at a prompt first, then at work, ...
+
+
+# The one place that says how each state is drawn: the row, the card, the drawer and the order
+# on a card all read it. The colors are theirs, since they differ by where it is and whose it is.
+LOOKS = {
+    "at its prompt": Look("▷", "at prompt", 0),
+    "working": Look("", "working", 1),
+    "waiting": Look("·", "waiting", 2),
+    "unknown": Look("?", "unknown", 3),
+}
+
+
+def look(agent: Agent) -> Look:
+    """How this agent's state is drawn. A state that has no look of its own is drawn as
+    unknown: a drawing that fails is swallowed where the screen is drawn, and the board
+    would stand still with nothing to say why."""
+    return LOOKS.get(agent.state, LOOKS["unknown"])
+
+
+def mark_of(agent: Agent, spin: str = SPIN[0]) -> str:
+    """The mark before an agent's name: its state's, or the turning dots while it works."""
+    return look(agent).mark or spin
+
+
 class Report(Protocol):
     """An agent as the grange reports it (grange.Reported)."""
     owner: str                    # the GitHub login of the human who runs it
@@ -534,17 +564,19 @@ def agent_cell(picture: Picture, agent: Agent, spin: str = SPIN[0]) -> Segments:
     """An agent, beneath its human. The mark turns while it works; ▷ is an agent at its
     prompt, · one that waits. It is never yellow: the yellow dot is on the human above."""
     yours = picture.is_viewer(agent.operator)
-    mark, style = {"working": (spin, INK), "at its prompt": ("▷", INK if yours else MUTED),
-                   "waiting": ("·", MUTED), "unknown": ("?", MUTED)}[agent.state]
-    name = INK if agent.working or (yours and agent.state == "at its prompt") else INK2
-    return [("  └ ", AXIS), (mark + " ", style), (agent.name, name)]
+    yours_to_answer = yours and agent.state == "at its prompt"
+    style = INK if agent.working or yours_to_answer else MUTED
+    name = INK if agent.working or yours_to_answer else INK2
+    return [("  └ ", AXIS), (mark_of(agent, spin) + " ", style), (agent.name, name)]
 
 
 def agent_state(picture: Picture, agent: Agent) -> Segments:
     yours = picture.is_viewer(agent.operator)
-    return {"working": [("working", INK2)],
-            "at its prompt": [("at prompt", INK if yours else INK2)],
-            "waiting": [("waiting", MUTED)], "unknown": [("unknown", MUTED)]}[agent.state]
+    if agent.state == "at its prompt":
+        style = INK if yours else INK2
+    else:
+        style = INK2 if agent.working else MUTED
+    return [(look(agent).word, style)]
 
 
 def cells(picture: Picture, pull: PullRequest, spin: str = SPIN[0]) -> list[tuple[Segments, Segments, Segments]]:

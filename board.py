@@ -75,7 +75,7 @@ from textual.widgets import Static
 from canvas import Canvas, Segments, cut, plain, seg_len, wash, write
 from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
                      Person, Picture, Row, cells, counts, focuses, humans, in_focus, key_of, labels,
-                     age_reach, age_said, line_agents, mark, move_words, needs_effort, progress, quiet,
+                     age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, progress, quiet,
                      review_cell, reviewers, reviewing, silence, tree)
 from pulls import PullRequest, span
 from theme import (AGE, AXIS, CRIT, DIVIDER, INK, INK2, KEY, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN,
@@ -94,7 +94,6 @@ STRIP = 5                        # the most rows the strip of cards takes: a nam
 PER_COL = 4                      # agents beneath a human before a card takes another column
 BAND = 10                        # rows of the bottom band: the list and the drawer
 X_OWNER, X_STATE, X_WAITS, X_RULE, X_TREE = 1, 18, 33, 51, 53
-ORDER = {"at its prompt": 0, "working": 1, "waiting": 2, "unknown": 3}
 # The hints at the foot of the screen, each a key and a word or two for what it does. They
 # are drawn as agent-farm's footer is: the key lit, its words beside it (`hint_text`).
 HINTS = [("↑↓", "Pull request"), ("o", "Open on GitHub"), ("PgUp PgDn", "Scroll"), ("n", "Next needing effort"),
@@ -249,8 +248,8 @@ def agent_line(agent: Agent, yours: bool) -> Segments:
     if agent.working:
         return [(SPIN[0] + " ", INK), (said, INK2)]
     if agent.state == "at its prompt":
-        return [("▷ ", WAITING if yours else MUTED), (said, f"bold {INK}" if yours else INK2)]
-    return [("? " if agent.state == "unknown" else "· ", MUTED), (said, MUTED)]
+        return [(mark_of(agent) + " ", WAITING if yours else MUTED), (said, f"bold {INK}" if yours else INK2)]
+    return [(mark_of(agent) + " ", MUTED), (said, MUTED)]
 
 
 def count_marks(yours: int, nudge: int, gap: str = " ") -> Segments:
@@ -286,7 +285,7 @@ def head_line(person: Person) -> Segments:
 def make_card(person: Person, max_cols: int) -> Card:
     """A human and the agents they operate: the ones at a prompt first, then the ones at
     work, then the ones that wait. What does not fit is folded, and the card says so."""
-    agents = sorted(person.agents, key=lambda a: ORDER[a.state])
+    agents = sorted(person.agents, key=lambda a: look(a).order)
     slots = max(1, max_cols) * PER_COL
     folded: list[Agent] = []
     if len(agents) > slots:
@@ -1111,9 +1110,8 @@ class Board(Screen):
         out.append(pull.title + "\n", style=INK)
 
         def actor(agent: Agent) -> None:
-            icon, color = {"working": (spin, INK), "at its prompt": ("▷", INK2), "waiting": ("·", MUTED),
-                           "unknown": ("?", MUTED)}[agent.state]
-            out.append(" › ", style=MUTED).append(icon + " ", style=color)
+            color = INK if agent.working else INK2 if agent.state == "at its prompt" else MUTED
+            out.append(" › ", style=MUTED).append(mark_of(agent, spin) + " ", style=color)
             out.append(f"{agent.name} {'at work' if agent.working else agent.state}",
                        style=INK if agent.working else INK2)
 
