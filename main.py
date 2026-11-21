@@ -324,8 +324,8 @@ class Frolic(App):
     GRANGE_GRACE_S = GRACE        # how long the agents last reported stay on the board once the grange
                                   # stops answering, counted from when it first failed to. The watch
                                   # asks it often for as long (grange.RETRY_SOON)
-    GRANGE_STALE = "agent-grange on this Mac is out of date: s shows how to update it"
-    GRANGE_LOST = "agent-grange stopped answering: no agents are shown"
+    GRANGE_STALE = "agent-grange is out of date: no agents shown · s to fix"     # kept short: they share
+    GRANGE_LOST = "agent-grange stopped answering: no agents shown"             # the ticker's line
     CSS = f"""
     Screen {{ background: {PLANE}; color: {INK}; }}
     .line {{ height: 1; margin: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }}
@@ -598,8 +598,6 @@ class Frolic(App):
         self.grange_state, self.grange_wrong, self.grange_ever = "ok", None, True
         self.grange_reading, self.grange_read_at, self.grange_failed_at = reading, time.time(), 0.0
         self.reported = tuple(reading.reported())
-        if self.notice is not None and self.notice[1] in (self.GRANGE_STALE, self.GRANGE_LOST):
-            self.notice = None                    # what it said was wrong no longer is
         if back:
             granges, agents = len(reading.granges), len(self.reported)
             self.say(f"agent-grange answers: {granges} grange{'' if granges == 1 else 's'}, "
@@ -621,10 +619,23 @@ class Frolic(App):
         if before is None or (wrong.kind, wrong.said) != (before.kind, before.said):
             plain = wrong.kind in ("down", "trouble") and not self.grange_ever
             self.say(wrong.said, INK2 if plain else INK)
-            if wrong.kind == "stale":
-                self.announce(self.GRANGE_STALE, self.NOTICE_FAILED_S)
         self.grange_state, self.grange_wrong = wrong.kind, wrong
         self.draw()
+
+    def agents_amiss(self) -> str:
+        """What the board says, for as long as it is so, when the agents it would show are
+        not there: the grange is out of date, or one that was answering has stopped and
+        what it last reported has been let go. "" when nothing is amiss, which a Mac with
+        no grange is not.
+
+        Said for as long as it lasts, not for a moment: without their agents, the pull
+        requests teammates' agents are at work on are back among what needs effort, as if
+        nobody were on them, and a notice that has passed leaves nothing to say why."""
+        if self.grange_state == "stale":
+            return self.GRANGE_STALE
+        if self.grange_ever and self.grange_state in ("down", "trouble") and self.grange_reading is None:
+            return self.GRANGE_LOST
+        return ""
 
     def forget_agents(self) -> None:
         """The grange has not answered for too long: what it last said is no longer shown."""
@@ -634,7 +645,6 @@ class Frolic(App):
         if had:
             self.say(f"agent-grange has not answered for a minute: the {had} "
                      f"agent{'' if had == 1 else 's'} it reported {'is' if had == 1 else 'are'} no longer shown", INK)
-            self.announce(self.GRANGE_LOST, self.NOTICE_FAILED_S)
 
     # ---- the terminal's title ----------------------------------------------------------
     def watched(self) -> int:

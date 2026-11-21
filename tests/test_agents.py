@@ -385,6 +385,11 @@ def a_board(port=None):
         Settings(grange_port=port).save()
 
 
+def ticker(app) -> str:
+    """The board's ticker line, as drawn (the line above the hints)."""
+    return screen(app).splitlines()[-2].rstrip()
+
+
 THE_TEAM = (("djp3", "proj-86-pr-98 fix tests", "busy"), ("djp3", "scratch", "idle"),
             ("mira", "proj-12-pr-7 docs", "busy"), ("kenji", "billing-3-pr-7", "busy"))
 
@@ -538,14 +543,21 @@ async def test_a_grange_out_of_date_is_said_on_the_board_and_the_setup_says_how_
         FakeGrange.answers.put(out_of_date(body, retry=0.01))
         await until(pilot, lambda: len(FakeGrange.asked) == 3)
         assert app.grange_state == "stale" and [said for _, said, _ in app.lines].count(stale) == 1
-        assert app.notice_now() == "agent-grange on this Mac is out of date: s shows how to update it"
+        assert app.agents_amiss() == "agent-grange is out of date: no agents shown · s to fix"
+        assert ticker(app).endswith("✗ " + app.GRANGE_STALE)
+        app.happened(time.time(), "app · #98 was approved by bob")   # something on GitHub: it keeps its place
+        await pilot.pause(0.3)
+        assert ticker(app).endswith("✗ " + app.GRANGE_STALE) and "#98 was approved by bob" in ticker(app)
         await to_setup(app, pilot)
         drawn = screen(app)
         assert "grange    ✗ out of date: image is 3 commit(s) behind tag 'agent-grange-latest'" in drawn
         assert "to fix    make update (git pull --ff-only, then make up)   in the grange's folder" in drawn
         FakeGrange.answers.put(team(*THE_TEAM))                  # updated: it answers
         await until(pilot, lambda: app.grange_state == "ok")
-        assert app.notice_now() == "" and "to fix" not in screen(app)
+        assert app.agents_amiss() == "" and "to fix" not in screen(app)
+        await pilot.press("s")
+        await pilot.pause(0.3)
+        assert "✗" not in ticker(app) and "#98 was approved by bob" in ticker(app)     # gone with its cause
 
 
 @drive
@@ -570,7 +582,7 @@ async def test_what_was_last_reported_stays_for_a_minute_once_the_grange_stops_a
         assert app.reported == () and app.grange_reading is None and "4 reported" not in screen(app)
         assert "agent-grange has not answered for a minute: the 4 agents it reported are no longer shown" in [
             said for _, said, _ in app.lines]
-        assert app.notice_now() == "agent-grange stopped answering: no agents are shown"
+        assert app.agents_amiss() == "agent-grange stopped answering: no agents shown"
 
 
 @drive
@@ -592,7 +604,7 @@ async def test_the_minute_is_counted_from_the_first_failure_not_from_the_last_an
         assert time.monotonic() - first < 30                     # counted from the first failure, and not
         app.grange_failed_at -= app.GRANGE_GRACE_S + 1           # moved on by the second
         app.tick()
-        assert app.reported == () and app.notice_now() == app.GRANGE_LOST
+        assert app.reported == () and app.agents_amiss() == app.GRANGE_LOST
 
 
 @drive

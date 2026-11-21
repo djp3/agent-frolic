@@ -1176,7 +1176,11 @@ class Board(Screen):
 
     def ticker(self) -> Text:
         """The last thing that happened, and how long ago; or, for a moment, a word about
-        what the user just did."""
+        what the user just did. And at its right end, for as long as it is so, that the
+        agents are not being shown (Frolic.agents_amiss)."""
+        return self.with_amiss(self.happened())
+
+    def happened(self) -> Text:
         out = Text()
         notice = self.app.notice_now()
         if notice:
@@ -1190,6 +1194,25 @@ class Board(Screen):
         when = "now" if seconds < 2 else f"{span(seconds, fine=True)} ago"
         out.append(f"{when:<9}", style=INK if seconds < 2 else MUTED)
         return out.append(said, style=INK if seconds < 2 else INK2)
+
+    def with_amiss(self, line: Text) -> Text:
+        """The ticker's line with what is amiss with the agents at its right end, when
+        something is. It keeps its place whatever happens on GitHub: the news is cut to make
+        room for it, not the other way about."""
+        amiss = self.app.agents_amiss()
+        if not amiss:
+            return line
+        mark = Text("✗ ", style=CRIT).append(amiss, style=INK2)
+        try:
+            width = self.query_one("#events", Static).size.width
+        except NoMatches:
+            width = 0
+        room = width - mark.cell_len - 3
+        if room < 12:                                 # too narrow for both: what is amiss is the one to keep
+            mark.truncate(max(1, width), overflow="ellipsis")
+            return mark
+        line.truncate(room, overflow="ellipsis", pad=True)
+        return line.append("   ").append_text(mark)
 
     def menu_text(self) -> Text:
         """The repository menu: every repository, with a check mark on the ones on screen."""

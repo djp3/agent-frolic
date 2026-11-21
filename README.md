@@ -290,8 +290,12 @@ of the setup says what the grange reports:
 - **No grange on this Mac**: the board shows people and teams, from GitHub's records alone.
 - **A grange that stops answering**: what it last reported stays for a minute, and is then
   taken off the board.
-- **A grange that is out of date** answers nothing until it is updated. The board says so, and
-  the setup shows the command to run in the grange's folder (`make update`).
+- **A grange that is out of date** answers nothing until it is updated. The setup shows the
+  command to run in the grange's folder (`make update`).
+
+In either of the last two cases the board says so at the end of the ticker's line, for as long
+as it lasts: without their agents, pull requests that agents are at work on look as if nobody
+were on them.
 
 ## Files and logs
 
