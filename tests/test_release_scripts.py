@@ -40,6 +40,40 @@ def test_the_build_keeps_to_the_versions_that_are_pinned():
     assert "swift build -c release --product AgentFrolic --only-use-versions-from-resolved-file" in BUILD
 
 
+def swift_step(tmp_path, swift: str) -> subprocess.CompletedProcess:
+    """Run the build's own lines that compile the host, with this stand-in for `swift`."""
+    start = BUILD.index("SWIFT_LOG=build/swift-build.log")
+    end = BUILD.index('[ -x "$BIN" ]', start)
+    (tmp_path / "macos").mkdir()
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "swift").write_text("#!/bin/sh\n" + swift)
+    (tmp_path / "bin" / "swift").chmod(0o755)
+    return subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", BUILD[start:end] + "echo went on\n"],
+                          capture_output=True, text=True, cwd=tmp_path, timeout=60,
+                          env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin"})
+
+
+def test_a_compile_that_works_is_not_failed_for_what_it_did_not_print(tmp_path):
+    """Its output was piped into a search, and under pipefail a search that finds nothing
+    fails the pipe: a build that had worked would have ended there, with nothing said."""
+    done = swift_step(tmp_path, 'echo "Compiling AgentFrolic main.swift"\n')
+    assert done.returncode == 0 and done.stdout == "went on\n", done.stderr
+
+
+def test_a_compile_that_works_shows_the_lines_worth_a_glance(tmp_path):
+    done = swift_step(tmp_path, 'echo "warning: unreachable code"; echo "Compiling"; echo "Build complete! (2.1s)"\n')
+    assert done.returncode == 0 and done.stdout.splitlines() == ["warning: unreachable code", "Build complete! (2.1s)",
+                                                                  "went on"]
+
+
+def test_a_compile_that_fails_stops_the_build_and_shows_all_it_said(tmp_path):
+    done = swift_step(tmp_path, 'echo "main.swift:3: error: no such module"; echo "and a note beneath it"; exit 1\n')
+    assert done.returncode == 1 and "went on" not in done.stdout
+    assert "main.swift:3: error: no such module" in done.stderr and "and a note beneath it" in done.stderr
+    assert "swift build failed" in done.stderr
+    assert "PIPESTATUS" not in BUILD                                    # the check that could never run is gone
+
+
 # What a release does with the key and the appcast is shown by running it: test_release.py,
 # test_sparkle_key.py and test_check_appcast.py. Here: what the app itself asks for.
 

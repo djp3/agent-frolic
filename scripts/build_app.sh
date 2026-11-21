@@ -54,9 +54,19 @@ rm -f "$BIN"                                   # so an existing binary can only 
 # The tools a release signs with were chosen for the pinned version (sparkle_tools.sh),
 # so the framework would no longer be the one they belong to. This way a newer one stops
 # the build, and bumping Sparkle stays a change someone makes: the pin and its hashes.
-( cd macos && swift build -c release --product AgentFrolic --only-use-versions-from-resolved-file 2>&1 \
-      | grep -E "error|warning: unre|Build complete"
-  [ "${PIPESTATUS[0]}" -eq 0 ] )              # keep the compiler's verdict, not grep's
+# The compiler's verdict decides, and not a search of what it printed: piped into grep, a
+# build that printed nothing the search knows would have failed without a word, though it had
+# worked. So what it says goes to a log. If it fails, all of that is shown; if not, the lines
+# worth a glance, and a search that finds none is no failure.
+SWIFT_LOG=build/swift-build.log
+mkdir -p build
+if ! ( cd macos && swift build -c release --product AgentFrolic --only-use-versions-from-resolved-file ) \
+        > "$SWIFT_LOG" 2>&1; then
+    cat "$SWIFT_LOG" >&2
+    echo "swift build failed: what it said is above, and in $SWIFT_LOG" >&2
+    exit 1
+fi
+grep -E "warning: unre|Build complete" "$SWIFT_LOG" || true
 [ -x "$BIN" ] || { echo "swift build did not produce $BIN" >&2; exit 1; }
 # Sparkle comes as a binary framework that SwiftPM downloads next to the build.
 # -print -quit, not `| head -1`: under pipefail a find cut off by head fails the pipeline,
