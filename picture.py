@@ -208,7 +208,8 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
     handed out before, an agent keeps its own for as long as its session is reported:
     one that is new takes the lowest that is free, and a number is free again only when
     its session has gone. `numbers` is brought up to date here, for the next report; it
-    is the caller's to keep. Without it they are numbered by name, afresh each time.
+    is the caller's to keep. (With nobody reported this is not asked at all, and the
+    picture frees every number itself.) Without it they are numbered by name, afresh each time.
 
     Two sessions with one name cannot be told apart: they are numbered by what they are
     doing, so nothing moves on screen when they trade."""
@@ -317,6 +318,8 @@ class Picture:
             # picture where each pull request stands and whether a move is the viewer's, and
             # nothing it asks reads the agents it is about to set.
             self.agents = placed(self, self.reported, self.numbers)
+        elif self.numbers:
+            self.numbers.clear()                  # nobody is reported: every number is free again
 
     def read(self) -> list[RepoPulls]:
         """What was read, for the shown repositories that have been read, in order."""

@@ -231,6 +231,15 @@ def test_numbers_are_forgotten_with_the_agents_that_had_them():
     assert numbered(numbers, "b") == {"b": "01"}                                  # so b is numbered afresh
 
 
+def test_when_nobody_is_reported_every_number_is_free_again():
+    """The numbers were brought up to date only when there was someone to place: with
+    nobody, they stayed as they were, and b came back alone as agent 02."""
+    numbers = {}
+    assert numbered(numbers, "a", "b") == {"a": "01", "b": "02"}
+    assert numbered(numbers) == {} and numbers == {}                              # both have ended
+    assert numbered(numbers, "b") == {"b": "01"}
+
+
 def test_without_numbers_kept_agents_are_numbered_by_name_each_time():
     assert numbered(None, "b", "c") == {"b": "01", "c": "02"}
 
