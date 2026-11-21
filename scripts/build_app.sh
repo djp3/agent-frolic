@@ -74,10 +74,15 @@ step "assemble $APP ($VERSION)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AgentFrolic"
-# SwiftPM records an absolute rpath into .build for the Sparkle artifact; the app only
-# needs the @executable_path/../Frameworks one set in Package.swift.
+# The app finds Sparkle through the rpath Package.swift sets, @executable_path/../Frameworks.
+# An absolute one, into the folder it was built in, has no place in a copy that goes to other
+# Macs. The Swift toolchain in use records none, so this takes nothing out. It is a guard:
+# should a toolchain ever record one, it is taken out here, and the build says so.
 otool -l "$APP/Contents/MacOS/AgentFrolic" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}' | while read -r rp; do
-    case "$rp" in /*) install_name_tool -delete_rpath "$rp" "$APP/Contents/MacOS/AgentFrolic" 2>/dev/null || true ;; esac
+    case "$rp" in /*)
+        install_name_tool -delete_rpath "$rp" "$APP/Contents/MacOS/AgentFrolic"
+        echo "took out an rpath into the build folder: $rp" ;;
+    esac
 done
 cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
 cp -R dist/python/agent-frolic-core "$APP/Contents/Resources/agent-frolic-core"

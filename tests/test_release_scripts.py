@@ -119,3 +119,14 @@ def test_what_is_not_a_sparkle_key_is_refused_and_says_why(tmp_path, held, said)
 def test_a_key_file_that_is_not_there_is_refused(tmp_path):
     got = subprocess.run(["/bin/bash", str(PUBLIC_KEY), str(tmp_path / "nowhere.key")], capture_output=True, text=True)
     assert got.returncode == 1 and got.stdout == "" and "cannot read" in got.stderr
+
+
+def test_the_build_says_what_its_rpath_guard_is_and_when_it_acts():
+    """It claimed SwiftPM records an absolute rpath, and deleted none in silence: none is
+    recorded. It is a guard, says so, and says when it takes one out."""
+    assert "SwiftPM records an absolute rpath" not in BUILD
+    guard = BUILD[BUILD.index("# The app finds Sparkle through the rpath"):BUILD.index('cp -R "$SPARKLE_FW"')]
+    assert "It is a guard" in guard and 'echo "took out an rpath into the build folder: $rp"' in guard
+    assert "2>/dev/null || true" not in guard                           # one it cannot take out stops the build
+    package = (ROOT / "macos" / "Package.swift").read_text()
+    assert '"-rpath", "-Xlinker", "@executable_path/../Frameworks"' in package
