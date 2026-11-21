@@ -1,0 +1,22 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Probe</title>
+        <item>
+            <title>9.9.9</title>
+            <pubDate>Fri, 20 Nov 2026 16:32:47 -0800</pubDate>
+            <sparkle:version>9.9.9</sparkle:version>
+            <sparkle:shortVersionString>9.9.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[What is new
+
+- a thing
+]]></description>
+            <enclosure url="http://127.0.0.1:8765/probe-9.9.9.zip" length="2569" type="application/octet-stream" sparkle:edSignature="8Y+U0VB34feijBiJkxgQ99acW93URpA2SAahufUQXIVlVw5jvH7m2uHiQoUfCqFv1UUPSzqvCZijoBJH2xVjCA=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: S7hKXvq+0t2J9igwP91sbnptARzcXsuF1m3A1mBog7VWXlJRimW9DvwbappKFhSdomAtTVXbmyV71oa1meSQDA==
+length: 1097
+-->

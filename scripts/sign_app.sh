@@ -23,7 +23,12 @@ FW="$APP/Contents/Frameworks/Sparkle.framework"
 
 # 1. Every Mach-O in the Python tree: extension modules, dylibs, the interpreter library.
 find "$CORE/_internal" -type f \( -name "*.so" -o -name "*.dylib" -o ! -name "*.*" \) | sort | while read -r f; do
-    if file -b "$f" | grep -q "Mach-O"; then sign "$f"; fi
+    # What `file` says is taken whole and then looked at. Piped into a grep that leaves at the
+    # first match, `file` can be cut off before it has finished (of a universal binary it says
+    # several lines), and under pipefail that reads as "not a binary": the file would go
+    # unsigned, and nothing would say so.
+    kind=$(file -b "$f")
+    case "$kind" in *Mach-O*) sign "$f" ;; esac
 done
 # The nested Python.framework is a bundle of its own (sign after its binary, before the app).
 if [ -d "$CORE/_internal/Python.framework/Versions/Current" ]; then
@@ -32,11 +37,15 @@ fi
 # 2. The entry executable, with the entitlements PyInstaller needs under the hardened runtime.
 sign --entitlements "$PY_ENT" "$CORE/agent-frolic-core"
 
-# 3. Sparkle: its helpers first, keeping the entitlements they ship with, then the framework.
-for b in "$FW/Versions/B/XPCServices/Downloader.xpc" "$FW/Versions/B/XPCServices/Installer.xpc" \
-         "$FW/Versions/B/Autoupdate" "$FW/Versions/B/Updater.app"; do
-    sign --preserve-metadata=entitlements "$b"
-done
+# 3. Sparkle, as its own instructions for signing it by hand have it (the "Code Signing" part
+# of sparkle-project.org/documentation/sandboxing): each helper by itself, never --deep, and
+# then the framework. Only the downloader keeps the entitlements it ships with, should it
+# have any. The others are signed plainly: kept on Autoupdate, the one it ships with would
+# put Sparkle's own application identifier under this app's signature.
+sign "$FW/Versions/B/XPCServices/Installer.xpc"
+sign --preserve-metadata=entitlements "$FW/Versions/B/XPCServices/Downloader.xpc"
+sign "$FW/Versions/B/Autoupdate"
+sign "$FW/Versions/B/Updater.app"
 sign "$FW"
 
 # 4. The app itself.
