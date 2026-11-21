@@ -50,6 +50,27 @@ def test_the_key_is_looked_at_before_anything_is_built_whichever_way_it_is_given
     assert preflight.index("HELD_KEY=") > preflight.index("\nfi\n", dry)                       # a dry run looks too
 
 
+# ---- the appcast is signed as a whole, and the app requires it -------------------------
+
+def test_the_app_requires_a_signed_appcast_and_a_checked_update_and_has_both_or_neither():
+    """Sparkle refuses to start with the first and not the second: no update would ever come."""
+    plist = info_plist()
+    assert plist["SURequireSignedFeed"] is True and plist["SUVerifyUpdateBeforeExtraction"] is True
+    assert plist["SUPublicEDKey"] and plist["SUFeedURL"].startswith("https://")
+
+
+def test_a_release_stops_unless_the_appcast_itself_is_signed_and_the_signature_is_good():
+    """Signing the zip alone leaves the appcast, which names the zip and carries the notes,
+    to whoever can change what is served. And an unsigned one would strand every copy."""
+    made = RELEASE.index('"$TOOLS/bin/generate_appcast"')
+    published = RELEASE.index('step "publish $TAG"')
+    for check in ('grep -q "sparkle:edSignature" dist/appcast/appcast.xml',
+                  'grep -q "<!-- sparkle-signatures:" dist/appcast/appcast.xml',     # it follows </rss> on its line
+                  '"$TOOLS/bin/sign_update" --verify "${SPARKLE_KEY_ARGS[@]}" dist/appcast/appcast.xml'):
+        assert made < RELEASE.index(check) < published, check
+    assert "signed appcast carries them" not in RELEASE                 # it said so when only the zip was signed
+
+
 @needs_swift
 def test_an_exported_keys_public_half_is_the_one_ed25519_gives_its_seed(tmp_path):
     got = public_half(tmp_path, SEED)

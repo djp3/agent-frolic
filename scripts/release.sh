@@ -9,8 +9,12 @@
 #
 # Reads VERSION, builds dist/agent-frolic.app signed with a Developer ID from the packages in
 # requirements.lock (a new venv, hash-checked: scripts/locked_venv.sh), notarizes and
-# staples it, zips it, writes a Sparkle appcast signed with the agent-frolic EdDSA key,
-# tags v<VERSION>, and creates the GitHub release with the zip and appcast.xml attached.
+# staples it, zips it, writes a Sparkle appcast, tags v<VERSION>, and creates the GitHub
+# release with the zip and appcast.xml attached. Two things are signed with the
+# agent-frolic EdDSA key: the zip, and the appcast itself, which says which zip is the
+# update and what its notes are. The app asks for both (SURequireSignedFeed and
+# SUVerifyUpdateBeforeExtraction in macos/Info.plist), so whoever could change what GitHub
+# serves could still not offer a copy an update of their choosing, or notes of their own.
 # The notes in release-notes/<VERSION>.md go into the appcast, where Sparkle's update
 # window shows them, and onto the GitHub release.
 # Installed apps poll https://github.com/djp3/agent-frolic/releases/latest/download/appcast.xml,
@@ -142,16 +146,24 @@ rm -rf dist/appcast "$ZIP"
 mkdir -p dist/appcast
 ditto -c -k --keepParent "$APP" "$ZIP"
 cp "$ZIP" dist/appcast/
-# generate_appcast pairs notes with the archive whose name they share, and embeds them so the
-# signed appcast carries them; nothing else needs hosting.
+# generate_appcast pairs notes with the archive whose name they share, and embeds them, so
+# nothing else needs hosting. It signs the zip always, and the appcast as a whole, notes and
+# all, because the app in the zip says it requires that (SURequireSignedFeed): the feed's
+# signature is the comment at its end.
 cp "$NOTES" "dist/appcast/$(basename "$ZIP" .zip).md"
 "$TOOLS/bin/generate_appcast" "${SPARKLE_KEY_ARGS[@]}" \
     --download-url-prefix "https://github.com/$REPO/releases/download/$TAG/" \
     --link "https://github.com/$REPO/releases" \
     --embed-release-notes \
     -o dist/appcast/appcast.xml dist/appcast
-grep -q "sparkle:edSignature" dist/appcast/appcast.xml || die "appcast.xml carries no EdDSA signature"
+grep -q "sparkle:edSignature" dist/appcast/appcast.xml || die "appcast.xml carries no EdDSA signature for the zip"
 grep -q '<description sparkle:format="markdown">' dist/appcast/appcast.xml || die "appcast.xml carries no release notes"
+# The appcast's own signature: without it, every copy from this release on would refuse the
+# feed and stay where it is. Present, and good: Sparkle's tool checks it as the app will.
+grep -q "<!-- sparkle-signatures:" dist/appcast/appcast.xml \
+    || die "appcast.xml is not signed as a whole: is SURequireSignedFeed still set in macos/Info.plist?"
+"$TOOLS/bin/sign_update" --verify "${SPARKLE_KEY_ARGS[@]}" dist/appcast/appcast.xml >/dev/null \
+    || die "the signature on appcast.xml does not check out"
 { cat "$NOTES"; printf '%s\n' "$NOTES_SUFFIX"; } > dist/release-notes.md
 
 if [ "$DRY_RUN" = 1 ]; then
