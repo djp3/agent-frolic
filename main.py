@@ -421,6 +421,9 @@ class Frolic(App):
                                                   # things is this record, never the words above
         self.hook_read_at: dict[str, float] = {}  # repository (lower case) -> when a delivery last had it read
         self.hook_read_due: dict[str, float] = {}  # repository (lower case) -> when its waiting read may start
+        self.hook_aside: dict[str, tuple[int, float]] = {}   # repository (lower case) -> what was taken from
+                                                  # its ration for the read a delivery asked for, which has
+                                                  # not said yet what it cost: the points, and when
         self.ration_held: dict[str, tuple[float, float, float]] = {}   # repository (lower case) -> what its
                                                   # ration for the reads deliveries ask for held when last
                                                   # counted: the points, when that was, and the seconds a
@@ -1091,7 +1094,8 @@ class Frolic(App):
         """Drop all that is kept about a repository under this name (lower case): it has
         left the list, or goes by another name now. Its timers too, or they would outlive it."""
         for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
-                     self.read_began, self.hook_read_at, self.hook_read_due, self.ration_held, self.pull_wanted,
+                     self.read_began, self.hook_read_at, self.hook_read_due, self.hook_aside, self.ration_held,
+                     self.pull_wanted,
                      self.pull_reading, self.pull_read_at, self.pulls_began):
             held.pop(key, None)
 
@@ -1389,18 +1393,24 @@ class Frolic(App):
     def read_for_webhook(self, name: str) -> None:
         """Read a repository again because a delivery says it changed: now, or when its turn
         comes. That is WEBHOOK_SOONEST_S after the last such read at the soonest, and when
-        its ration is whole (`ration_covers_at`). Deliveries while it waits are read with it."""
+        its ration is whole (`ration_covers_at`). Deliveries while it waits are read with it.
+
+        A whole ration is taken for it: what the last read of the repository cost, since
+        this one has not said yet what it costs. When it has, the ration is put right
+        (`settle`)."""
         key = name.lower()
         repo = self.store.get(name)
         if repo is None or not repo.shown or key in self.hook_read_due:
             return
         whole = self.whole_ration(key)
         soonest = max(self.hook_read_at.get(key, 0.0) + self.WEBHOOK_SOONEST_S, self.ration_covers_at(key, whole))
-        if time.time() < soonest:
+        now = time.time()
+        if now < soonest:
             self.hook_read_due[key] = soonest               # tick starts it
             return
-        self.hook_read_at[key] = time.time()
+        self.hook_read_at[key] = now
         self.spend(key, whole)
+        self.hook_aside[key] = (whole, now)
         self.update_pulls([repo.name], "webhook")
 
     # ---- the ration: what the reads that deliveries ask for may cost -----------------------
@@ -1465,11 +1475,30 @@ class Frolic(App):
         return time.time() + short * pace if short > self.RATION_SLACK else 0.0
 
     def spend(self, key: str, points: int) -> None:
-        """Take what a read costs out of a repository's ration. Nothing, while nothing is
-        rationed."""
+        """Take what a read costs out of a repository's ration. Fewer than no points puts
+        them back: a read cost less than was taken for it. Nothing, while nothing is
+        rationed. A ration may be left owing, when a read cost more than it held: it holds
+        nothing until that is made up."""
         pace = self.seconds_a_point(key)
-        if points > 0 and pace > 0:
+        if points and pace > 0:
             self.ration_held[key] = (self.ration_now(key) - points, time.time(), pace)
+
+    def settle(self, key: str, began: float, cost: int | None = None) -> None:
+        """A read of the whole repository, begun at `began`, is over. If it is the one a
+        delivery asked for, its ration was charged before it began with what the read before
+        had cost. Now it says what it cost itself, and the ration takes or gets back the
+        difference. One that failed, or whose answer is not used, says nothing (`cost` is
+        None): what was taken stays taken.
+
+        A read begun before the delivery asked is not that read. The delivery came while it
+        was under way, and the one it asked for follows (`update_pulls`). The timer's reads
+        and u's are not rationed: they settle nothing."""
+        aside = self.hook_aside.get(key)
+        if aside is None or began < aside[1]:
+            return
+        del self.hook_aside[key]
+        if cost is not None:
+            self.spend(key, cost - aside[0])
 
     # ---- the pull requests a delivery names, each read on its own --------------------------
     def read_pulls_for_webhook(self, name: str, numbers: list[int]) -> None:
@@ -1572,7 +1601,7 @@ class Frolic(App):
         usable = repo is not None and held is not None and self.token_state != "none"
         if usable and not self.read_before(name, token_used):
             # What it cost beyond what was set aside for it when it began.
-            self.spend(key, sum(one.cost for one in read) - len(numbers) * self.ALONE_POINTS)
+            self.spend(key, max(0, sum(one.cost for one in read) - len(numbers) * self.ALONE_POINTS))
             if any(one.repo != repo.name for one in read):
                 self.update_pulls([repo.name], "renamed")
             elif self.pulls_began.get(key, 0.0) > began:
@@ -1762,6 +1791,7 @@ class Frolic(App):
         before = self.pulls.get(key)
         self.pulls[key] = got
         self.pulls_began[key] = self.read_began.get(name.lower(), 0.0)
+        self.settle(key, self.pulls_began[key], got.cost)
         self.pull_trouble.pop(key, None)
         if before is None or len(before.pulls) != len(got.pulls):
             self.say(f"{repo.name}: {got.total} open pull request{'' if got.total == 1 else 's'}")
@@ -1828,6 +1858,7 @@ class Frolic(App):
         A repository that left the list while it was read gets no timer at all."""
         key = name.lower()
         self.fetching.discard(key)
+        self.settle(key, self.read_began.get(key, 0.0))      # if it has not said what it cost, it will not
         again = key in self.stale                            # it changed while we were reading it
         self.stale.discard(key)
         name = now_named or name

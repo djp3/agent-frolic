@@ -800,6 +800,71 @@ async def test_what_a_pull_request_cost_beyond_a_point_is_taken_from_the_ration_
 
 
 @drive
+async def test_a_read_of_the_repository_that_a_delivery_asked_for_is_charged_what_it_cost_itself(isolated, monkeypatch):
+    """The ration is charged before the read, with what the read before it cost. When this
+    one costs more (a review grown long, checks that fail: more to ask), the rest is taken
+    once it says so, and when less, the difference comes back. The timer's reads and u's are
+    not rationed, whatever they cost."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 1}
+    Settings(poll_minutes=60).save()                                # no poll comes due meanwhile
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        FakePulls.costs[OURS] = (56, 5000)                          # this time there is more to ask
+        app.delivered(Delivery("push", "d-1", OURS, ""))
+        await settle(app, pilot)
+        assert app.pulls[OURS].cost == 56 and app.hook_aside == {}
+        assert app.ration_now(OURS) == pytest.approx(-6)            # 50 were taken before it, and 6 since
+        app.delivered(about(12))                                    # so one on its own waits for seven
+        now[0] += 7 * point - 0.1                                   # points to come, not for one
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []
+        now[0] += 0.2
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)]
+        now[0] += 60 * point
+        assert app.ration_now(OURS) == 56                           # whole again, and a whole one is 56 now
+        FakePulls.costs[OURS] = (53, 5000)                          # this time there is less
+        app.delivered(Delivery("push", "d-2", OURS, ""))
+        await settle(app, pilot)
+        assert app.ration_now(OURS) == pytest.approx(3)             # 56 taken, 3 back
+        FakePulls.costs[OURS] = (70, 5000)
+        await pilot.press("u")                                      # not one a delivery asked for
+        await settle(app, pilot)
+        assert app.pulls[OURS].cost == 70 and app.ration_now(OURS) == pytest.approx(3)
+
+
+@drive
+async def test_a_read_a_delivery_asked_for_that_fails_keeps_what_was_taken_for_it(isolated, monkeypatch):
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs = {OURS: (50, 5000)}
+    Settings(poll_minutes=60).save()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        a_clock(monkeypatch)
+        FakePulls.broken[OURS] = "GitHub could not be reached."
+        app.delivered(Delivery("push", "d-1", OURS, ""))
+        await settle(app, pilot)
+        assert OURS in app.pull_trouble and app.hook_aside == {}    # it will not say what it cost
+        assert app.ration_now(OURS) == pytest.approx(0)
+        del FakePulls.broken[OURS]
+        FakePulls.costs[OURS] = (70, 5000)
+        await pilot.press("u")                                      # nor does a later read say it for it
+        await settle(app, pilot)
+        assert app.pulls[OURS].cost == 70 and app.ration_now(OURS) == pytest.approx(0)
+
+
+@drive
 async def test_showing_another_repository_puts_nothing_back_into_a_ration_that_was_spent(isolated, monkeypatch):
     """Each repository's part of the allowance is smaller when one more is shown. What a
     ration holds is the same points after that as before: one just spent covers no read
