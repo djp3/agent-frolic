@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 
 import picture as pictures
 from canvas import plain, seg_len
-from picture import (CHECK_MARK, CHECK_SAID, Agent, Focus, Picture, cells, changes, counts, fingerprint, fit,
-                     focuses, humans, in_focus,
+from picture import (CHECK_MARK, CHECK_SAID, SPIN, Agent, Focus, Picture, at_work, cells, changes, counts,
+                     fingerprint, fit, focuses, humans, in_focus,
                      AGE_BAR, AGE_FIGURE, QUIET, age_reach, age_said, key_of, labels, line_agents, mark,
                      move_words, needs_effort, progress, review_cell, review_marks, review_said, reviewers,
                      silence, tree, waits_words)
-from pulls import RepoPulls, parse_pull, stack
+from pulls import HIDDEN, RepoPulls, parse_pull, reviews_at_once, stack
 from test_pulls import node, review, thread
+from theme import WARN
 
 NOW = datetime(2026, 11, 14, 16, 0, tzinfo=timezone.utc)
 TIP, OLD = "a1" * 20, "c3" * 20
@@ -754,3 +755,75 @@ def test_a_change_names_the_team_as_it_names_people():
                                       "Acme/app")}
     assert held == {45, 41}
     assert changes(team_picture(teams={}, held=True), team_picture(teams={}, held=True), "Acme/app") == []
+
+
+# ---- a program that reviews: at work from the moment it is asked --------------------------
+
+BOT = "copilot-pull-request-reviewer"
+BOT_ASKED = {"nodes": [{"requestedReviewer": {"__typename": "Bot", "login": BOT}}]}
+
+
+def test_copilot_sets_to_work_the_moment_it_is_asked_and_nobody_else_is_taken_to():
+    assert reviews_at_once(BOT) and reviews_at_once("Copilot-Pull-Request-Reviewer[bot]")     # as REST signs it
+    for other in ("bob", "copilot", "dependabot[bot]", "team/acme/platform", HIDDEN, ""):
+        assert not reviews_at_once(other)
+
+
+def test_copilot_asked_and_not_yet_answered_is_reviewing_and_its_mark_turns():
+    pic = picture(nodes=[node(40, "a", author={"login": "djp3"}, reviewRequests=BOT_ASKED)])
+    here = pull(pic, 40)
+    assert at_work(here, BOT) and not at_work(here, "bob")
+    for spin in (SPIN[0], SPIN[4]):                              # wherever the dots stand
+        assert reviewers(pic, here, spin) == [([(spin, WARN)], "copilot", "reviewing")]
+        assert plain(review_cell(pic, here, True, 40, spin)) == f"{spin} copilot  "
+        assert plain(review_cell(pic, here, False, 40, spin)) == spin
+        assert text(cells(pic, here, spin)) == [f"  you | waiting | {spin} copilot"]
+    assert reviewers(pic, here) == [([(SPIN[0], WARN)], "copilot", "reviewing")]     # at rest, when not said
+    assert mark(pic, here)[2] == "in review" and pic.stand(here).who == [BOT]        # as for anyone asked
+
+
+def test_copilot_asked_again_is_reviewing_again_after_what_it_said_before():
+    said = {"nodes": [review(BOT, "COMMENTED", "2026-11-11T10:00:00Z")]}
+    pic = picture(nodes=[node(40, "a", author={"login": "djp3"}, reviewRequests=BOT_ASKED, latestReviews=said)])
+    here = pull(pic, 40)
+    (marks, name, words), = reviewers(pic, here, SPIN[4])
+    assert marks == review_marks(here.reviews[0]) + [(SPIN[4], WARN)] and len(marks) == 2
+    assert (name, words) == ("copilot", "reviewing again")
+    assert plain(review_cell(pic, here, True, 40, SPIN[4])).endswith(f"{SPIN[4]} copilot  ")
+    assert mark(pic, here)[2] == "re-review asked"
+
+
+def test_a_person_asked_is_not_at_work_and_copilot_is_not_once_it_has_answered():
+    said = {"nodes": [review(BOT, "COMMENTED", "2026-11-11T10:00:00Z")]}
+    pic = picture(nodes=[node(40, "a", author={"login": "djp3"}, reviewRequests=ASK("bob")),
+                         node(41, "b", author={"login": "djp3"}, latestReviews=said)])
+    asked, answered = pull(pic, 40), pull(pic, 41)
+    assert reviewers(pic, asked, SPIN[4]) == [([("◔", WARN)], "bob", "asked, no answer yet")]
+    assert text(cells(pic, asked, SPIN[4])) == ["  you | waiting |   bob"]
+    assert not at_work(answered, BOT)
+    drawn = plain(review_cell(pic, answered, True, 40, SPIN[4])) + "".join(text(cells(pic, answered, SPIN[4])))
+    assert "copilot" in drawn and not set(drawn) & set(SPIN)
+
+
+def test_copilot_reviews_whoever_the_pull_request_waits_on():
+    """It was asked, so it is at it, though the next move is the checks' or the author's."""
+    running = {"nodes": [{"commit": {"statusCheckRollup": {"state": "PENDING"}}}]}
+    pic = picture(nodes=[node(40, "a", author={"login": "djp3"}, reviewRequests=BOT_ASKED, commits=running),
+                         node(41, "b", author={"login": "djp3"}, reviewRequests=BOT_ASKED, isDraft=True),
+                         node(42, "c", author={"login": "mira"}, reviewRequests={"nodes": (
+                             ASK("djp3")["nodes"] + BOT_ASKED["nodes"])})])
+    for number in (40, 41):
+        here = pull(pic, number)
+        assert plain(review_cell(pic, here, True, 40, SPIN[4])) == f"{SPIN[4]} copilot  "
+        assert "copilot" not in "".join(text(cells(pic, here, SPIN[4])))             # it does not wait on it
+    both = pull(pic, 42)                                                             # a person and Copilot
+    assert plain(review_cell(pic, both, True, 40, SPIN[4])) == f"◔ you  {SPIN[4]} copilot  "
+    assert text(cells(pic, both, SPIN[4])) == ["  mira | waiting | ● you", f" |  | {SPIN[4]} copilot"]
+
+
+def test_copilots_card_says_it_is_at_work_and_a_persons_does_not():
+    pic = picture(nodes=[node(40, "a", author={"login": "djp3"}, reviewRequests=BOT_ASKED),
+                         node(41, "b", author={"login": "djp3"}, reviewRequests=ASK("bob"))])
+    cards = {person.name: person for person in humans(pic)}
+    assert cards["copilot"].at_work and not cards["bob"].at_work and not cards["you"].at_work
+    assert [p.number for p in cards["copilot"].to_act] == [40]

@@ -55,11 +55,11 @@ from datetime import datetime, timezone
 from typing import Iterable, Mapping, Protocol
 
 from canvas import Segments, cell_len, cut, seg_len
-from pulls import PullRequest, RepoPulls, Review, Step, is_team, known_as, team_slug
+from pulls import PullRequest, RepoPulls, Review, Step, is_team, known_as, reviews_at_once, team_slug
 from standing import Standing, settle
 from theme import AXIS, CRIT, GOOD, INK, INK2, MUTED, SERIOUS, WAITING, WARN
 
-SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"            # the dots that turn where an agent is at work
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"            # the dots that turn where an agent is at work, or Copilot is reviewing
 Key = tuple[str, int]             # a pull request: (repository in lower case, number)
 
 REVIEW_MARK = {"approved": ("✓", GOOD), "changes": ("✗", SERIOUS), "commented": ("◆", GOOD),
@@ -552,13 +552,18 @@ def _visit(rows: list[Row], by_number: dict[int, PullRequest], pull: PullRequest
 
 # ---- column 1: owner | state | waits on ------------------------------------------------
 
-def human_cell(picture: Picture, login: str, yours_to_act: bool, pull: PullRequest | None = None) -> Segments:
+def human_cell(picture: Picture, login: str, yours_to_act: bool, pull: PullRequest | None = None,
+               spin: str = SPIN[0]) -> Segments:
     """A human, a team, or an organization standing as maintainer: a two-cell mark, then
     the name. The mark is the yellow dot when the move is the viewer's: this is the viewer,
-    or a team or an organization they act for. `pull` is the one whose move it is."""
+    or a team or an organization they act for. `pull` is the one whose move it is. On a
+    program that is reviewing it (`at_work`), the mark is the dots that turn, as on an
+    agent at work."""
     name = picture.shown(login, pull)
     if yours_to_act:
         return [("● ", WAITING), (name, f"bold {INK}")]
+    if pull is not None and at_work(pull, login):
+        return [(spin + " ", INK), (name, INK)]
     return [("  ", MUTED), (name, INK if picture.yours(login) else INK2)]
 
 
@@ -631,7 +636,7 @@ def _lines(picture: Picture, pull: PullRequest,
             right.append(([("  ", MUTED), ("checks running", MUTED)], []))
         for who in end.who:
             yours = mine and picture.acts_as(who, end.pull)
-            right.append((human_cell(picture, who, yours, end.pull), []))
+            right.append((human_cell(picture, who, yours, end.pull, spin), []))
             right += [(agent_cell(picture, a, spin), [a]) for a in reviewing(picture, end.pull, who)]
     # An agent here that none of the above drew: its human is not one of those it waits on (they
     # reviewed already, or came unasked), or this one waits on another. It still counts as an
@@ -721,16 +726,30 @@ def review_marks(review: Review) -> list[tuple[str, str]]:
     return _capped([step_mark(step) for step in steps])
 
 
-def reviewers(picture: Picture, pull: PullRequest) -> list[tuple[list[tuple[str, str]], str, str]]:
+def at_work(pull: PullRequest, who: str) -> bool:
+    """Whether `who` is reviewing `pull` at this moment, as far as GitHub's records tell: a
+    reviewer that is a program (Copilot), asked and not yet answered. Such a one sets to
+    work as soon as it is asked, and is asked no longer once it has answered. GitHub says
+    only that it was asked: not that it has begun, nor that it is stuck."""
+    return who in pull.asked and reviews_at_once(who)
+
+
+def reviewers(picture: Picture, pull: PullRequest,
+              spin: str = SPIN[0]) -> list[tuple[list[tuple[str, str]], str, str]]:
     """Everyone with a say in the review, as drawn: (marks, name, words). Those who have
     reviewed come first, oldest word first; then those asked and not yet answered, whose
-    trail (when they reviewed before) ends in ◔."""
+    trail (when they reviewed before) ends in ◔. A program that is reviewing it now
+    (`at_work`) has the dots that turn in ◔'s place, and is said to be reviewing."""
     out = [(review_marks(r), picture.shown(r.who), review_said(r)) for r in pull.reviews if r.who not in pull.asked]
     for who in pull.asked:
         before = next((r for r in pull.reviews if r.who == who), None)
-        marks = (review_marks(before) if before is not None else []) + [("◔", WARN)]
-        out.append((_capped(marks), picture.shown(who),
-                    "asked again, no answer yet" if before is not None else "asked, no answer yet"))
+        busy = at_work(pull, who)
+        marks = (review_marks(before) if before is not None else []) + [(spin if busy else "◔", WARN)]
+        if busy:
+            words = "reviewing again" if before is not None else "reviewing"
+        else:
+            words = "asked again, no answer yet" if before is not None else "asked, no answer yet"
+        out.append((_capped(marks), picture.shown(who), words))
     return out
 
 
@@ -758,12 +777,12 @@ def fit(names: list[str], letters: int) -> list[str] | None:
     return [name if cell_len(name) == n else cut(name, n) for name, n in zip(names, widths)]
 
 
-def review_cell(picture: Picture, pull: PullRequest, names: bool, room: int) -> Segments:
+def review_cell(picture: Picture, pull: PullRequest, names: bool, room: int, spin: str = SPIN[0]) -> Segments:
     """Each reviewer's trail of marks and their name, then who is still asked, then ◇ the
     comments to resolve. Names that do not fit are cut to fit; only when even that fails
-    are the marks left alone."""
+    are the marks left alone. `spin` is where the turning dots stand now (`reviewers`)."""
     tail: Segments = [("◇", MUTED), (str(pull.comments_open), INK)] if pull.comments_open else []
-    found = reviewers(picture, pull)
+    found = reviewers(picture, pull, spin)
     if not found and not tail:
         return [("·", AXIS)]
     if names:                                                    # the marks, a space, the name, two spaces
@@ -926,6 +945,7 @@ class Person:
     yours: bool = False           # the viewer, a team the viewer is on, or an organization they
                                   # have rights in
     dot: bool = False             # something here is the viewer's to act on
+    at_work: bool = False         # a program that is reviewing something now (`at_work`)
 
 
 def humans(picture: Picture) -> list[Person]:
@@ -950,6 +970,7 @@ def humans(picture: Picture) -> list[Person]:
             person = card(who)
             person.to_act.append(effort.pull)
             person.dot = person.dot or picture.acts_as(who, effort.pull)
+            person.at_work = person.at_work or at_work(effort.pull, who)
     for agents in picture.agents.values():
         for agent in agents:
             card(agent.operator).agents.append(agent)

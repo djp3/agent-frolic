@@ -190,9 +190,15 @@ The **review** column shows each reviewer's trail, oldest first, then their name
 | ◇ | left comments that are still to resolve |
 | ◆ | left comments, and none is left to resolve |
 | ◔ | has been asked, and has not answered |
+| ⠋ (turning) | is Copilot, asked and not answered yet: it is reviewing now |
 | – | had their review dismissed |
 
 `◇2` at the end of the column counts the comments still to resolve on the pull request.
+
+Copilot sets to work the moment it is asked, so while its review is awaited its mark turns, as
+an agent's does while it works: in this column, before its name where the pull request waits
+on it, on its card at the top, and in the drawer, which says "reviewing". GitHub says only
+that Copilot was asked, not how far along it is: the dots turn until its review arrives.
 
 The **ci** column is `✓` when the checks pass, `✗` when they fail, `…` while they run, `·`
 when there are none, and `$` when GitHub did not run them because the account could not pay
