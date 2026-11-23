@@ -510,10 +510,12 @@ def test_what_a_reading_cost_counts_the_questions_that_followed_the_first():
 
 # ---- one pull request, read on its own ----------------------------------------------------
 
-def one(pull, viewer="", permission=None, cost=1):
-    """GitHub's reply to PULL_QUERY: the pull request of that number, as it is now."""
+def one(pull, viewer="", permission=None, cost=1, open_=None):
+    """GitHub's reply to PULL_QUERY: the pull request of that number, as it is now, and how
+    many are open in its repository (`open_`; not said when None)."""
     return {"viewer": {"login": viewer} if viewer else None, "rateLimit": {"cost": cost, "limit": 5000},
-            "repository": {"nameWithOwner": "Owner/Repo", "viewerPermission": permission, "pullRequest": pull}}
+            "repository": {"nameWithOwner": "Owner/Repo", "viewerPermission": permission, "pullRequest": pull,
+                           "pullRequests": None if open_ is None else {"totalCount": open_}}}
 
 
 COPILOT_ASKED = {"nodes": [{"requestedReviewer": {"__typename": "Bot", "login": "copilot-pull-request-reviewer"}}]}
@@ -622,7 +624,27 @@ def test_a_long_lived_branch_carries_no_stack_when_one_is_put_in():
     assert places(with_pulls(before, {61: feature}, ["trunk", "develop"])) == [(60, 0, 0), (61, 0, 0)]
 
 
-def test_the_count_of_those_open_moves_with_the_ones_that_come_and_go():
+def test_how_many_are_open_is_read_with_the_one_pull_request():
+    assert "pullRequests(states: OPEN) { totalCount }" in PULL_QUERY
+    open_ = node(13, "feature", state="OPEN")
+    assert fetch_pull(FakeGitHub([one(open_, open_=412)]), "owner/repo", 13).total == 412
+    assert fetch_pull(FakeGitHub([one(None, open_=0)]), "owner/repo", 13).total == 0     # the last one closed
+    for unsaid in (None, "many", True, -1, 4.0):
+        assert fetch_pull(FakeGitHub([one(open_, open_=unsaid)]), "owner/repo", 13).total is None
+
+
+def test_the_count_of_those_open_is_what_github_said_with_the_ones_read():
+    """More are open than are held. One that is not held may have been open all along, and
+    one that closed may never have been held: who joined and who left does not say."""
+    before = held(node(1, "a", base="trunk"), total=400)
+    edited = {2: parse_pull("Owner/Repo", node(2, "b", base="trunk"))}  # open before, and not among those held
+    assert with_pulls(before, edited, total=400).total == 400
+    assert with_pulls(before, {9: None}, total=399).total == 399       # one never held has closed
+    assert with_pulls(before, {1: None}, total=399).total == 399 and with_pulls(before, edited, total=401).total == 401
+    assert with_pulls(before, edited, total=0).total == 2              # never fewer than are held
+
+
+def test_when_github_did_not_say_how_many_are_open_it_is_counted_from_the_ones_that_come_and_go():
     before = held(node(1, "a", base="trunk"), total=400)               # more are open than were read
     assert with_pulls(before, {2: parse_pull("Owner/Repo", node(2, "b", base="trunk"))}).total == 401
     assert with_pulls(before, {1: None}).total == 399

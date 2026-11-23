@@ -681,6 +681,28 @@ async def test_one_that_closed_leaves_the_board_and_one_just_opened_joins_its_st
 
 
 @drive
+async def test_with_more_open_than_are_held_the_count_is_what_github_says_with_each_one_read(isolated):
+    """One that is not held may have been open all along; one that closed may never have been
+    held. The count does not move with who joins and who leaves what is held."""
+    three_repos()
+    FakePulls.more[OURS] = 398                                      # 400 open: more than the app reads
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.pulls[OURS].total == 400 and list(held(app)) == [12, 13]
+        FakePulls.open_[OURS].append(node(7, "old-one", title="Open all along"))
+        FakePulls.more[OURS] = 397                                  # it was one of the 398: 400 still
+        app.delivered(about(7))
+        await settle(app, pilot)
+        assert sorted(held(app)) == [7, 12, 13] and app.pulls[OURS].total == 400     # held now; no more are open
+        FakePulls.more[OURS] = 396                                  # another, never held, was merged
+        app.delivered(about(999, n=2, action="closed"))
+        await settle(app, pilot)
+        assert sorted(held(app)) == [7, 12, 13] and app.pulls[OURS].total == 399
+        assert FakePulls.asked_alone == [(OURS, 7), (OURS, 999)]
+
+
+@drive
 async def test_a_burst_about_one_pull_request_is_read_once_now_and_once_when_it_is_over(isolated, monkeypatch):
     three_repos()
     app = main.Frolic()

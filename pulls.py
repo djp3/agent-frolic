@@ -97,7 +97,8 @@ query($owner: String!, $name: String!, $page: Int!, $cursor: String) {
 }
 """ % _PULL
 
-# One pull request on its own: the same record of it, and whether it is still open.
+# One pull request on its own: the same record of it, and whether it is still open. And how
+# many are open in its repository now: that cannot be worked out from this one (`with_pulls`).
 PULL_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
@@ -105,6 +106,7 @@ query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     nameWithOwner
     viewerPermission
+    pullRequests(states: OPEN) { totalCount }
     pullRequest(number: $number) {
       state
       %s
@@ -279,6 +281,7 @@ class PullRead:
     number: int
     pull: PullRequest | None      # as it is now; None when it is not open any more
     cost: int = 0                 # what reading it took of GitHub's hourly allowance, in its points
+    total: int | None = None      # how many are open in its repository now; None when GitHub did not say
 
 
 def when(text: str | None) -> datetime | None:
@@ -626,14 +629,16 @@ def fetch_pull(github: GitHub, repo: str, number: int) -> PullRead:
     """One pull request of a repository, read as `fetch_pulls` reads each of them: its review
     threads past the first hundred, why its checks fail, and the viewer's rights when it is
     their own. One that is closed or merged comes back as None. Its place in a stack is not
-    known here: `with_pulls` works that out among the others. Raises GitHubError, also when
-    the repository has no pull request of that number."""
+    known here: `with_pulls` works that out among the others. With it comes how many are
+    open in the repository now. Raises GitHubError, also when the repository has no pull
+    request of that number."""
     owner, name = repo.split("/", 1)
     data = github.graphql(PULL_QUERY, {"owner": owner, "name": name, "number": number})
     cost = _cost(data)
     repository = data.get("repository") or {}
     spelled = repository.get("nameWithOwner") or repo
     node = repository.get("pullRequest") or {}
+    total = (repository.get("pullRequests") or {}).get("totalCount")
     pull = None
     if node.get("state") == "OPEN":
         cost += read_every_thread(github, owner, name, node)
@@ -642,26 +647,33 @@ def fetch_pull(github: GitHub, repo: str, number: int) -> PullRead:
         _own_rights([pull], (data.get("viewer") or {}).get("login") or "", repository.get("viewerPermission") or "")
     log.info("fetched pull request #%d of %s: %s (it cost %d point%s)", number, spelled,
              "open" if pull is not None else "not open any more", cost, "" if cost == 1 else "s")
-    return PullRead(spelled, number, pull, cost)
+    return PullRead(spelled, number, pull, cost, total if type(total) is int and total >= 0 else None)
 
 
 def with_pulls(got: RepoPulls, read: dict[int, PullRequest | None],
-               long_lived: list[str] | None = None) -> RepoPulls:
+               long_lived: list[str] | None = None, total: int | None = None) -> RepoPulls:
     """A repository's reading with some of its pull requests as they were just read on their
     own (number -> what was read): each takes the place of what was held of it, one not held
     before joins the others, and one not open any more (None) leaves. The stacks are worked
     out again among them all, by the rule of `stack`.
+
+    `total` is how many are open in the repository now, as GitHub said when they were read
+    (`PullRead.total`). It is not to be worked out from who joined and who left, when more
+    are open than are held (past MOST): one not held may have been open all along, and one
+    that closed may never have been held. Only when GitHub did not say is it counted so.
 
     All else stays as the reading had it: when the whole repository was read, what that
     cost, the tip of its default branch. `got` itself is left as it was, for the two to be
     compared: `stack` writes each pull request's place on it, so the ones kept are copies."""
     held = {pull.number for pull in got.pulls}
     new = [pull for pull in read.values() if pull is not None]
-    joined = sum(1 for pull in new if pull.number not in held)
-    left = sum(1 for number, pull in read.items() if pull is None and number in held)
+    if total is None:
+        joined = sum(1 for pull in new if pull.number not in held)
+        left = sum(1 for number, pull in read.items() if pull is None and number in held)
+        total = got.total + joined - left
     pulls = stack([replace(pull) for pull in got.pulls if pull.number not in read] + new,
                   got.default_branch, long_lived)
-    return replace(got, pulls=pulls, total=max(got.total + joined - left, len(pulls)))
+    return replace(got, pulls=pulls, total=max(total, len(pulls)))
 
 
 def span(seconds: float, fine: bool = False) -> str:

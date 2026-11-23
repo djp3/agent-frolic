@@ -147,6 +147,8 @@ class FakePulls:
     asked_alone: list = []        # (repository, number) of each pull request asked for on its own
     alone_costs: dict = {}        # repository (lower case) -> what reading one of its pull requests alone costs
     alone_broken: dict = {}       # repository (lower case) -> why none of them can be read alone
+    more: dict = {}               # repository (lower case) -> how many are open on GitHub beyond the ones
+                                  # in `open_`: more than the app reads (pulls.MOST)
 
     @staticmethod
     def fetch(github, name, now=None, long_lived=None):
@@ -157,7 +159,8 @@ class FakePulls:
         theirs = FakePulls.spelled.get(name.lower(), name)
         pulls = stack([parse_pull(theirs, n) for n in FakePulls.open_.get(name.lower(), [])], "main", long_lived)
         cost, limit = FakePulls.costs.get(name.lower(), (0, 0))
-        return RepoPulls(theirs, "main", pulls, len(pulls), datetime.now(timezone.utc),
+        return RepoPulls(theirs, "main", pulls, len(pulls) + FakePulls.more.get(name.lower(), 0),
+                         datetime.now(timezone.utc),
                          FakePulls.tips.get(name.lower(), ""), access=FakePulls.access.get(github.token, ""),
                          cost=cost, limit=limit, org=name.lower() in FakePulls.orgs)
 
@@ -168,11 +171,12 @@ class FakePulls:
         FakePulls.asked_alone.append((name, number))
         theirs = FakePulls.spelled.get(name.lower(), name)
         found = [n for n in FakePulls.open_.get(name.lower(), []) if n["number"] == number]
+        total = len(FakePulls.open_.get(name.lower(), [])) + FakePulls.more.get(name.lower(), 0)
         FakeGitHub._hold(("pull", github.token))
         if name.lower() in FakePulls.alone_broken:
             raise GitHubError(200, "x", FakePulls.alone_broken[name.lower()])
         return PullRead(theirs, number, parse_pull(theirs, found[0]) if found else None,
-                        FakePulls.alone_costs.get(name.lower(), 0))
+                        FakePulls.alone_costs.get(name.lower(), 0), total)
 
 
 class FakeBrowser:

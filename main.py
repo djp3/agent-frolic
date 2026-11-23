@@ -1616,7 +1616,10 @@ class Frolic(App):
             elif self.pulls_began.get(key, 0.0) > began:
                 log.info("%s: a reading of the whole repository is newer than these of its pull requests", name)
             elif read:
-                got = with_pulls(held, {one.number: one.pull for one in read}, repo.long_lived)
+                # How many are open now came with each: the last one read knows best.
+                said = [one.total for one in read if one.total is not None]
+                got = with_pulls(held, {one.number: one.pull for one in read}, repo.long_lived,
+                                 said[-1] if said else None)
                 self.pulls[key] = got
                 if len(held.pulls) != len(got.pulls):
                     self.say(f"{repo.name}: {got.total} open pull request{'' if got.total == 1 else 's'}")
