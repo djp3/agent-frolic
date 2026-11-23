@@ -9,6 +9,12 @@ latest word, how many review comments are still to resolve, whether the checks p
 whether it can merge, and which branch it is based on. Nothing here is guessed or inferred
 from anything but GitHub's records.
 
+GitHub prices a query by what it could bring, not by what it does: fifty pull requests with
+a hundred review threads each come to 53 of the hour's 5000 points, in a repository with one
+pull request as in one with fifty. So when it is known which pull request changed (a webhook
+delivery names it), that one is read on its own (`fetch_pull`, a point or so) and put in
+place of what was held of it (`with_pulls`).
+
 Stacks come from the branches: a pull request whose base branch is the head branch of
 another open pull request in the same repository sits on top of that one.
 
@@ -55,6 +61,22 @@ MOST_THREADS = 1000               # review threads read per pull request; any be
 # What is read of each review thread: whether it is resolved, and who began it.
 _THREAD = "isResolved comments(first: 1) { nodes { author { login } pullRequestReview { id author { login } } } }"
 
+# What is read of each pull request.
+_PULL = """number title url isDraft createdAt updatedAt
+        author { login }
+        authorAssociation
+        baseRefName baseRefOid headRefName headRefOid isCrossRepository
+        headRepositoryOwner { login }
+        mergeable reviewDecision
+        reviewRequests(first: 30) { nodes { requestedReviewer {
+          __typename ... on User { login } ... on Bot { login } ... on Mannequin { login }
+          ... on Team { slug } } } }
+        latestOpinionatedReviews(first: 30) { nodes { author { login } state submittedAt } }
+        latestReviews(first: 30) { nodes { author { login } state submittedAt } }
+        reviews(last: 100) { nodes { id author { login } state submittedAt } }
+        reviewThreads(first: 100) { totalCount pageInfo { hasNextPage endCursor } nodes { %s } }
+        commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }""" % _THREAD
+
 QUERY = """
 query($owner: String!, $name: String!, $page: Int!, $cursor: String) {
   viewer { login }
@@ -68,29 +90,33 @@ query($owner: String!, $name: String!, $page: Int!, $cursor: String) {
       totalCount
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title url isDraft createdAt updatedAt
-        author { login }
-        authorAssociation
-        baseRefName baseRefOid headRefName headRefOid isCrossRepository
-        headRepositoryOwner { login }
-        mergeable reviewDecision
-        reviewRequests(first: 30) { nodes { requestedReviewer {
-          __typename ... on User { login } ... on Bot { login } ... on Mannequin { login }
-          ... on Team { slug } } } }
-        latestOpinionatedReviews(first: 30) { nodes { author { login } state submittedAt } }
-        latestReviews(first: 30) { nodes { author { login } state submittedAt } }
-        reviews(last: 100) { nodes { id author { login } state submittedAt } }
-        reviewThreads(first: 100) { totalCount pageInfo { hasNextPage endCursor } nodes { %s } }
-        commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
+        %s
       }
     }
   }
 }
-""" % _THREAD
+""" % _PULL
+
+# One pull request on its own: the same record of it, and whether it is still open.
+PULL_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
+  rateLimit { cost limit }
+  repository(owner: $owner, name: $name) {
+    nameWithOwner
+    viewerPermission
+    pullRequest(number: $number) {
+      state
+      %s
+    }
+  }
+}
+""" % _PULL
 
 # The rest of one pull request's review threads, when it has more than the first query sends.
 THREADS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  rateLimit { cost }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { %s } }
@@ -103,6 +129,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
 # LOOK_AT pull requests per query.
 WHY_QUERY = """
 query($owner: String!, $name: String!) {
+  rateLimit { cost }
   repository(owner: $owner, name: $name) {
 %s
   }
@@ -243,6 +270,15 @@ class RepoPulls:
         """What the viewer may do here: (ask someone to review, merge). Neither when GitHub
         did not say."""
         return _RIGHTS.get(self.access.upper().replace(" ", "_"), (False, False))
+
+
+@dataclass
+class PullRead:
+    """One pull request, read on its own."""
+    repo: str                     # its repository, as GitHub spells it
+    number: int
+    pull: PullRequest | None      # as it is now; None when it is not open any more
+    cost: int = 0                 # what reading it took of GitHub's hourly allowance, in its points
 
 
 def when(text: str | None) -> datetime | None:
@@ -478,12 +514,20 @@ def judge(contexts: list) -> tuple[str, int, int, str]:
     return "fail", failing, unpaid, note
 
 
-def look_into_failures(github: GitHub, repo: str, pulls: list[PullRequest]) -> None:
+def _cost(data: dict) -> int:
+    """What GitHub says a query took of the hourly allowance, in its points; 0 when it does
+    not say."""
+    cost = (data.get("rateLimit") or {}).get("cost")
+    return cost if isinstance(cost, int) and not isinstance(cost, bool) else 0
+
+
+def look_into_failures(github: GitHub, repo: str, pulls: list[PullRequest]) -> int:
     """For the pull requests whose checks fail, ask GitHub why, and reclassify the ones
     that fail only because the account could not pay. Trouble here is logged and changes
-    nothing: the checks stay "fail"."""
+    nothing: the checks stay "fail". Returns what asking cost, in GitHub's points."""
     owner, name = repo.split("/", 1)
     failing = [pull for pull in pulls if pull.checks == "fail"]
+    cost = 0
     for start in range(0, len(failing), LOOK_AT):
         batch = failing[start:start + LOOK_AT]
         query = WHY_QUERY % "\n".join(WHY_PULL % (pull.number, pull.number) for pull in batch)
@@ -491,7 +535,8 @@ def look_into_failures(github: GitHub, repo: str, pulls: list[PullRequest]) -> N
             data = github.graphql(query, {"owner": owner, "name": name})
         except GitHubError as e:
             log.warning("could not look into the failing checks of %s: %s", repo, e)
-            return
+            return cost
+        cost += _cost(data)
         repository = data.get("repository") or {}
         for pull in batch:
             commits = ((repository.get(f"p{pull.number}") or {}).get("commits") or {}).get("nodes") or [{}]
@@ -500,18 +545,21 @@ def look_into_failures(github: GitHub, repo: str, pulls: list[PullRequest]) -> N
             pull.checks = checks
             log.info("%s#%d: %d failing checks, %d of them not started for lack of payment%s", repo, pull.number,
                      bad, unpaid, f"; another says: {note[:100]!r}" if note and checks == "fail" else "")
+    return cost
 
 
-def read_every_thread(github: GitHub, owner: str, name: str, node: dict) -> None:
+def read_every_thread(github: GitHub, owner: str, name: str, node: dict) -> int:
     """GitHub sends a pull request's first 100 review threads with it. Read the rest into
-    `node`, 100 at a time, up to MOST_THREADS; parse_pull counts any beyond as open. Raises
-    GitHubError."""
+    `node`, 100 at a time, up to MOST_THREADS; parse_pull counts any beyond as open. Returns
+    what reading them cost, in GitHub's points. Raises GitHubError."""
     threads = node.get("reviewThreads") or {}
     seen = list(threads.get("nodes") or [])
     info = threads.get("pageInfo") or {}
+    cost = 0
     while info.get("hasNextPage") and info.get("endCursor") and len(seen) < MOST_THREADS:
         data = github.graphql(THREADS_QUERY, {"owner": owner, "name": name, "number": int(node["number"]),
                                               "cursor": info["endCursor"]})
+        cost += _cost(data)
         more = (((data.get("repository") or {}).get("pullRequest") or {}).get("reviewThreads")) or {}
         got = more.get("nodes") or []
         if not got:
@@ -520,6 +568,16 @@ def read_every_thread(github: GitHub, owner: str, name: str, node: dict) -> None
         info = more.get("pageInfo") or {}
     if len(seen) > len(threads.get("nodes") or []):
         node["reviewThreads"] = {**threads, "nodes": seen}
+    return cost
+
+
+def _own_rights(pulls: list[PullRequest], viewer: str, permission: str) -> None:
+    """For the viewer's own pull requests GitHub says exactly what the viewer may do in the
+    repository: that takes the place of what their tie to it suggested."""
+    if viewer and permission in _RIGHTS:
+        for pull in pulls:
+            if pull.author.lower() == viewer.lower():
+                pull.can_ask, pull.can_merge = _RIGHTS[permission]
 
 
 def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
@@ -536,7 +594,7 @@ def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
         data = github.graphql(QUERY, {"owner": owner, "name": name, "page": PAGE, "cursor": cursor})
         viewer = (data.get("viewer") or {}).get("login") or viewer
         spent = data.get("rateLimit") or {}
-        cost += spent.get("cost") if isinstance(spent.get("cost"), int) else 0
+        cost += _cost(data)
         limit = spent.get("limit") if isinstance(spent.get("limit"), int) else limit
         repository = data.get("repository") or {}
         spelled = repository.get("nameWithOwner") or spelled
@@ -549,22 +607,61 @@ def fetch_pulls(github: GitHub, repo: str, now: datetime | None = None,
         total = int(page.get("totalCount") or 0)
         nodes = [node for node in page.get("nodes") or [] if node]
         for node in nodes:
-            read_every_thread(github, owner, name, node)
+            cost += read_every_thread(github, owner, name, node)
         pulls += [parse_pull(spelled, node) for node in nodes]
         info = page.get("pageInfo") or {}
         cursor = info.get("endCursor")
         if not info.get("hasNextPage") or not cursor or len(pulls) >= MOST:
             break
-    look_into_failures(github, spelled, pulls)
-    if viewer and permission in _RIGHTS:                         # for the viewer's own, GitHub says exactly
-        for pull in pulls:
-            if pull.author.lower() == viewer.lower():
-                pull.can_ask, pull.can_merge = _RIGHTS[permission]
+    cost += look_into_failures(github, spelled, pulls)
+    _own_rights(pulls, viewer, permission)
     access = permission.lower().replace("_", " ")
     log.info("fetched %d of %d open pull requests of %s (your access: %s; it cost %d of %d points)",
              len(pulls), total, spelled, access or "not said", cost, limit)
     return RepoPulls(spelled, default_branch, stack(pulls, default_branch, long_lived), max(total, len(pulls)),
                      now or datetime.now(timezone.utc), tip, access, cost, limit, org)
+
+
+def fetch_pull(github: GitHub, repo: str, number: int) -> PullRead:
+    """One pull request of a repository, read as `fetch_pulls` reads each of them: its review
+    threads past the first hundred, why its checks fail, and the viewer's rights when it is
+    their own. One that is closed or merged comes back as None. Its place in a stack is not
+    known here: `with_pulls` works that out among the others. Raises GitHubError, also when
+    the repository has no pull request of that number."""
+    owner, name = repo.split("/", 1)
+    data = github.graphql(PULL_QUERY, {"owner": owner, "name": name, "number": number})
+    cost = _cost(data)
+    repository = data.get("repository") or {}
+    spelled = repository.get("nameWithOwner") or repo
+    node = repository.get("pullRequest") or {}
+    pull = None
+    if node.get("state") == "OPEN":
+        cost += read_every_thread(github, owner, name, node)
+        pull = parse_pull(spelled, node)
+        cost += look_into_failures(github, spelled, [pull])
+        _own_rights([pull], (data.get("viewer") or {}).get("login") or "", repository.get("viewerPermission") or "")
+    log.info("fetched pull request #%d of %s: %s (it cost %d point%s)", number, spelled,
+             "open" if pull is not None else "not open any more", cost, "" if cost == 1 else "s")
+    return PullRead(spelled, number, pull, cost)
+
+
+def with_pulls(got: RepoPulls, read: dict[int, PullRequest | None],
+               long_lived: list[str] | None = None) -> RepoPulls:
+    """A repository's reading with some of its pull requests as they were just read on their
+    own (number -> what was read): each takes the place of what was held of it, one not held
+    before joins the others, and one not open any more (None) leaves. The stacks are worked
+    out again among them all, by the rule of `stack`.
+
+    All else stays as the reading had it: when the whole repository was read, what that
+    cost, the tip of its default branch. `got` itself is left as it was, for the two to be
+    compared: `stack` writes each pull request's place on it, so the ones kept are copies."""
+    held = {pull.number for pull in got.pulls}
+    new = [pull for pull in read.values() if pull is not None]
+    joined = sum(1 for pull in new if pull.number not in held)
+    left = sum(1 for number, pull in read.items() if pull is None and number in held)
+    pulls = stack([replace(pull) for pull in got.pulls if pull.number not in read] + new,
+                  got.default_branch, long_lived)
+    return replace(got, pulls=pulls, total=max(got.total + joined - left, len(pulls)))
 
 
 def span(seconds: float, fine: bool = False) -> str:

@@ -48,10 +48,17 @@ GitHub.
 ### Changes arrive as they happen
 
 Turn on webhooks and GitHub tells the app the moment something changes; the row washes pale
-for a moment and the ticker says what happened. Each repository also has a timer of its own:
-one GitHub sends no webhooks for is read again every five minutes, and one it does, every
-half hour, to catch a delivery that never came. Any read starts that repository's timer
-again, and `u` reads them all now.
+for a moment and the ticker says what happened. When GitHub says which pull request changed
+(a review asked for or given, a comment, a check, new commits), that one is read on its own,
+within seconds: it costs a small part of what reading the repository does, so the board keeps
+up with a review as it goes. What names no pull request (a push to a branch, a branch made or
+deleted) has the whole repository read, in its turn. All the reads GitHub's messages ask for
+are held to half of what GitHub allows the token in an hour, shared among the repositories
+shown, so a busy run of checks cannot use it up.
+
+Each repository also has a timer of its own: one GitHub sends no webhooks for is read again
+every five minutes, and one it does, every half hour, to catch a delivery that never came.
+Any read of the whole repository starts its timer again, and `u` reads them all now.
 
 The half hour is for a repository whose webhook can be relied on. It is back to five minutes
 while its last read failed, while GitHub is still working out whether a pull request there can

@@ -8,8 +8,9 @@ import pytest
 
 from githubapi import GitHubError
 from picture import Picture, mark
-from pulls import (PAGE, QUERY, THREADS_QUERY, RepoPulls, fetch_pulls, is_team, judge, known_as, parse_pull,
-                   span, stack, when)
+import pulls
+from pulls import (PAGE, PULL_QUERY, QUERY, THREADS_QUERY, WHY_QUERY, RepoPulls, fetch_pull, fetch_pulls, is_team,
+                   judge, known_as, parse_pull, span, stack, when, with_pulls)
 
 
 def node(number, head, base="main", **over):
@@ -494,6 +495,138 @@ def test_when_github_will_not_say_why_the_checks_stay_failing():
 def test_a_repository_with_nothing_open():
     got = fetch_pulls(FakeGitHub([page([], 0)]), "owner/repo")
     assert got.pulls == [] and got.total == 0
+
+
+def test_what_a_reading_cost_counts_the_questions_that_followed_the_first():
+    """The rest of a long review's threads, and why the checks fail, are questions of their
+    own, and GitHub charges for each."""
+    assert "rateLimit { cost }" in THREADS_QUERY and "rateLimit { cost }" in WHY_QUERY
+    long = dict(long_review(150, [thread(True, under="bob") for _ in range(100)]), commits=FAILED)
+    first = dict(page([long], 1), rateLimit={"cost": 53, "limit": 5000})
+    fake = FakeGitHub([first, dict(threads_page([thread(True, under="bob")] * 50), rateLimit={"cost": 1}),
+                       dict(why(p7=[run("FAILURE", BROKE)]), rateLimit={"cost": 2})])
+    assert fetch_pulls(fake, "owner/repo").cost == 56
+
+
+# ---- one pull request, read on its own ----------------------------------------------------
+
+def one(pull, viewer="", permission=None, cost=1):
+    """GitHub's reply to PULL_QUERY: the pull request of that number, as it is now."""
+    return {"viewer": {"login": viewer} if viewer else None, "rateLimit": {"cost": cost, "limit": 5000},
+            "repository": {"nameWithOwner": "Owner/Repo", "viewerPermission": permission, "pullRequest": pull}}
+
+
+COPILOT_ASKED = {"nodes": [{"requestedReviewer": {"__typename": "Bot", "login": "copilot-pull-request-reviewer"}}]}
+
+
+def test_one_pull_request_is_read_on_its_own_as_the_whole_repository_reads_it():
+    assert pulls._PULL in QUERY and pulls._PULL in PULL_QUERY          # the same is asked of it either way
+    asked = node(13, "feature", base="trunk", state="OPEN", reviewRequests=COPILOT_ASKED)
+    fake = FakeGitHub([one(asked)])
+    got = fetch_pull(fake, "owner/repo", 13)
+    assert fake.asked == [(PULL_QUERY, {"owner": "owner", "name": "repo", "number": 13})]
+    assert (got.repo, got.number, got.cost) == ("Owner/Repo", 13, 1)   # GitHub's spelling, and its price
+    assert got.pull == parse_pull("Owner/Repo", asked)
+    assert got.pull.asked == ["copilot-pull-request-reviewer"]
+
+
+@pytest.mark.parametrize("now", [node(13, "feature", state="CLOSED"), node(13, "feature", state="MERGED"),
+                                 node(13, "feature"), None])
+def test_a_pull_request_that_is_not_open_any_more_is_read_as_none(now):
+    """Closed, merged, or in a state GitHub did not say: only one known to be open is shown."""
+    fake = FakeGitHub([one(now)])
+    got = fetch_pull(fake, "owner/repo", 13)
+    assert got.pull is None and (got.repo, got.number, got.cost) == ("Owner/Repo", 13, 1)
+    assert len(fake.asked) == 1                                         # and nothing more is asked about it
+
+
+def test_no_pull_request_of_that_number_is_a_failure_to_read_it():
+    class NoSuch(FakeGitHub):
+        def graphql(self, query, variables):
+            raise GitHubError(200, "Could not resolve to a PullRequest with the number of 99.", "No such thing.")
+
+    with pytest.raises(GitHubError):
+        fetch_pull(NoSuch([]), "owner/repo", 99)
+
+
+def test_one_read_on_its_own_has_its_long_review_and_the_reason_its_checks_fail():
+    long = dict(long_review(150, [thread(True, under="bob") for _ in range(100)]), state="OPEN", commits=FAILED)
+    fake = FakeGitHub([one(long), dict(threads_page([thread(False, under="bob")] * 50), rateLimit={"cost": 1}),
+                       dict(why(p7=[run("FAILURE", NOT_PAID)]), rateLimit={"cost": 2})])
+    got = fetch_pull(fake, "owner/repo", 7)
+    assert (got.pull.comments_open, got.pull.comments_total, got.pull.checks) == (50, 150, "unpaid")
+    assert got.cost == 4                                                # every question it took
+    assert fake.asked[1] == (THREADS_QUERY, {"owner": "owner", "name": "repo", "number": 7, "cursor": "T100"})
+    assert "p7: pullRequest(number: 7)" in fake.asked[2][0] and fake.asked[2][1] == {"owner": "Owner", "name": "Repo"}
+
+
+def test_the_viewers_own_pull_request_read_on_its_own_has_the_rights_github_says():
+    mine = node(13, "feature", state="OPEN", author={"login": "djp3"}, authorAssociation="CONTRIBUTOR")
+    own = fetch_pull(FakeGitHub([one(mine, viewer="DJP3", permission="TRIAGE")]), "owner/repo", 13).pull
+    assert (own.can_ask, own.can_merge) == (True, False)               # GitHub says exactly
+    other = fetch_pull(FakeGitHub([one(mine, viewer="alice", permission="ADMIN")]), "owner/repo", 13).pull
+    assert (other.can_ask, other.can_merge) == (False, False)          # another's: by their tie to it
+    unsaid = fetch_pull(FakeGitHub([one(mine, viewer="djp3")]), "owner/repo", 13).pull
+    assert (unsaid.can_ask, unsaid.can_merge) == (False, False)
+
+
+def held(*nodes, total=0):
+    """What is held of Owner/Repo: these pull requests, read with the whole repository."""
+    found = stack([parse_pull("Owner/Repo", n) for n in nodes], "trunk")
+    return RepoPulls("Owner/Repo", "trunk", found, total or len(found), datetime(2026, 11, 14, tzinfo=timezone.utc),
+                     "f" * 40, "admin", 53, 5000, True)
+
+
+def places(got):
+    return [(p.number, p.parent, p.depth) for p in got.pulls]
+
+
+def test_a_pull_request_read_on_its_own_takes_the_place_of_what_was_held_of_it():
+    before = held(node(1, "a", base="trunk"), node(2, "b", base="a"), node(3, "c", base="trunk"))
+    got = with_pulls(before, {2: parse_pull("Owner/Repo", node(2, "b", base="a", title="Now with tests"))})
+    assert [p.title for p in got.pulls] == ["Change 1", "Now with tests", "Change 3"]
+    assert places(got) == [(1, 0, 0), (2, 1, 1), (3, 0, 0)]
+    # All else is the whole repository's reading still: when it was read, what that cost.
+    assert (got.total, got.at, got.cost, got.limit, got.tip, got.access, got.org, got.default_branch) == (
+        3, before.at, 53, 5000, "f" * 40, "admin", True, "trunk")
+    assert [p.title for p in before.pulls] == ["Change 1", "Change 2", "Change 3"]     # and what was held, held
+
+
+def test_one_that_is_not_open_any_more_leaves_and_what_stood_on_it_stands_where_its_base_says():
+    before = held(node(1, "a", base="trunk"), node(2, "b", base="a"), node(3, "c", base="b"))
+    got = with_pulls(before, {2: None})
+    assert places(got) == [(1, 0, 0), (3, 0, 0)] and got.total == 2    # 3 is on a branch no pull request has
+    assert [(p.number, p.parent, p.children, p.depth) for p in before.pulls] == [
+        (1, 0, [2], 0), (2, 1, [3], 1), (3, 2, [], 2)]                 # the stacks held before are not touched
+    assert places(with_pulls(before, {9: None})) == places(before)     # one that was never held: nothing leaves
+
+
+def test_one_newly_opened_joins_the_others_in_its_stack():
+    before = held(node(1, "a", base="trunk"), node(3, "c", base="b"))
+    got = with_pulls(before, {2: parse_pull("Owner/Repo", node(2, "b", base="a"))})
+    assert places(got) == [(1, 0, 0), (2, 1, 1), (3, 2, 2)] and got.total == 3
+    assert [p.children for p in got.pulls] == [[2], [3], []]
+
+
+def test_several_read_on_their_own_are_put_in_together():
+    before = held(node(1, "a", base="trunk"), node(2, "b", base="a"))
+    got = with_pulls(before, {1: None, 2: parse_pull("Owner/Repo", node(2, "b", base="trunk")),
+                              4: parse_pull("Owner/Repo", node(4, "d", base="b"))})
+    assert places(got) == [(2, 0, 0), (4, 2, 1)] and got.total == 2
+
+
+def test_a_long_lived_branch_carries_no_stack_when_one_is_put_in():
+    before = held(node(60, "develop", base="trunk"))
+    feature = parse_pull("Owner/Repo", node(61, "feature", base="develop"))
+    assert places(with_pulls(before, {61: feature})) == [(60, 0, 0), (61, 60, 1)]
+    assert places(with_pulls(before, {61: feature}, ["trunk", "develop"])) == [(60, 0, 0), (61, 0, 0)]
+
+
+def test_the_count_of_those_open_moves_with_the_ones_that_come_and_go():
+    before = held(node(1, "a", base="trunk"), total=400)               # more are open than were read
+    assert with_pulls(before, {2: parse_pull("Owner/Repo", node(2, "b", base="trunk"))}).total == 401
+    assert with_pulls(before, {1: None}).total == 399
+    assert with_pulls(before, {1: parse_pull("Owner/Repo", node(1, "a", base="trunk"))}).total == 400
 
 
 @pytest.mark.parametrize("seconds, plain, fine", [
