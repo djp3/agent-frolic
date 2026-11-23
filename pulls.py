@@ -137,6 +137,9 @@ _RIGHTS = {"ADMIN": (True, True), "MAINTAIN": (True, True), "WRITE": (True, True
 # A bot's login -> the name GitHub shows for it. Copilot signs its reviews with the long
 # login and the comments inside them as "Copilot": both are the same reviewer.
 KNOWN_AS = {"copilot-pull-request-reviewer": "copilot"}
+# The reviewers that are programs, by login: one of these sets to work the moment it is
+# asked and answers within minutes, where a person asked may not look for days.
+AT_ONCE = frozenset({"copilot-pull-request-reviewer"})
 HIDDEN = "a hidden reviewer"      # one GitHub lists as asked and does not name; no login has a space
 
 
@@ -159,6 +162,11 @@ def known_as(login: str) -> str:
     """A login as it should read: a bot loses its "[bot]" and goes by its known name."""
     bare = login.removesuffix("[bot]")
     return KNOWN_AS.get(bare.lower(), bare)
+
+
+def reviews_at_once(login: str) -> bool:
+    """Whether a reviewer is a program that sets to work the moment it is asked (AT_ONCE)."""
+    return login.removesuffix("[bot]").lower() in AT_ONCE
 
 
 @dataclass

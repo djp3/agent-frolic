@@ -1675,3 +1675,54 @@ async def test_an_ages_bar_and_a_repositorys_timer_are_not_one_color(isolated):
         await pilot.press("tab", "tab", "tab")                               # bob's: the others dim, their bars too
         await pilot.pause()
         assert bars("#16 Transcript") == {board.DIM.lower()} and bars("╪ djp3/agent-frolic") == {timer_}
+
+
+# ---- Copilot at work on a review ---------------------------------------------------------
+
+COPILOT_ASKED = {"nodes": [{"requestedReviewer": {"__typename": "Bot", "login": "copilot-pull-request-reviewer"}}]}
+
+
+@drive
+async def test_while_copilot_reviews_its_dots_turn_in_the_row_on_its_card_and_in_the_drawer(isolated, monkeypatch):
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add("djp3/agent-frolic", admin=True)
+    FakePulls.open_ = {"djp3/agent-frolic": [
+        node(12, "client", author={"login": "djp3"}, title="GraphQL client", reviewRequests=COPILOT_ASKED),
+        node(14, "badges", author={"login": "djp3"}, title="Ticket badges", reviewRequests=ask("bob"))]}
+    app = main.Frolic()
+    async with app.run_test(size=(150, 40)) as pilot:
+        await settle(app, pilot)
+        for dots in ("⠼", "⠧"):                                    # as the clock moves them on
+            monkeypatch.setattr(app.board, "spin", lambda offset=0: dots)
+            app.draw()
+            await pilot.pause()
+            row = line(app, "#12 GraphQL client")
+            assert who(app, "#12 GraphQL client") == ["you", "waiting", dots, "copilot"]      # whom it waits on
+            assert f"{dots} copilot" in row.split("│")[1]                                     # its review
+            assert f"{dots} copilot" in line(app, "bob").split("─")[0]                        # its card in the strip
+            assert f"review   {dots} copilot reviewing" in screen(app)                        # the drawer
+            assert "waits on copilot to review" in screen(app)
+        assert who(app, "#14 Ticket badges") == ["you", "waiting", "bob"]                     # a person asked: no dots
+        assert "◔ bob" in line(app, "#14 Ticket badges")
+        card = next(person for person in board.humans(app.board.pic) if person.name == "copilot")
+        assert board.plain(board.head_line(card)) == "⠋ copilot"                               # laid out at rest
+        # With the focus on its card the name is underlined, and the dots before it are not.
+        while app.board.focus.human != "copilot-pull-request-reviewer":
+            await pilot.press("tab")
+            await pilot.pause()
+        strip = next(s for s in app.screen._compositor.render_strips() if "copilot" in s.text and "bob" in s.text)
+        under = {part.text.strip(): bool(part.style and part.style.underline) for part in strip if part.text.strip()}
+        assert under["copilot"] and not under[dots]
+        await pilot.press("escape")
+        FakePulls.open_["djp3/agent-frolic"][0] = node(                                       # it has answered
+            12, "client", author={"login": "djp3"}, title="GraphQL client",
+            latestReviews={"nodes": [review("copilot-pull-request-reviewer", "COMMENTED", "2026-11-14T15:30:00Z")]})
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert "copilot" in line(app, "#12 GraphQL client") and dots not in screen(app)
+
+
+def test_a_line_laid_out_with_its_dots_at_rest_is_drawn_with_them_where_they_stand():
+    assert board.turned([("⠋ ", "a"), ("copilot", "b"), ("  ", "c")], "⠼") == [
+        ("⠼ ", "a"), ("copilot", "b"), ("  ", "c")]
+    assert board.turned([("● ", "a"), ("you", "b")], "⠼") == [("● ", "a"), ("you", "b")]

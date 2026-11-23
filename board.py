@@ -275,11 +275,19 @@ def remember_change(marks: dict, key: object, now: float) -> None:
 
 def head_line(person: Person) -> Segments:
     """A card's name line: the name alone. On yours, and on a team's you are on, the yellow
-    dot says things wait on you. The name sits where the agents' pull requests sit beneath
-    it, dot or no dot."""
+    dot says things wait on you. On a program that is reviewing something now, the dots
+    turn, as they do before an agent at work. The name sits where the agents' pull
+    requests sit beneath it, whatever stands before it."""
     if person.dot:
         return [("● ", WAITING), (person.name, f"bold {INK}")]
+    if person.at_work:
+        return [(SPIN[0] + " ", INK), (person.name, INK)]
     return [("  ", MUTED), (person.name, INK if person.yours else INK2)]
+
+
+def turned(line: Segments, spin: str) -> Segments:
+    """A line with its dots where they stand now: it was laid out with them at rest."""
+    return [(spin + " " if len(text) == 2 and text[0] in SPIN else text, style) for text, style in line]
 
 
 def make_card(person: Person, max_cols: int) -> Card:
@@ -331,6 +339,7 @@ class Line:
     part: int = 0                                # which line of its pull request this is
     cells: tuple[Segments, Segments, Segments] | None = None      # owner, state, waits on
     lead: str = ""                               # the tree connectors on this line
+    spin: str = SPIN[0]                          # where the dots that turn stand on this line
 
 
 def progress_cells(word: str, done: int, total: int) -> Segments:
@@ -684,18 +693,19 @@ class Board(Screen):
             x = 1 + card.x
             picked = kind in ("crew", "human") and self.focus.human == card.human
             whole = kind == "all" or (kind == "crew" and picked)   # the whole card is in focus
-            head = ([(text, f"bold underline {INK}" if text.strip() and text.strip() != "●" else style)
-                     for text, style in card.head] if picked else card.head)
+            turn += 3
+            head = turned(card.head, self.spin(turn))              # a reviewing program's dots turn too
+            if picked:                                             # the name, not the mark before it
+                head = [(text, f"bold underline {INK}" if text.strip() and text.strip() != "●"
+                         and text[0] not in SPIN else style) for text, style in head]
             write(canvas, x, 0, head, max(0, width - x))
             lines: list[tuple[int, int, int, bool, float]] = [
                 (0, x, card.width, picked, now - self.card_flash.get(card.human, -999.0))]
             cx = x
             for col, col_w in zip(card.cols, card.widths):
                 for i, (line, key) in enumerate(col):
-                    turn += 3
-                    turned = [(self.spin(turn) + " " if len(text) == 2 and text[0] in SPIN else text, style)
-                              for text, style in line]             # each agent's dots turn on their own
-                    write(canvas, cx, 1 + i, turned, max(0, width - cx))
+                    turn += 3                                      # each agent's dots turn on their own
+                    write(canvas, cx, 1 + i, turned(line, self.spin(turn)), max(0, width - cx))
                     lines.append((1 + i, cx, col_w, kind == "agent" and key is not None
                                   and self.focus.agent == key, 999.0))
                 cx += col_w + 2
@@ -737,8 +747,9 @@ class Board(Screen):
                 continue
             tail = (row.lead[:-2] + ("│ " if row.lead.endswith("├ ") else "  ")
                     + ("│ " if row.pull.children else "  "))
-            for part, three in enumerate(cells(self.pic, row.pull, self.spin(i * 3))):
-                out.append(Line(row, part, three, row.lead if part == 0 else tail))
+            spin = self.spin(i * 3)
+            for part, three in enumerate(cells(self.pic, row.pull, spin)):
+                out.append(Line(row, part, three, row.lead if part == 0 else tail, spin))
         return out
 
     def empty_words(self) -> str:
@@ -995,7 +1006,8 @@ class Board(Screen):
         canvas.put(x + 2, y, number, f"bold {INK}")
         canvas.put(x + 3 + len(number), y, cut(pull.title, title_end(cols) - 1 - (x + 3 + len(number))), INK2)
         if x_review is not None:
-            write(canvas, x_review, y, review_cell(self.pic, pull, names, x_ci - x_review - 1), x_ci - x_review - 1)
+            write(canvas, x_review, y, review_cell(self.pic, pull, names, x_ci - x_review - 1, line.spin),
+                  x_ci - x_review - 1)
         if x_ci is not None:
             ci_icon, ci_color = CHECK_MARK[pull.checks]
             canvas.put(x_ci, y, ci_icon, ci_color)
@@ -1147,7 +1159,7 @@ class Board(Screen):
         out.append("\n")
 
         out.append("review   ", style=MUTED)
-        said = reviewers(pic, pull)
+        said = reviewers(pic, pull, spin)
         for i, (marks, who, words) in enumerate(said):
             out.append("  " if i else "")
             for icon, color in marks:
