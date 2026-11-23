@@ -796,7 +796,67 @@ async def test_what_a_pull_request_cost_beyond_a_point_is_taken_from_the_ration_
         app.delivered(about(12))
         await settle(app, pilot)
         assert FakePulls.asked_alone == [(OURS, 12)]
-        assert app.ration_back[OURS] == pytest.approx(now[0] + 3 * app.seconds_a_point(OURS))
+        assert app.ration_now(OURS) == pytest.approx(50 - 3)
+
+
+@drive
+async def test_showing_another_repository_puts_nothing_back_into_a_ration_that_was_spent(isolated, monkeypatch):
+    """Each repository's part of the allowance is smaller when one more is shown. What a
+    ration holds is the same points after that as before: one just spent covers no read
+    because of it."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 1}
+    Settings(poll_minutes=60).save()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        app.delivered(Delivery("push", "d-1", OURS, ""))            # the whole of it: the ration is spent
+        await settle(app, pilot)
+        assert app.ration_now(OURS) == pytest.approx(0)
+        RepoStore().add("acme/web-console")                         # one more to share the allowance with
+        app.store.load()
+        assert app.seconds_a_point(OURS) == pytest.approx(2 * point)
+        assert app.ration_now(OURS) == pytest.approx(0)             # it holds what it held,
+        app.delivered(about(12))
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []                          # which covers nothing
+        now[0] += 2 * point - 0.1
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []
+        now[0] += 0.2                                               # a point has come, at the pace of now
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)]
+
+
+@drive
+async def test_what_came_into_a_ration_before_the_pace_changed_is_counted_at_the_pace_of_then(isolated, monkeypatch):
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs = {OURS: (50, 5000)}
+    Settings(poll_minutes=60).save()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        app.delivered(Delivery("push", "d-1", OURS, ""))            # the ration is spent
+        await settle(app, pilot)
+        now[0] += 10 * point                                        # ten points come, at this pace
+        RepoStore().add("acme/web-console")
+        app.store.load()
+        app.tick()                                                  # the clock counts them, as every second
+        await settle(app, pilot)
+        now[0] += 10 * point                                        # and five more, at half that pace
+        assert app.ration_now(OURS) == pytest.approx(15)
+        now[0] += 3600                                              # never more than a whole one
+        assert app.ration_now(OURS) == 50
 
 
 @drive
@@ -938,7 +998,7 @@ async def test_a_repository_removed_while_its_pull_request_is_read_stays_removed
         gate.set()
         await settle(app, pilot)
         assert OURS not in app.pulls and app.pull_reading == {} and app.pull_wanted == {}
-        assert not any(OURS in held for held in (app.ration_back, app.pull_read_at, app.pulls_began))
+        assert not any(OURS in held for held in (app.ration_held, app.pull_read_at, app.pulls_began))
 
 
 @drive

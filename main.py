@@ -335,6 +335,7 @@ class Frolic(App):
     ALONE_MOST = 10               # pull requests of one repository read on their own in one go: with more
                                   # than this named and waiting, the repository is read instead
     ALONE_POINTS = 1              # what reading one on its own is taken to cost, until GitHub says
+    RATION_SLACK = 1e-6           # of a point: a ration this near to enough is enough (sums of fractions)
     SAFETY_POLLS = 6              # a repository GitHub sends webhooks for is read on its timer this many times
                                   # less often than one it does not: every 30 minutes at the usual five
     ASLEEP_S = 60.0               # the clock ticks every second: this long between two ticks, and the Mac slept
@@ -420,8 +421,10 @@ class Frolic(App):
                                                   # things is this record, never the words above
         self.hook_read_at: dict[str, float] = {}  # repository (lower case) -> when a delivery last had it read
         self.hook_read_due: dict[str, float] = {}  # repository (lower case) -> when its waiting read may start
-        self.ration_back: dict[str, float] = {}   # repository (lower case) -> when its ration for the reads
-                                                  # deliveries ask for is whole again (`ration_covers_at`)
+        self.ration_held: dict[str, tuple[float, float, float]] = {}   # repository (lower case) -> what its
+                                                  # ration for the reads deliveries ask for held when last
+                                                  # counted: the points, when that was, and the seconds a
+                                                  # point took to come then (`ration_now`). None: it is whole
         self.pull_wanted: dict[str, set[int]] = {}   # repository (lower case) -> its pull requests that
                                                      # deliveries named, waiting to be read on their own
         self.pull_reading: dict[str, tuple[int, float, list[int]]] = {}   # repository (lower case) -> the
@@ -533,6 +536,8 @@ class Frolic(App):
             if time.time() >= at:
                 del self.hook_read_due[key]
                 self.read_for_webhook(key)
+        for key in list(self.ration_held):
+            self.ration_now(key)                           # counted on, at the pace of the second gone by
         for key in list(self.pull_wanted):
             self.start_pull_reads(key)
         self.draw()
@@ -1086,7 +1091,7 @@ class Frolic(App):
         """Drop all that is kept about a repository under this name (lower case): it has
         left the list, or goes by another name now. Its timers too, or they would outlive it."""
         for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
-                     self.read_began, self.hook_read_at, self.hook_read_due, self.ration_back, self.pull_wanted,
+                     self.read_began, self.hook_read_at, self.hook_read_due, self.ration_held, self.pull_wanted,
                      self.pull_reading, self.pull_read_at, self.pulls_began):
             held.pop(key, None)
 
@@ -1389,8 +1394,7 @@ class Frolic(App):
         repo = self.store.get(name)
         if repo is None or not repo.shown or key in self.hook_read_due:
             return
-        got = self.pulls.get(key)
-        whole = got.cost if got is not None else 0
+        whole = self.whole_ration(key)
         soonest = max(self.hook_read_at.get(key, 0.0) + self.WEBHOOK_SOONEST_S, self.ration_covers_at(key, whole))
         if time.time() < soonest:
             self.hook_read_due[key] = soonest               # tick starts it
@@ -1412,6 +1416,11 @@ class Frolic(App):
     # after anything, where the whole repository waits minutes. While pull requests go on
     # being read on their own, the read of the whole repository waits for them to stop. It
     # is for what no delivery names, and the repository's timer reads it in any case.
+    #
+    # What a ration holds is kept in points (`ration_held`), not as the time it will be whole
+    # again. The pace the points come at changes when a repository is shown or hidden, and
+    # what a whole ration is changes with what the repository costs to read. Points already
+    # there are the same points after either; a time would be worth more of them, or fewer.
     def seconds_a_point(self, key: str) -> float:
         """How long a repository's ration takes to win back one of GitHub's points. 0 while
         GitHub has not said what the hour's allowance is: then nothing is rationed."""
@@ -1420,20 +1429,47 @@ class Frolic(App):
             return 0.0
         return 3600 / (got.limit * self.WEBHOOK_SHARE / max(1, len(self.store.shown())))
 
+    def whole_ration(self, key: str) -> int:
+        """What a repository's ration holds when it is whole: what the last read of the whole
+        repository cost."""
+        got = self.pulls.get(key)
+        return got.cost if got is not None else 0
+
+    def ration_now(self, key: str) -> float:
+        """What a repository's ration holds now, in GitHub's points: whole until something is
+        taken from it, and never more than whole.
+
+        It is counted on from when it was last counted, at the pace the points were coming
+        at then, and the pace of now is kept for the next time. Every use counts it, and the
+        clock does every second. So after the pace changes (another repository is shown, and
+        each one's part is smaller), at most a second is counted at the pace of before."""
+        whole = float(self.whole_ration(key))
+        held = self.ration_held.get(key)
+        if held is None:
+            return whole
+        points, at, pace = held
+        now = time.time()
+        # Nothing was rationed then (GitHub had not said the allowance): it is whole.
+        points = min(whole, points + max(0.0, now - at) / pace) if pace > 0 else whole
+        self.ration_held[key] = (points, now, self.seconds_a_point(key))
+        return points
+
     def ration_covers_at(self, key: str, points: int) -> float:
         """When a repository's ration holds `points`, enough for a read that costs them. A
-        whole ration is what the last read of the whole repository cost; a read that costs
-        more than that waits for a whole one. 0, long ago, when nothing is rationed."""
-        got = self.pulls.get(key)
-        whole = got.cost if got is not None else 0
-        return self.ration_back.get(key, 0.0) - max(0, whole - points) * self.seconds_a_point(key)
+        read that costs more than a whole ration waits for a whole one. 0, long ago, when it
+        holds them now or nothing is rationed."""
+        pace = self.seconds_a_point(key)
+        if pace <= 0:
+            return 0.0
+        short = min(points, self.whole_ration(key)) - self.ration_now(key)
+        return time.time() + short * pace if short > self.RATION_SLACK else 0.0
 
     def spend(self, key: str, points: int) -> None:
-        """Take what a read costs out of a repository's ration: it is whole again that much
-        later than it would have been."""
-        if points > 0:
-            self.ration_back[key] = (max(self.ration_back.get(key, 0.0), time.time())
-                                     + points * self.seconds_a_point(key))
+        """Take what a read costs out of a repository's ration. Nothing, while nothing is
+        rationed."""
+        pace = self.seconds_a_point(key)
+        if points > 0 and pace > 0:
+            self.ration_held[key] = (self.ration_now(key) - points, time.time(), pace)
 
     # ---- the pull requests a delivery names, each read on its own --------------------------
     def read_pulls_for_webhook(self, name: str, numbers: list[int]) -> None:
