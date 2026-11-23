@@ -424,8 +424,10 @@ class Frolic(App):
                                                   # deliveries ask for is whole again (`ration_covers_at`)
         self.pull_wanted: dict[str, set[int]] = {}   # repository (lower case) -> its pull requests that
                                                      # deliveries named, waiting to be read on their own
-        self.pull_reading: dict[str, tuple[float, list[int]]] = {}   # repository (lower case) -> the ones
-                                                  # being read on their own now, and when that began
+        self.pull_reading: dict[str, tuple[int, float, list[int]]] = {}   # repository (lower case) -> the
+                                                  # ones being read on their own now: which read that is
+                                                  # (`pull_run` when it began), when it began, and they
+        self.pull_run = 0                         # counts those reads: each answer says which it is for
         self.pull_read_at: dict[str, dict[int, float]] = {}   # repository (lower case) -> when each of its
                                                   # pull requests read on its own in the last seconds began
         self.repo_note: dict[str, str] = {}       # repository (lower case) -> trouble seeing it
@@ -1479,17 +1481,19 @@ class Frolic(App):
         wanted.difference_update(numbers)
         if not wanted:
             del self.pull_wanted[key]
-        self.pull_reading[key] = (now, numbers)
+        self.pull_run += 1
+        self.pull_reading[key] = (self.pull_run, now, numbers)
         lately.update(dict.fromkeys(numbers, now))
         self.spend(key, points)
         log.info("reading (webhook): %s %s", repo.name, ", ".join(f"#{number}" for number in numbers))
-        self.fetch_alone(repo.name, numbers, self.token_used)
+        self.fetch_alone(repo.name, numbers, self.pull_run, self.token_used)
 
     @work(thread=True, group="pulls")
-    def fetch_alone(self, name: str, numbers: list[int], token_used: int) -> None:
+    def fetch_alone(self, name: str, numbers: list[int], run: int, token_used: int) -> None:
         """Read these pull requests of a repository, each on its own, with the token in use
         (`token_used` says which that is, as in `fetch`). What was read comes back together,
-        with why the first that could not be read could not."""
+        with why the first that could not be read could not, and with `run`: which read of
+        the repository's pull requests this is (`pulls_read`)."""
         read: list[PullRead] = []
         trouble = ""
         try:
@@ -1505,9 +1509,9 @@ class Frolic(App):
         except Exception as e:                               # a reply shaped in a way nobody expected
             log.exception("reading pull requests of %s on their own failed", name)
             trouble = f"could not read GitHub's reply: {type(e).__name__}"
-        self.later(self.pulls_read, name, read, trouble, token_used)
+        self.later(self.pulls_read, name, run, read, trouble, token_used)
 
-    def pulls_read(self, name: str, read: list[PullRead], trouble: str, token_used: int) -> None:
+    def pulls_read(self, name: str, run: int, read: list[PullRead], trouble: str, token_used: int) -> None:
         """Pull requests that deliveries named have been read on their own. Each takes its
         place in what is held of the repository (`with_pulls`), and the board and the ticker
         say what changed, as after any read. The repository's timer is not started again:
@@ -1517,11 +1521,17 @@ class Frolic(App):
         token has changed (`read_before`), or a read of the whole repository that began
         later has been taken in already: that one is the newer. When GitHub spells the
         repository's name otherwise, the repository is read, and the list takes the name
-        from that. So it is, in its turn, when one of them could not be read."""
+        from that. So it is, in its turn, when one of them could not be read.
+
+        `run` says which read this answers. A repository that left the list and came back
+        while its pull requests were read may have others being read by now: what is kept of
+        that read is theirs, and this answer, from before it left, takes none of it."""
         key = name.lower()
-        if key not in self.pull_reading:                    # it left the list while they were read
+        reading = self.pull_reading.get(key)
+        if reading is None or reading[0] != run:            # it left the list while they were read
             return
-        began, numbers = self.pull_reading.pop(key)
+        del self.pull_reading[key]
+        _, began, numbers = reading
         repo, held = self.store.get(name), self.pulls.get(key)
         usable = repo is not None and held is not None and self.token_state != "none"
         if usable and not self.read_before(name, token_used):

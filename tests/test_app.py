@@ -941,6 +941,47 @@ async def test_a_repository_removed_while_its_pull_request_is_read_stays_removed
         assert not any(OURS in held for held in (app.ration_back, app.pull_read_at, app.pulls_began))
 
 
+@drive
+async def test_an_answer_from_before_a_repository_left_and_came_back_takes_nothing_of_what_is_read_now(isolated):
+    """Removed and added again while one of its pull requests was being read, with another
+    being read by the time that answer comes: the answer is from before, and what is kept of
+    the read under way is not its to take."""
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        answered, taken = [], app.pulls_read
+
+        def pulls_read(name, run, read, *rest):
+            taken(name, run, read, *rest)
+            answered.append([one.number for one in read])
+
+        app.pulls_read = pulls_read
+        slow = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()   # its answer is slow in coming
+        now_on_github(12, title="As it was before")
+        app.delivered(about(12))
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        app.store.remove(OURS)                                      # it leaves the list,
+        app.forget_repo(OURS)
+        now_on_github(12, title="As it is now")
+        app.store.add(OURS, admin=True)                             # and is back, and read
+        app.update_pulls([OURS], "added")
+        await until(pilot, lambda: OURS in app.pulls)
+        gate = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()
+        FakeGitHub.waiting.clear()
+        now_on_github(13, title="Newer still")
+        app.delivered(about(13, n=2))                               # now another of them is being read
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        slow.set()                                                  # and the answer from before comes first
+        await until(pilot, lambda: answered == [[12]])
+        assert held(app)[12].title == "As it is now"                # nothing is put back as it was,
+        assert OURS in app.pull_reading                             # and #13 is still being read
+        gate.set()
+        await settle(app, pilot)
+        assert answered == [[12], [13]] and app.pull_reading == {}
+        assert held(app)[13].title == "Newer still"                 # its answer is the one used
+
+
 async def answer_yes(pilot, key):
     await pilot.press(key)
     await pilot.pause()
