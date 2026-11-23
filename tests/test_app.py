@@ -722,7 +722,7 @@ async def test_each_pull_request_waits_its_own_turn_and_too_many_are_read_as_the
         for n, number in enumerate((13, 12, 13), 3):                # both again, seconds after they were read
             app.delivered(about(number, n=n))
         await settle(app, pilot)
-        assert len(FakePulls.asked_alone) == 2 and app.pull_wanted == {OURS: {12, 13}}
+        assert len(FakePulls.asked_alone) == 2 and app.pull_wanted == {OURS: [13, 12]}
         now[0] += app.WEBHOOK_SOONEST_S + 1
         app.tick()
         await settle(app, pilot)
@@ -780,6 +780,42 @@ async def test_a_pull_request_is_read_on_its_own_as_soon_as_the_ration_covers_it
         app.tick()
         await settle(app, pilot)
         assert FakePulls.asked == [OURS] * 2 and FakePulls.asked_alone == [(OURS, 12)]
+
+
+@drive
+async def test_as_many_of_those_waiting_are_read_as_the_ration_covers_and_the_first_named_first(isolated, monkeypatch):
+    """One waiting is not held up until there is a point for each of them."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client"),
+                              node(13, "review-state", title="Review state model"),
+                              node(14, "badges", title="Ticket badges")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 1}
+    Settings(poll_minutes=60).save()                                # no poll comes due meanwhile
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        app.delivered(Delivery("push", "d-1", OURS, ""))            # the whole of it: the ration is spent
+        await settle(app, pilot)
+        for n, number in enumerate((14, 12, 13, 14), 1):
+            app.delivered(about(number, n=n))
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [] and app.pull_wanted == {OURS: [14, 12, 13]}
+        now[0] += point + 0.1                                       # one point has come: one is read
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 14)] and app.pull_wanted == {OURS: [12, 13]}
+        app.delivered(about(14, n=5))                               # named again, it goes to the back
+        now[0] += 2 * point                                         # two more points: the next two, in one go
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone[1:] == [(OURS, 12), (OURS, 13)] and app.pull_wanted == {OURS: [14]}
+        now[0] += app.WEBHOOK_SOONEST_S
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone[3:] == [(OURS, 14)] and app.pull_wanted == {}
 
 
 @drive
@@ -938,7 +974,7 @@ async def test_one_named_while_the_repository_is_being_read_is_read_when_that_en
         await until(pilot, lambda: ("pulls", TOKEN) in FakeGitHub.waiting)
         app.delivered(about(12))
         await pilot.pause()
-        assert FakePulls.asked_alone == [] and app.pull_wanted == {OURS: {12}}
+        assert FakePulls.asked_alone == [] and app.pull_wanted == {OURS: [12]}
         gate.set()
         await settle(app, pilot)
         assert FakePulls.asked_alone == [(OURS, 12)] and app.pull_wanted == {}
@@ -955,7 +991,7 @@ async def test_one_named_before_the_repository_is_read_comes_with_that_read(isol
         await settle(app, pilot)
         app.delivered(about(12, n=2))                               # waits: it was read seconds ago
         await settle(app, pilot)
-        assert app.pull_wanted == {OURS: {12}}
+        assert app.pull_wanted == {OURS: [12]}
         await pilot.press("u")                                      # everything is read now, this one too
         await settle(app, pilot)
         now[0] += app.WEBHOOK_SOONEST_S + 1

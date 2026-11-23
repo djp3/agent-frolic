@@ -428,8 +428,9 @@ class Frolic(App):
                                                   # ration for the reads deliveries ask for held when last
                                                   # counted: the points, when that was, and the seconds a
                                                   # point took to come then (`ration_now`). None: it is whole
-        self.pull_wanted: dict[str, set[int]] = {}   # repository (lower case) -> its pull requests that
-                                                     # deliveries named, waiting to be read on their own
+        self.pull_wanted: dict[str, list[int]] = {}  # repository (lower case) -> its pull requests that
+                                                     # deliveries named, waiting to be read on their own:
+                                                     # the one named first comes first
         self.pull_reading: dict[str, tuple[int, float, list[int]]] = {}   # repository (lower case) -> the
                                                   # ones being read on their own now: which read that is
                                                   # (`pull_run` when it began), when it began, and they
@@ -1505,7 +1506,8 @@ class Frolic(App):
         """Read these pull requests of a repository again, each on its own, because a
         delivery says they changed: now, or when their turn comes (`start_pull_reads`)."""
         key = name.lower()
-        self.pull_wanted.setdefault(key, set()).update(numbers)
+        wanted = self.pull_wanted.setdefault(key, [])
+        wanted += [number for number in numbers if number not in wanted]    # one waiting keeps its place
         self.start_pull_reads(key)
 
     def start_pull_reads(self, key: str) -> None:
@@ -1517,8 +1519,11 @@ class Frolic(App):
         they changed, so they are read when it ends. They wait while others of the
         repository are being read on their own. Each waits until WEBHOOK_SOONEST_S after it
         was last read so (a burst about one pull request is read once, and once more when
-        it is over), while the others go ahead. And those whose turn it is wait until the
-        repository's ration covers them (`ration_covers_at`).
+        it is over), while the others go ahead.
+
+        Of those whose turn it is, as many are read as the repository's ration covers now
+        (`ration_now`), the ones named first. The rest keep their place and are read as the
+        points for them come: one waiting is not held up until there is enough for all.
 
         With nothing to put them into (the repository has not been read, or its last read
         failed), or with more than ALONE_MOST of them waiting, the repository is read
@@ -1539,12 +1544,16 @@ class Frolic(App):
         lately = self.pull_read_at.setdefault(key, {})
         for number in [number for number, at in lately.items() if now >= at + self.WEBHOOK_SOONEST_S]:
             del lately[number]
-        numbers = sorted(number for number in wanted if number not in lately)
-        points = len(numbers) * self.ALONE_POINTS
-        if not numbers or now < self.ration_covers_at(key, points):
+        ready = [number for number in wanted if number not in lately]
+        if self.seconds_a_point(key) > 0:
+            covered = int((self.ration_now(key) + self.RATION_SLACK) // self.ALONE_POINTS)
+            ready = ready[:max(0, covered)]                 # none, when the ration holds no point or owes
+        if not ready:
             return                                          # tick starts them
-        wanted.difference_update(numbers)
-        if not wanted:
+        numbers = sorted(ready)
+        points = len(numbers) * self.ALONE_POINTS
+        self.pull_wanted[key] = [number for number in wanted if number not in ready]
+        if not self.pull_wanted[key]:
             del self.pull_wanted[key]
         self.pull_run += 1
         self.pull_reading[key] = (self.pull_run, now, numbers)
