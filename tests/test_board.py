@@ -1726,3 +1726,32 @@ def test_a_line_laid_out_with_its_dots_at_rest_is_drawn_with_them_where_they_sta
     assert board.turned([("⠋ ", "a"), ("copilot", "b"), ("  ", "c")], "⠼") == [
         ("⠼ ", "a"), ("copilot", "b"), ("  ", "c")]
     assert board.turned([("● ", "a"), ("you", "b")], "⠼") == [("● ", "a"), ("you", "b")]
+    # Only a line's mark, its first piece, is ever the dots: a name made of the same
+    # characters is left as it is.
+    assert board.turned([("  ", "a"), ("⠋x", "b")], "⠼") == [("  ", "a"), ("⠋x", "b")]
+    assert board.turned([("⠋ ", "a"), ("⠙⠙", "b")], "⠼") == [("⠼ ", "a"), ("⠙⠙", "b")]
+    assert board.turned([], "⠼") == []
+
+
+@drive
+async def test_a_card_whose_name_looks_like_the_turning_dots_keeps_its_name(isolated, monkeypatch):
+    """A team may be called anything, two characters that begin with one of the dots
+    included. Its name is not taken for the dots and turned, on a card that has nothing to
+    do with Copilot, and it is underlined like any other name when its card is picked."""
+    a_team_board()
+    FakeGitHub.teams_listed = [Team("Acme", "platform", "⠋x")]
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        monkeypatch.setattr(app.board, "spin", lambda offset=0: "⠼")
+        app.draw()
+        await pilot.pause()
+        assert who(app, "#201 Bump a") == ["dependabot", "waiting", "●", "⠋x"]
+        cards = line(app, "team/docs")                                                    # the strip is the first
+        assert "● ⠋x" in cards and "⠼" not in cards                                       # its name, and no dots
+        await pilot.press("tab", "tab")                                                   # → you → the team
+        await pilot.pause()
+        assert app.board.focus == board.Focus("crew", "team/acme/platform")
+        strip = next(s for s in app.screen._compositor.render_strips() if "team/docs" in s.text)
+        under = {part.text.strip(): bool(part.style and part.style.underline) for part in strip if part.text.strip()}
+        assert under["⠋x"] and not under["●"]                                             # the name, not its mark

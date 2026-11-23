@@ -286,8 +286,14 @@ def head_line(person: Person) -> Segments:
 
 
 def turned(line: Segments, spin: str) -> Segments:
-    """A line with its dots where they stand now: it was laid out with them at rest."""
-    return [(spin + " " if len(text) == 2 and text[0] in SPIN else text, style) for text, style in line]
+    """A line with its dots where they stand now: it was laid out with them at rest. The
+    dots are the line's mark, which is its first piece and nothing after it. What follows is
+    a name, and a name is left as it is: a team may be called anything, two characters that
+    begin with one of the dots included."""
+    if not line:
+        return line
+    (mark, style), rest = line[0], line[1:]
+    return [(spin + " " if len(mark) == 2 and mark[0] in SPIN else mark, style), *rest]
 
 
 def make_card(person: Person, max_cols: int) -> Card:
@@ -695,9 +701,9 @@ class Board(Screen):
             whole = kind == "all" or (kind == "crew" and picked)   # the whole card is in focus
             turn += 3
             head = turned(card.head, self.spin(turn))              # a reviewing program's dots turn too
-            if picked:                                             # the name, not the mark before it
-                head = [(text, f"bold underline {INK}" if text.strip() and text.strip() != "●"
-                         and text[0] not in SPIN else style) for text, style in head]
+            if picked:                                             # the name: all that follows the mark,
+                # told by where it stands in the line, not by what it is made of
+                head = head[:1] + [(text, f"bold underline {INK}") for text, _ in head[1:]]
             write(canvas, x, 0, head, max(0, width - x))
             lines: list[tuple[int, int, int, bool, float]] = [
                 (0, x, card.width, picked, now - self.card_flash.get(card.human, -999.0))]
