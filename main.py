@@ -479,7 +479,7 @@ class Frolic(App):
                                                   # said: the picture puts each on its pull request
         self.told_for: tuple | None = None        # what `agents_told` last worked from, and what it made of it:
         self.here = 0                             # how many agents are on the pull requests shown,
-        self.early = 0                            # how many are at work in a shown repository with none yet,
+        self.early = 0                            # how many are at work in a shown repository and on none,
         self.lost: tuple[Astray, ...] = ()        # and the ones whose names tried to say where and are nowhere
         self.tied_said: frozenset = frozenset()   # the ties among those that the log has been told of
         self.agent_numbers: dict = {}             # the number each agent on the board has ("agent 02"), so
@@ -688,8 +688,8 @@ class Frolic(App):
     def agents_told(self) -> tuple[int, tuple[Astray, ...], int]:
         """How many of the reported agents are on a pull request the board shows; the ones
         whose names tried to say where they are and that are drawn nowhere, each with why
-        (picture.astray); and how many are at work in a shown repository with no pull
-        request yet (picture.early). The setup says all three, and is drawn every second,
+        (picture.astray); and how many are at work in a shown repository and on no pull
+        request (picture.early). The setup says all three, and is drawn every second,
         and the board asks at every draw: they are worked out again only when the report,
         the list of repositories or a reading has changed (a new reading is a new object).
 
@@ -708,7 +708,7 @@ class Frolic(App):
             names = [name for name, shown in listed if shown]
             every = [name for name, _ in listed]
             self.here = len(located_in(self.reported, names, self.pulls))
-            self.early = len(early(self.reported, names, every))
+            self.early = len(early(self.reported, names, every, self.pulls))
             self.lost = tuple(astray(self.reported, names, self.pulls, every))
             tied = frozenset((one.one.owner, one.one.name, one.why) for one in self.lost if one.tie)
             for owner, name, why in sorted(tied - self.tied_said):
@@ -1874,10 +1874,14 @@ class Frolic(App):
         the board, and the ticker says what changed.
 
         When the viewer has opened a pull request in a repository where an agent of theirs
-        is at work with none yet (picture.early), that is most likely the agent's work, and
-        the agent shows on it only once its session is named for it. The ticker says the
-        name instead of the first change, and the board selects the new pull request, so
-        that the drawer shows the same name, c copies it, and C the command to rename with."""
+        is at work on none (picture.early: it has none yet, or is still named for one that
+        is not open), that is most likely the agent's work, and the agent shows on it only
+        once its session is named for it. The ticker says the name instead of the first
+        change, and the board selects the new pull request, so that the drawer shows the
+        same name, c copies it, and C the command to rename with.
+
+        Not for a pull request an agent of theirs is on already: that one was named ahead
+        of it, and no other agent of theirs is to be renamed for it."""
         if before is None:
             return
         viewer = self.identity.login if self.identity is not None else ""
@@ -1896,9 +1900,13 @@ class Frolic(App):
             self.say(f"{name} · {change.said}", INK)
         mine = [change.pull for change in found
                 if change.opened and viewer and change.pull.author.lower() == viewer.lower()]
-        theirs = [one for one, repo, _ in early(self.reported, [r.name for r in self.store.shown()],
-                                               [r.name for r in self.store.repos])
-                  if repo.lower() == key and one.owner.lower() == viewer.lower()] if mine else []
+        shown = [r.name for r in self.store.shown()]
+        if mine:
+            taken = {key_of(pull) for one, pull in located_in(self.reported, shown, self.pulls)
+                     if one.owner.lower() == viewer.lower()}
+            mine = [pull for pull in mine if key_of(pull) not in taken]
+        theirs = [there.one for there in early(self.reported, shown, [r.name for r in self.store.repos], self.pulls)
+                  if there.repo.lower() == key and there.one.owner.lower() == viewer.lower()] if mine else []
         if theirs:
             which = "your agent" if len(theirs) == 1 else "one of your agents"
             said = (f"you opened #{mine[0].number} · rename {which} there to {agent_name(mine[0])}"
@@ -2234,7 +2242,7 @@ class Frolic(App):
         agents = len(self.reported)
         out.append("\n   agents    ", style=MUTED)
         said = f"{agents} reported" + (f" · {here} on the pull requests shown here" if agents else "")
-        said += f" · {alone} with no pull request yet" if alone else ""
+        said += f" · {alone} with no open pull request" if alone else ""
         out.append(said, style=INK2)
         how = "   by the repository and number in their names: acme-web-pr-98"
         if agents and len(said) + len(how) <= room + 2:       # said when there is room: the line keeps its row
