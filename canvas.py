@@ -41,13 +41,17 @@ def lit(text: str, style: Lit, x: int, light: float) -> Segments:
     stands on, and there is another every LIGHT_EVERY cells either way, so as `light`
     grows they run through the line from left to right, one after another. A cell within
     LIGHT_REACH of one has its color, and at its heart is bold; the rest keep the style
-    they have at rest. Words that are bold at rest stay bold in the light."""
+    they have at rest. The light changes the color alone: what else the words have at
+    rest, bold or a line under them, they keep as it passes. (A style here is written
+    with its color last: "bold underline #f0efec".)"""
     rest = str(style)
-    near = f"bold {style.shine}" if "bold" in rest.split() else style.shine
+    kept = rest.split()[:-1]
+    near = " ".join([*kept, style.shine])
+    heart = near if "bold" in kept else f"bold {near}"
     out: Segments = []
     for ch in text:
         far = abs((x - light + LIGHT_EVERY / 2) % LIGHT_EVERY - LIGHT_EVERY / 2)
-        ink = f"bold {style.shine}" if far < LIGHT_HEART else near if far < LIGHT_REACH else rest
+        ink = heart if far < LIGHT_HEART else near if far < LIGHT_REACH else rest
         if out and out[-1][1] == ink:
             out[-1] = (out[-1][0] + ch, ink)
         else:

@@ -58,6 +58,11 @@ def test_a_light_runs_through_lit_words_from_left_to_right_and_another_follows_i
     assert lit("agent 01", quiet, 15, 8.0) == [("agent 01", "grey")]            # nor on words that stand elsewhere
     # Words that are bold at rest stay bold in the light, so nothing changes weight twice as it passes.
     assert lit("ab", Lit("bold white", "green"), 0, 1.0) == [("ab", "bold green")]
+    # And underlined ones stay underlined: the line under a name does not break where the light is.
+    assert lit("abcd", Lit("underline white", "green"), 0, 0.0) == [
+        ("a", "bold underline green"), ("b", "underline green"), ("cd", "underline white")]
+    assert lit("abc", Lit("bold underline white", "green"), 0, 0.0) == [
+        ("ab", "bold underline green"), ("c", "bold underline white")]
     # It goes by cells: a wide character is two of them, so the x stands on cell 4, one from the light.
     assert lit("中文x", quiet, 0, 3.0) == [("中", "grey"), ("文x", "green")]
     c = Canvas(12, 1)

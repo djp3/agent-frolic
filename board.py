@@ -751,8 +751,11 @@ class Board(Screen):
             turn += 3
             head = turned(card.head, self.spin(turn))              # a reviewing program's wheel turns too
             if picked:                                             # the name: all that follows the mark,
-                # told by where it stands in the line, not by what it is made of
-                head = head[:1] + [(text, f"bold underline {INK}") for text, _ in head[1:]]
+                # told by where it stands in the line, not by what it is made of. A name the light
+                # runs through keeps its light: a program at work is at work in focus too.
+                under = f"bold underline {INK}"
+                head = head[:1] + [(text, Lit(under, style.shine) if isinstance(style, Lit) else under)
+                                   for text, style in head[1:]]
             write(canvas, x, 0, head, max(0, width - x), light=self.light(turn))
             lines: list[tuple[int, int, int, bool, float]] = [
                 (0, x, card.width, picked, now - self.card_flash.get(card.human, -999.0))]

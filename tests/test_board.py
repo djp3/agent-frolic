@@ -1830,14 +1830,40 @@ async def test_while_copilot_reviews_its_wheel_turns_in_the_row_on_its_card_and_
         assert "◔ bob" in line(app, "#14 Ticket badges")
         card = next(person for person in board.humans(app.board.pic) if person.name == "copilot")
         assert board.plain(board.head_line(card)) == "⣾ copilot"                               # laid out at rest
-        # With the focus on its card the name is underlined, and the wheel before it is not.
+        # With the focus on its card the name is underlined, and the wheel before it is not. The
+        # light still runs through the name, bold and underlined as it goes.
         while app.board.focus.human != "copilot-pull-request-reviewer":
             await pilot.press("tab")
             await pilot.pause()
+
+        async def name(light: float | None = None) -> list:
+            """The pieces of Copilot's name on its card, with the light held on `light` cells
+            into it (or off it): (text, underlined, bold, ink)."""
+            row = next(s.text for s in app.screen._compositor.render_strips() if "copilot" in s.text and "bob" in s.text)
+            at = cell_len(row[:row.index("copilot")])
+            inside = at - app.board.query_one("#strip").content_region.x      # the light counts the strip's own cells
+            monkeypatch.setattr(app.board, "light", lambda offset=0: inside + (10 if light is None else light))
+            app.draw()
+            await pilot.pause()
+            strip = next(s for s in app.screen._compositor.render_strips() if "copilot" in s.text and "bob" in s.text)
+            found, x = [], 0
+            for part in strip:
+                if at <= x < at + len("copilot"):
+                    found.append((part.text, bool(part.style.underline), bool(part.style.bold),
+                                  part.style.color.get_truecolor().hex.lower()))
+                x += cell_len(part.text)
+            return found
+
+        white, green = theme.INK.lower(), theme.LIGHT_AT_WORK.lower()
+        assert await name() == [("copilot", True, True, white)]
+        assert await name(3) == [("co", True, True, white), ("pil", True, True, green), ("ot", True, True, white)]
         strip = next(s for s in app.screen._compositor.render_strips() if "copilot" in s.text and "bob" in s.text)
         under = {part.text.strip(): bool(part.style and part.style.underline) for part in strip if part.text.strip()}
-        assert under["copilot"] and not under[wheel]
+        assert not under[wheel]
         await pilot.press("escape")
+        assert await name(3) == [("co", False, False, white), ("p", False, False, green),     # out of focus, as it
+                                 ("i", False, True, green), ("l", False, False, green),       # was: bold only at
+                                 ("ot", False, False, white)]                                 # the light's heart
         FakePulls.open_["djp3/agent-frolic"][0] = node(                                       # it has answered
             12, "client", author={"login": "djp3"}, title="GraphQL client",
             latestReviews={"nodes": [review("copilot-pull-request-reviewer", "COMMENTED", "2026-11-14T15:30:00Z")]})
