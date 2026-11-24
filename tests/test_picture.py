@@ -138,7 +138,7 @@ def test_an_idle_agent_makes_its_pull_request_more_urgent_and_a_working_one_take
     assert [e.pull.number for e in found] == [15, 16, 9, 20]      # 15 first: an agent sits idle on it
     assert found[0].urgency == "1 agent waiting · quiet 1h"
     assert text(cells(pic, pull(pic, 15))) == ["● you |  | ", "  └ ▷ agent 01 | at prompt | "]
-    assert text(cells(pic, pull(pic, 12))) == ["  you | waiting |   bob", " |  |   └ ⠋ agent 01"]
+    assert text(cells(pic, pull(pic, 12))) == ["  you | waiting |   bob", " |  |   └ ⣾ agent 01"]
     assert progress(pic, pull(pic, 12))[0] == "in progress"       # an agent is at work on it: bob's, reviewing
 
 
@@ -643,7 +643,7 @@ def test_a_working_agent_on_a_teams_request_takes_it_off_the_viewers_hands():
     busy = Agent("bob", "01", "Acme/app", 40, "review", "working", "reading the diff")
     pic = team_picture(agents={("acme/app", 40): [busy]})
     assert not pic.mine(at(pic, 40)) and 40 not in [e.pull.number for e in needs_effort(pic, NOW)]
-    assert text(cells(pic, at(pic, 40))) == ["  dependabot | waiting |   Platform", " |  |   └ ⠋ agent 01"]
+    assert text(cells(pic, at(pic, 40))) == ["  dependabot | waiting |   Platform", " |  |   └ ⣾ agent 01"]
     assert counts(pic, "Acme/app") == (1, 2)
 
 
@@ -773,7 +773,7 @@ def test_copilot_asked_and_not_yet_answered_is_reviewing_and_its_mark_turns():
     pic = picture(nodes=[node(40, "a", author={"login": "djp3"}, reviewRequests=BOT_ASKED)])
     here = pull(pic, 40)
     assert at_work(here, BOT) and not at_work(here, "bob")
-    for spin in (SPIN[0], SPIN[4]):                              # wherever the dots stand
+    for spin in (SPIN[0], SPIN[4]):                              # wherever the wheel stands
         assert reviewers(pic, here, spin) == [([(spin, WARN)], "copilot", "reviewing")]
         assert plain(review_cell(pic, here, True, 40, spin)) == f"{spin} copilot  "
         assert plain(review_cell(pic, here, False, 40, spin)) == spin

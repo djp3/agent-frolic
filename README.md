@@ -199,15 +199,17 @@ The **review** column shows each reviewer's trail, oldest first, then their name
 | ◇ | left comments that are still to resolve |
 | ◆ | left comments, and none is left to resolve |
 | ◔ | has been asked, and has not answered |
-| ⠋ (turning) | is Copilot, asked and not answered yet: it is reviewing now |
+| ⣾ (turning) | is Copilot, asked and not answered yet: it is reviewing now |
 | – | had their review dismissed |
 
 `◇2` at the end of the column counts the comments still to resolve on the pull request.
 
 Copilot sets to work the moment it is asked, so while its review is awaited its mark turns, as
 an agent's does while it works: in this column, before its name where the pull request waits
-on it, on its card at the top, and in the drawer, which says "reviewing". GitHub says only
-that Copilot was asked, not how far along it is: the dots turn until its review arrives.
+on it, on its card at the top, and in the drawer, which says "reviewing". Where the pull
+request waits on it and on its card the wheel is green and a green light runs through its
+name, as for an agent at work. GitHub says only that Copilot was asked, not how far along it
+is: the wheel turns until its review arrives.
 
 The **ci** column is `✓` when the checks pass, `✗` when they fail, `…` while they run, `·`
 when there are none, and `$` when GitHub did not run them because the account could not pay
@@ -288,10 +290,21 @@ it waits on, in fainter ink.
 
 | mark | that agent |
 |------|------------|
-| ⠋ (turning) | is at work |
+| ⣾ (turning, green) | is at work |
+| ⣾ (turning, white) | is idle, and waits on a command it started that is still running: a test run, a watch on the checks |
 | ▷ | is at its prompt: it has asked its human something, or it is idle and the pull request's next move is its human's |
 | · | is idle, and the pull request waits on someone else |
 | ? | cannot be said: the agent-farm on its Mac has gone quiet, or says something this version does not know |
+
+An agent whose wheel turns is the one thing on the board that moves, so it is found at a
+glance: the wheel goes round once a second, and a light runs through the agent's name and its
+state's word, in the wheel's color. The state's word is "working" for the green one and
+"command" for the white.
+
+A command is not work. An agent that waits on one is idle as far as the rest of the board
+goes: its pull request stays on your list when the next move is yours, with the yellow dot,
+and the agent is counted among those that sit idle for it. A command can run for hours, a
+server left up or a watch on something, and it would otherwise read as work for as long.
 
 An agent is tied to its pull request by the name of its session, which says the repository and
 the pull request's number: `<owner>-<repo>-pr-<number>`. An agent on pull request 98 of

@@ -1831,7 +1831,7 @@ async def test_the_teams_are_read_once_the_token_is_accepted_and_reach_the_board
 
 @drive
 async def test_the_teams_a_picture_is_drawn_from_are_not_copied_at_every_draw_and_cannot_be_written_to(isolated):
-    """The board asks for them five times a second. The app hands out the mapping it keeps,
+    """The board asks for them several times a second. The app hands out the mapping it keeps,
     which nothing can change; a read that answers puts another in its place."""
     a_team_request()
     app = main.Frolic()

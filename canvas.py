@@ -6,6 +6,8 @@ whose columns line up across the whole list, rules that cross other rules, and b
 that wash over a row and fade.
 
 `Segments` is a list of (text, style) pairs laid end to end; a style is a Rich style string.
+A style may be a `Lit` one: words a light passes through, when `write` is told where the
+light stands. That is how something still at work is shown to be: see `lit`.
 
 Widths are terminal cells, as Rich and Textual count them: an emoji or a CJK character
 takes two (the second cell holds "", and draws nothing), a mark that joins the letter
@@ -17,6 +19,41 @@ from rich.cells import cell_len, get_character_cell_size
 from rich.text import Text
 
 Segments = list[tuple[str, str]]
+LIGHT_EVERY = 20                 # cells from one light to the next along a line
+LIGHT_REACH = 1.8                # cells either side of where a light stands that take its color
+LIGHT_HEART = 0.8                # and, of those, the ones it makes bold
+
+
+class Lit(str):
+    """The style of words a light passes through: the style they have at rest, which is
+    all it is wherever nobody asks for the light, and `shine`, the color the light gives
+    them as it passes (`lit`)."""
+    shine: str
+
+    def __new__(cls, style: str, shine: str) -> "Lit":
+        made = super().__new__(cls, style)
+        made.shine = shine
+        return made
+
+
+def lit(text: str, style: Lit, x: int, light: float) -> Segments:
+    """`text`, which starts at cell `x`, as the light finds it. `light` is a cell a light
+    stands on, and there is another every LIGHT_EVERY cells either way, so as `light`
+    grows they run through the line from left to right, one after another. A cell within
+    LIGHT_REACH of one has its color, and at its heart is bold; the rest keep the style
+    they have at rest. Words that are bold at rest stay bold in the light."""
+    rest = str(style)
+    near = f"bold {style.shine}" if "bold" in rest.split() else style.shine
+    out: Segments = []
+    for ch in text:
+        far = abs((x - light + LIGHT_EVERY / 2) % LIGHT_EVERY - LIGHT_EVERY / 2)
+        ink = f"bold {style.shine}" if far < LIGHT_HEART else near if far < LIGHT_REACH else rest
+        if out and out[-1][1] == ink:
+            out[-1] = (out[-1][0] + ch, ink)
+        else:
+            out.append((ch, ink))
+        x += get_character_cell_size(ch)
+    return out
 
 
 class Canvas:
@@ -70,15 +107,24 @@ class Canvas:
         return out
 
 
-def write(canvas: Canvas, x: int, y: int, segments: Segments, width: int, style: str = "") -> int:
+def write(canvas: Canvas, x: int, y: int, segments: Segments, width: int, style: str = "",
+          light: float | None = None) -> int:
     """Lay segments end to end from x, cut at `width` cells with an ellipsis. `style`, when
-    given, replaces every segment's own. Returns the cells used."""
+    given, replaces every segment's own. `light`, when given, is where the light stands
+    now: the `Lit` segments are drawn as it finds them (`lit`), after they are cut, so
+    what is cut does not change as the light moves. Returns the cells used."""
     room = width
     for text, own in segments:
         if room <= 0:
             break
         text = cut(text, room)
-        canvas.put(x, y, text, style or own)
+        if light is not None and not style and isinstance(own, Lit):
+            at = x
+            for piece, ink in lit(text, own, x, light):
+                canvas.put(at, y, piece, ink)
+                at += cell_len(piece)
+        else:
+            canvas.put(x, y, text, style or own)
         x += cell_len(text)
         room -= cell_len(text)
     return width - room
