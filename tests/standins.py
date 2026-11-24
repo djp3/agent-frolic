@@ -16,7 +16,7 @@ from textual.widgets import Input
 import main
 from githubapi import GitHubError, Hook, Identity, RepoInfo
 from grange import Farm, GrangeError, Reading, Reported
-from pulls import RepoPulls, parse_pull, stack
+from pulls import PullRead, RepoPulls, parse_pull, stack
 
 TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
 AUTHTOKEN = "2abcDEFghiJKLmnoPQRstuVWXyz_3abcdefghijklmnop"
@@ -134,7 +134,8 @@ class FakeTunnel:
 
 class FakePulls:
     """What is open on GitHub, per repository (lower case), and which repositories were asked
-    for. A read made with a token waits while FakeGitHub.gates holds ("pulls", that token)."""
+    for. A read made with a token waits while FakeGitHub.gates holds ("pulls", that token);
+    a read of one pull request on its own, while it holds ("pull", that token)."""
     open_: dict = {}
     asked: list = []
     broken: dict = {}
@@ -143,6 +144,11 @@ class FakePulls:
     costs: dict = {}              # repository (lower case) -> (what a reading costs, the hourly allowance)
     access: dict = {}             # a token -> what its account may do in every repository ("" unsaid)
     orgs: set = set()             # the repositories (lower case) an organization owns
+    asked_alone: list = []        # (repository, number) of each pull request asked for on its own
+    alone_costs: dict = {}        # repository (lower case) -> what reading one of its pull requests alone costs
+    alone_broken: dict = {}       # repository (lower case) -> why none of them can be read alone
+    more: dict = {}               # repository (lower case) -> how many are open on GitHub beyond the ones
+                                  # in `open_`: more than the app reads (pulls.MOST)
 
     @staticmethod
     def fetch(github, name, now=None, long_lived=None):
@@ -153,9 +159,24 @@ class FakePulls:
         theirs = FakePulls.spelled.get(name.lower(), name)
         pulls = stack([parse_pull(theirs, n) for n in FakePulls.open_.get(name.lower(), [])], "main", long_lived)
         cost, limit = FakePulls.costs.get(name.lower(), (0, 0))
-        return RepoPulls(theirs, "main", pulls, len(pulls), datetime.now(timezone.utc),
+        return RepoPulls(theirs, "main", pulls, len(pulls) + FakePulls.more.get(name.lower(), 0),
+                         datetime.now(timezone.utc),
                          FakePulls.tips.get(name.lower(), ""), access=FakePulls.access.get(github.token, ""),
                          cost=cost, limit=limit, org=name.lower() in FakePulls.orgs)
+
+    @staticmethod
+    def fetch_one(github, name, number):
+        """One pull request on its own: None of it when it is not among the open ones. What
+        comes back is what was open when it was asked for, however long the answer is held."""
+        FakePulls.asked_alone.append((name, number))
+        theirs = FakePulls.spelled.get(name.lower(), name)
+        found = [n for n in FakePulls.open_.get(name.lower(), []) if n["number"] == number]
+        total = len(FakePulls.open_.get(name.lower(), [])) + FakePulls.more.get(name.lower(), 0)
+        FakeGitHub._hold(("pull", github.token))
+        if name.lower() in FakePulls.alone_broken:
+            raise GitHubError(200, "x", FakePulls.alone_broken[name.lower()])
+        return PullRead(theirs, number, parse_pull(theirs, found[0]) if found else None,
+                        FakePulls.alone_costs.get(name.lower(), 0), total)
 
 
 class FakeBrowser:

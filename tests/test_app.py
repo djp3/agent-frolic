@@ -570,7 +570,7 @@ async def test_a_costly_repository_is_read_for_deliveries_only_as_often_as_its_s
         await settle(app, pilot)
         assert FakePulls.asked == ["djp3/agent-frolic"]             # not again a minute later
         gap = 300 * 3600 / (5000 * app.WEBHOOK_SHARE)               # half the allowance: 432 seconds
-        assert app.webhook_gap("djp3/agent-frolic") == gap
+        assert app.seconds_a_point("djp3/agent-frolic") * 300 == pytest.approx(gap)
         now[0] += gap - 60 - 1
         app.tick()
         await settle(app, pilot)
@@ -581,7 +581,588 @@ async def test_a_costly_repository_is_read_for_deliveries_only_as_often_as_its_s
         assert len(FakePulls.asked) == 2                            # its turn
         RepoStore().add("acme/web-console")                         # two repositories share the allowance
         app.store.load()
-        assert app.webhook_gap("djp3/agent-frolic") == 2 * gap
+        assert app.seconds_a_point("djp3/agent-frolic") * 300 == pytest.approx(2 * gap)
+
+
+# ---- a delivery that names a pull request has that one read, on its own -------------------
+
+OURS = "djp3/agent-frolic"
+COPILOT_ASKED = {"nodes": [{"requestedReviewer": {"__typename": "Bot", "login": "copilot-pull-request-reviewer"}}]}
+
+
+def about(number, n=1, event="pull_request", action="edited", repo=OURS):
+    """A delivery that says this pull request changed."""
+    return Delivery(event, f"p-{n}", repo, action,
+                    {"repository": {"id": 7, "full_name": repo}, "pull_request": {"number": number}})
+
+
+def now_on_github(number, **facts):
+    """GitHub now has this of one of our open pull requests."""
+    FakePulls.open_[OURS] = [dict(n, **facts) if n["number"] == number else n for n in FakePulls.open_[OURS]]
+
+
+def held(app):
+    return {pull.number: pull for pull in app.pulls[OURS].pulls}
+
+
+@drive
+async def test_a_delivery_that_names_a_pull_request_has_that_one_read_and_not_the_repository(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.asked.clear()
+        timers, whole = dict(app.read_at), app.pulls[OURS]
+        now_on_github(12, reviewRequests=COPILOT_ASKED)
+        now_on_github(13, title="Changed, and nobody said so")
+        app.delivered(about(12, action="review_requested"))
+        await settle(app, pilot)
+        assert FakePulls.asked == [] and FakePulls.asked_alone == [(OURS, 12)]
+        assert held(app)[12].asked == ["copilot-pull-request-reviewer"]
+        assert held(app)[13].title == "Review state model" and held(app)[13].parent == 12      # as it was held
+        assert app.news[1] == "agent-frolic · #12 copilot asked to review · waits on copilot to review"
+        assert "copilot" in screen(app)                                                        # and the board
+        # It is still the same reading of the repository, with one pull request newer: the
+        # timer that reads the whole of it runs on.
+        assert app.read_at == timers and app.pulls[OURS].at == whole.at
+        app.delivered(about(12, n=2, repo="djp3/hidden-one"))                                  # one not shown:
+        app.delivered(about(12, n=3, event="ping"))                                            # and a ping
+        await settle(app, pilot)
+        assert FakePulls.asked == [] and FakePulls.asked_alone == [(OURS, 12)]
+
+
+@drive
+async def test_what_github_sends_about_a_pull_request_through_the_tunnel_has_that_one_read(isolated):
+    three_repos()
+    keychain.put(keychain.NGROK_AUTHTOKEN, AUTHTOKEN)
+    Settings(webhooks=True, ngrok_domain="frolic.ngrok-free.dev").save()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await to_setup(app, pilot)
+        assert app.tunnel_state == "open"
+        secret = keychain.get(keychain.WEBHOOK_SECRET)
+        FakePulls.asked.clear()
+
+        def post():
+            body = json.dumps({"action": "submitted", "review": {"state": "commented"},
+                               "pull_request": {"number": 13, "title": "Review state model"},
+                               "repository": {"id": 7, "full_name": OURS}}).encode()
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{app.receiver.port}/hook", data=body,
+                headers={"X-GitHub-Event": "pull_request_review", "X-GitHub-Delivery": "d1",
+                         "X-Hub-Signature-256": sign(secret, body)})
+            return urllib.request.urlopen(request, timeout=5).status
+
+        assert await asyncio.to_thread(post) == 204
+        await until(pilot, lambda: FakePulls.asked_alone)
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 13)] and FakePulls.asked == []
+
+
+@drive
+async def test_one_that_closed_leaves_the_board_and_one_just_opened_joins_its_stack(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.asked.clear()
+        FakePulls.open_[OURS] = [n for n in FakePulls.open_[OURS] if n["number"] != 13]        # merged
+        app.delivered(about(13, action="closed"))
+        await settle(app, pilot)
+        assert list(held(app)) == [12] and app.pulls[OURS].total == 1
+        assert "djp3/agent-frolic: 1 open pull request" in [text for _, text, _ in app.lines]
+        FakePulls.open_[OURS].append(node(14, "badges", base="client", title="Ticket badges"))
+        app.delivered(about(14, n=2, action="opened"))              # moments later: it waits for nothing
+        await settle(app, pilot)
+        assert list(held(app)) == [12, 14] and held(app)[14].parent == 12 and held(app)[12].children == [14]
+        assert "Ticket badges" in screen(app) and "Review state model" not in screen(app)
+        assert FakePulls.asked == [] and FakePulls.asked_alone == [(OURS, 13), (OURS, 14)]
+
+
+@drive
+async def test_with_more_open_than_are_held_the_count_is_what_github_says_with_each_one_read(isolated):
+    """One that is not held may have been open all along; one that closed may never have been
+    held. The count does not move with who joins and who leaves what is held."""
+    three_repos()
+    FakePulls.more[OURS] = 398                                      # 400 open: more than the app reads
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.pulls[OURS].total == 400 and list(held(app)) == [12, 13]
+        FakePulls.open_[OURS].append(node(7, "old-one", title="Open all along"))
+        FakePulls.more[OURS] = 397                                  # it was one of the 398: 400 still
+        app.delivered(about(7))
+        await settle(app, pilot)
+        assert sorted(held(app)) == [7, 12, 13] and app.pulls[OURS].total == 400     # held now; no more are open
+        FakePulls.more[OURS] = 396                                  # another, never held, was merged
+        app.delivered(about(999, n=2, action="closed"))
+        await settle(app, pilot)
+        assert sorted(held(app)) == [7, 12, 13] and app.pulls[OURS].total == 399
+        assert FakePulls.asked_alone == [(OURS, 7), (OURS, 999)]
+
+
+@drive
+async def test_a_burst_about_one_pull_request_is_read_once_now_and_once_when_it_is_over(isolated, monkeypatch):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        for n in range(5):                                          # a CI run reporting, one check at a time
+            app.delivered(Delivery("check_run", f"c-{n}", OURS, "completed", {
+                "repository": {"id": 7}, "check_run": {"pull_requests": [{"number": 13, "base": {"repo": {"id": 7}}}]}}))
+            await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 13)]                # one read now; the rest wait their turn
+        now[0] += app.WEBHOOK_SOONEST_S - 1
+        app.tick()
+        await settle(app, pilot)
+        assert len(FakePulls.asked_alone) == 1
+        now[0] += 2
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 13)] * 2            # and are read together
+        now[0] += 60
+        app.tick()
+        await settle(app, pilot)
+        assert len(FakePulls.asked_alone) == 2 and FakePulls.asked.count(OURS) == 1    # only the read at the start
+
+
+@drive
+async def test_each_pull_request_waits_its_own_turn_and_too_many_are_read_as_the_repository(isolated, monkeypatch):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        FakePulls.asked.clear()
+        app.delivered(about(12))
+        await settle(app, pilot)
+        app.delivered(about(13, n=2))                               # another one: it does not wait for 12's turn
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12), (OURS, 13)]
+        for n, number in enumerate((13, 12, 13), 3):                # both again, seconds after they were read
+            app.delivered(about(number, n=n))
+        await settle(app, pilot)
+        assert len(FakePulls.asked_alone) == 2 and app.pull_wanted == {OURS: [13, 12]}
+        now[0] += app.WEBHOOK_SOONEST_S + 1
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone[2:] == [(OURS, 12), (OURS, 13)] and FakePulls.asked == []     # in one go
+        gate = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()
+        app.delivered(about(20, n=20))
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        for number in range(21, 21 + app.ALONE_MOST):               # while that one is read, as many are named
+            app.delivered(about(number, n=number))                  # as are read one by one,
+        assert len(app.pull_wanted[OURS]) == app.ALONE_MOST
+        app.delivered(about(99, n=99))                              # and one more
+        assert app.pull_wanted == {}
+        gate.set()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone[4:] == [(OURS, 20)] and app.pull_wanted == {}
+        assert FakePulls.asked == [OURS]                            # the repository, for all the rest
+
+
+@drive
+async def test_a_pull_request_is_read_on_its_own_as_soon_as_the_ration_covers_it(isolated, monkeypatch):
+    """A read of the whole repository uses the whole ration, and the next waits for it to be
+    whole again. A pull request on its own needs a point of it, back in seconds."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 1}
+    Settings(poll_minutes=60).save()                                # no poll comes due meanwhile
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        assert point == pytest.approx(3600 / 2500)                  # half of 5000 an hour, all this repository's
+        FakePulls.asked.clear()
+        app.delivered(Delivery("push", "d-1", OURS, ""))            # names no pull request: the whole of it
+        await settle(app, pilot)
+        assert FakePulls.asked == [OURS]
+        app.delivered(about(12))                                    # the ration is spent: not yet
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []
+        now[0] += point - 0.1
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []
+        now[0] += 0.2                                               # one point is back
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)]
+        app.delivered(Delivery("push", "d-2", OURS, ""))            # the whole repository again:
+        now[0] += 50 * point - 0.2                                  # its ration would have been whole by now,
+        app.tick()                                                  # but for the point the one on its own took
+        await settle(app, pilot)
+        assert FakePulls.asked == [OURS]
+        now[0] += point + 0.2
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked == [OURS] * 2 and FakePulls.asked_alone == [(OURS, 12)]
+
+
+@drive
+async def test_as_many_of_those_waiting_are_read_as_the_ration_covers_and_the_first_named_first(isolated, monkeypatch):
+    """One waiting is not held up until there is a point for each of them."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client"),
+                              node(13, "review-state", title="Review state model"),
+                              node(14, "badges", title="Ticket badges")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 1}
+    Settings(poll_minutes=60).save()                                # no poll comes due meanwhile
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        app.delivered(Delivery("push", "d-1", OURS, ""))            # the whole of it: the ration is spent
+        await settle(app, pilot)
+        for n, number in enumerate((14, 12, 13, 14), 1):
+            app.delivered(about(number, n=n))
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [] and app.pull_wanted == {OURS: [14, 12, 13]}
+        now[0] += point + 0.1                                       # one point has come: one is read
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 14)] and app.pull_wanted == {OURS: [12, 13]}
+        app.delivered(about(14, n=5))                               # named again, it goes to the back
+        now[0] += 2 * point                                         # two more points: the next two, in one go
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone[1:] == [(OURS, 12), (OURS, 13)] and app.pull_wanted == {OURS: [14]}
+        now[0] += app.WEBHOOK_SOONEST_S
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone[3:] == [(OURS, 14)] and app.pull_wanted == {}
+
+
+@drive
+async def test_what_a_pull_request_cost_beyond_a_point_is_taken_from_the_ration_too(isolated, monkeypatch):
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 3}       # its checks fail, say: more to ask
+    Settings(poll_minutes=60).save()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        app.delivered(about(12))
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)]
+        assert app.ration_now(OURS) == pytest.approx(50 - 3)
+
+
+@drive
+async def test_a_read_of_the_repository_that_a_delivery_asked_for_is_charged_what_it_cost_itself(isolated, monkeypatch):
+    """The ration is charged before the read, with what the read before it cost. When this
+    one costs more (a review grown long, checks that fail: more to ask), the rest is taken
+    once it says so, and when less, the difference comes back. The timer's reads and u's are
+    not rationed, whatever they cost."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 1}
+    Settings(poll_minutes=60).save()                                # no poll comes due meanwhile
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        FakePulls.costs[OURS] = (56, 5000)                          # this time there is more to ask
+        app.delivered(Delivery("push", "d-1", OURS, ""))
+        await settle(app, pilot)
+        assert app.pulls[OURS].cost == 56 and app.hook_aside == {}
+        assert app.ration_now(OURS) == pytest.approx(-6)            # 50 were taken before it, and 6 since
+        app.delivered(about(12))                                    # so one on its own waits for seven
+        now[0] += 7 * point - 0.1                                   # points to come, not for one
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []
+        now[0] += 0.2
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)]
+        now[0] += 60 * point
+        assert app.ration_now(OURS) == 56                           # whole again, and a whole one is 56 now
+        FakePulls.costs[OURS] = (53, 5000)                          # this time there is less
+        app.delivered(Delivery("push", "d-2", OURS, ""))
+        await settle(app, pilot)
+        assert app.ration_now(OURS) == pytest.approx(3)             # 56 taken, 3 back
+        FakePulls.costs[OURS] = (70, 5000)
+        await pilot.press("u")                                      # not one a delivery asked for
+        await settle(app, pilot)
+        assert app.pulls[OURS].cost == 70 and app.ration_now(OURS) == pytest.approx(3)
+
+
+@drive
+async def test_a_read_a_delivery_asked_for_that_fails_keeps_what_was_taken_for_it(isolated, monkeypatch):
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs = {OURS: (50, 5000)}
+    Settings(poll_minutes=60).save()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        a_clock(monkeypatch)
+        FakePulls.broken[OURS] = "GitHub could not be reached."
+        app.delivered(Delivery("push", "d-1", OURS, ""))
+        await settle(app, pilot)
+        assert OURS in app.pull_trouble and app.hook_aside == {}    # it will not say what it cost
+        assert app.ration_now(OURS) == pytest.approx(0)
+        del FakePulls.broken[OURS]
+        FakePulls.costs[OURS] = (70, 5000)
+        await pilot.press("u")                                      # nor does a later read say it for it
+        await settle(app, pilot)
+        assert app.pulls[OURS].cost == 70 and app.ration_now(OURS) == pytest.approx(0)
+
+
+@drive
+async def test_showing_another_repository_puts_nothing_back_into_a_ration_that_was_spent(isolated, monkeypatch):
+    """Each repository's part of the allowance is smaller when one more is shown. What a
+    ration holds is the same points after that as before: one just spent covers no read
+    because of it."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs, FakePulls.alone_costs = {OURS: (50, 5000)}, {OURS: 1}
+    Settings(poll_minutes=60).save()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        app.delivered(Delivery("push", "d-1", OURS, ""))            # the whole of it: the ration is spent
+        await settle(app, pilot)
+        assert app.ration_now(OURS) == pytest.approx(0)
+        RepoStore().add("acme/web-console")                         # one more to share the allowance with
+        app.store.load()
+        assert app.seconds_a_point(OURS) == pytest.approx(2 * point)
+        assert app.ration_now(OURS) == pytest.approx(0)             # it holds what it held,
+        app.delivered(about(12))
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []                          # which covers nothing
+        now[0] += 2 * point - 0.1
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == []
+        now[0] += 0.2                                               # a point has come, at the pace of now
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)]
+
+
+@drive
+async def test_what_came_into_a_ration_before_the_pace_changed_is_counted_at_the_pace_of_then(isolated, monkeypatch):
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    RepoStore().add(OURS, admin=True)
+    FakePulls.open_ = {OURS: [node(12, "client", title="GraphQL client")]}
+    FakePulls.costs = {OURS: (50, 5000)}
+    Settings(poll_minutes=60).save()
+    app = main.Frolic()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        point = app.seconds_a_point(OURS)
+        app.delivered(Delivery("push", "d-1", OURS, ""))            # the ration is spent
+        await settle(app, pilot)
+        now[0] += 10 * point                                        # ten points come, at this pace
+        RepoStore().add("acme/web-console")
+        app.store.load()
+        app.tick()                                                  # the clock counts them, as every second
+        await settle(app, pilot)
+        now[0] += 10 * point                                        # and five more, at half that pace
+        assert app.ration_now(OURS) == pytest.approx(15)
+        now[0] += 3600                                              # never more than a whole one
+        assert app.ration_now(OURS) == 50
+
+
+@drive
+async def test_one_named_while_the_repository_is_being_read_is_read_when_that_ends(isolated):
+    """The read of the whole repository may have begun before it changed."""
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.asked.clear()
+        gate = FakeGitHub.gates[("pulls", TOKEN)] = threading.Event()
+        FakeGitHub.waiting.clear()
+        await pilot.press("u")
+        await until(pilot, lambda: ("pulls", TOKEN) in FakeGitHub.waiting)
+        app.delivered(about(12))
+        await pilot.pause()
+        assert FakePulls.asked_alone == [] and app.pull_wanted == {OURS: [12]}
+        gate.set()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)] and app.pull_wanted == {}
+
+
+@drive
+async def test_one_named_before_the_repository_is_read_comes_with_that_read(isolated, monkeypatch):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        now = a_clock(monkeypatch)
+        app.delivered(about(12))
+        await settle(app, pilot)
+        app.delivered(about(12, n=2))                               # waits: it was read seconds ago
+        await settle(app, pilot)
+        assert app.pull_wanted == {OURS: [12]}
+        await pilot.press("u")                                      # everything is read now, this one too
+        await settle(app, pilot)
+        now[0] += app.WEBHOOK_SOONEST_S + 1
+        app.tick()
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)] and app.pull_wanted == {}
+
+
+@drive
+async def test_a_read_of_the_whole_repository_that_began_later_is_not_undone_by_an_older_one_of_a_pull_request(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        gate = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()   # its answer is slow in coming
+        now_on_github(12, title="As it was when asked")
+        app.delivered(about(12))
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        now_on_github(12, title="As it is now")
+        await pilot.press("u")
+        await until(pilot, lambda: held(app)[12].title == "As it is now")
+        gate.set()
+        await settle(app, pilot)
+        assert held(app)[12].title == "As it is now" and app.pull_reading == {}
+
+
+@drive
+async def test_a_pull_request_that_cannot_be_read_on_its_own_has_the_repository_read_in_its_turn(isolated, monkeypatch):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.asked.clear()
+        FakePulls.alone_broken[OURS] = "GitHub refused the query: no such pull request"
+        now_on_github(12, title="Read with the rest")
+        app.delivered(about(12))
+        await settle(app, pilot)
+        assert FakePulls.asked_alone == [(OURS, 12)] and FakePulls.asked == [OURS]
+        assert held(app)[12].title == "Read with the rest"
+        said = [text for _, text, _ in app.lines]
+        assert "djp3/agent-frolic: #12 was not read on its own: GitHub refused the query: no such pull request" in said
+        assert OURS not in app.pull_trouble                         # the repository itself is in no trouble
+
+
+@drive
+async def test_with_nothing_held_to_put_it_into_the_repository_is_read(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.broken[OURS] = "GitHub could not be reached."
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert OURS in app.pull_trouble
+        FakePulls.asked.clear()
+        del FakePulls.broken[OURS]
+        app.delivered(about(12))                                    # what is held may be long out of date
+        await settle(app, pilot)
+        assert FakePulls.asked == [OURS] and FakePulls.asked_alone == [] and OURS not in app.pull_trouble
+
+
+@drive
+async def test_a_pull_request_read_under_a_name_github_has_changed_has_the_repository_read(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        FakePulls.asked.clear()
+        FakePulls.spelled[OURS] = "djp3/agent-revel"
+        FakePulls.open_["djp3/agent-revel"] = FakePulls.open_[OURS]
+        app.delivered(about(12))
+        await settle(app, pilot)
+        assert FakePulls.asked[0] == OURS                           # the whole of it, and the list takes the name
+        assert app.store.get("djp3/agent-revel") is not None and app.store.get(OURS) is None
+        assert "djp3/agent-revel" in app.pulls and OURS not in app.pulls
+
+
+@drive
+async def test_what_was_read_of_a_pull_request_with_the_token_before_is_not_used(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        gate = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()
+        now_on_github(12, title="Seen with the token before")
+        app.delivered(about(12))
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        app.token_used += 1                                         # another token was taken meanwhile
+        gate.set()
+        await settle(app, pilot)
+        assert held(app)[12].title == "GraphQL client" and app.pull_reading == {}
+
+
+@drive
+async def test_a_repository_removed_while_its_pull_request_is_read_stays_removed(isolated):
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        gate = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()
+        app.delivered(about(12))
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        app.store.remove(OURS)
+        app.forget_repo(OURS)
+        gate.set()
+        await settle(app, pilot)
+        assert OURS not in app.pulls and app.pull_reading == {} and app.pull_wanted == {}
+        assert not any(OURS in held for held in (app.ration_held, app.pull_read_at, app.pulls_began))
+
+
+@drive
+async def test_an_answer_from_before_a_repository_left_and_came_back_takes_nothing_of_what_is_read_now(isolated):
+    """Removed and added again while one of its pull requests was being read, with another
+    being read by the time that answer comes: the answer is from before, and what is kept of
+    the read under way is not its to take."""
+    three_repos()
+    app = main.Frolic()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        answered, taken = [], app.pulls_read
+
+        def pulls_read(name, run, read, *rest):
+            taken(name, run, read, *rest)
+            answered.append([one.number for one in read])
+
+        app.pulls_read = pulls_read
+        slow = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()   # its answer is slow in coming
+        now_on_github(12, title="As it was before")
+        app.delivered(about(12))
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        app.store.remove(OURS)                                      # it leaves the list,
+        app.forget_repo(OURS)
+        now_on_github(12, title="As it is now")
+        app.store.add(OURS, admin=True)                             # and is back, and read
+        app.update_pulls([OURS], "added")
+        await until(pilot, lambda: OURS in app.pulls)
+        gate = FakeGitHub.gates[("pull", TOKEN)] = threading.Event()
+        FakeGitHub.waiting.clear()
+        now_on_github(13, title="Newer still")
+        app.delivered(about(13, n=2))                               # now another of them is being read
+        await until(pilot, lambda: ("pull", TOKEN) in FakeGitHub.waiting)
+        slow.set()                                                  # and the answer from before comes first
+        await until(pilot, lambda: answered == [[12]])
+        assert held(app)[12].title == "As it is now"                # nothing is put back as it was,
+        assert OURS in app.pull_reading                             # and #13 is still being read
+        gate.set()
+        await settle(app, pilot)
+        assert answered == [[12], [13]] and app.pull_reading == {}
+        assert held(app)[13].title == "Newer still"                 # its answer is the one used
 
 
 async def answer_yes(pilot, key):

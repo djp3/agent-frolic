@@ -92,7 +92,8 @@ from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
 from grange import Grange, GrangeError, Reading, Reported, Watch
 from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, located_in, quiet, review_marks
-from pulls import PullRequest, RepoPulls, fetch_pulls, is_team, span, stack, team_of, team_slug
+from pulls import (PullRead, PullRequest, RepoPulls, fetch_pull, fetch_pulls, is_team, span, stack, team_of,
+                   team_slug, with_pulls)
 from repos import Repo, RepoStore, parse
 from settings import Settings
 from theme import (AXIS, CRIT, DIVIDER, GOOD, INK, INK2, MUTED, PLANE, RAISED, SURFACE,
@@ -331,6 +332,10 @@ class Frolic(App):
     TOKEN_RETRY_S = 30            # how often a stored token GitHub could not be reached for is checked again
     WEBHOOK_SHARE = 0.5           # of GitHub's hourly allowance, the most that reads webhooks ask for may use
     WEBHOOK_SOONEST_S = 10.0      # the least time between two of them for one repository: a burst is read once
+    ALONE_MOST = 10               # pull requests of one repository read on their own in one go: with more
+                                  # than this named and waiting, the repository is read instead
+    ALONE_POINTS = 1              # what reading one on its own is taken to cost, until GitHub says
+    RATION_SLACK = 1e-6           # of a point: a ration this near to enough is enough (sums of fractions)
     SAFETY_POLLS = 6              # a repository GitHub sends webhooks for is read on its timer this many times
                                   # less often than one it does not: every 30 minutes at the usual five
     ASLEEP_S = 60.0               # the clock ticks every second: this long between two ticks, and the Mac slept
@@ -416,6 +421,22 @@ class Frolic(App):
                                                   # things is this record, never the words above
         self.hook_read_at: dict[str, float] = {}  # repository (lower case) -> when a delivery last had it read
         self.hook_read_due: dict[str, float] = {}  # repository (lower case) -> when its waiting read may start
+        self.hook_aside: dict[str, tuple[int, float]] = {}   # repository (lower case) -> what was taken from
+                                                  # its ration for the read a delivery asked for, which has
+                                                  # not said yet what it cost: the points, and when
+        self.ration_held: dict[str, tuple[float, float, float]] = {}   # repository (lower case) -> what its
+                                                  # ration for the reads deliveries ask for held when last
+                                                  # counted: the points, when that was, and the seconds a
+                                                  # point took to come then (`ration_now`). None: it is whole
+        self.pull_wanted: dict[str, list[int]] = {}  # repository (lower case) -> its pull requests that
+                                                     # deliveries named, waiting to be read on their own:
+                                                     # the one named first comes first
+        self.pull_reading: dict[str, tuple[int, float, list[int]]] = {}   # repository (lower case) -> the
+                                                  # ones being read on their own now: which read that is
+                                                  # (`pull_run` when it began), when it began, and they
+        self.pull_run = 0                         # counts those reads: each answer says which it is for
+        self.pull_read_at: dict[str, dict[int, float]] = {}   # repository (lower case) -> when each of its
+                                                  # pull requests read on its own in the last seconds began
         self.repo_note: dict[str, str] = {}       # repository (lower case) -> trouble seeing it
         self.lines: deque[tuple[float, str, str]] = deque(maxlen=300)
         # the pull requests
@@ -427,6 +448,8 @@ class Frolic(App):
         self.read_at: dict[str, float] = {}       # repository (lower case) -> when a read of it last ended,
                                                   # whether it worked or not: its timer runs from then
         self.read_began: dict[str, float] = {}    # repository (lower case) -> when its last read was asked for
+        self.pulls_began: dict[str, float] = {}   # repository (lower case) -> when the read began that brought
+                                                  # what `pulls` holds of it
         self.teams_tried_at = 0.0                 # when the viewer's teams were last asked for
         self.ticked_at = 0.0                      # when the clock last ticked
         self.tunnel_checked_at = 0.0              # when the tunnel was last checked to lead back here (or
@@ -517,6 +540,10 @@ class Frolic(App):
             if time.time() >= at:
                 del self.hook_read_due[key]
                 self.read_for_webhook(key)
+        for key in list(self.ration_held):
+            self.ration_now(key)                           # counted on, at the pace of the second gone by
+        for key in list(self.pull_wanted):
+            self.start_pull_reads(key)
         self.draw()
 
     # ---- each repository's timer -----------------------------------------------------------
@@ -1068,7 +1095,9 @@ class Frolic(App):
         """Drop all that is kept about a repository under this name (lower case): it has
         left the list, or goes by another name now. Its timers too, or they would outlive it."""
         for held in (self.pulls, self.pull_trouble, self.hook_state, self.hooked, self.repo_note, self.read_at,
-                     self.read_began, self.hook_read_at, self.hook_read_due):
+                     self.read_began, self.hook_read_at, self.hook_read_due, self.hook_aside, self.ration_held,
+                     self.pull_wanted,
+                     self.pull_reading, self.pull_read_at, self.pulls_began):
             held.pop(key, None)
 
     def take_name(self, asked: str, name: str, private: bool, admin: bool,
@@ -1355,33 +1384,251 @@ class Frolic(App):
         now = time.time()
         self.happened(now, f"webhook · {delivery.said}")
         if repo is not None and repo.shown and delivery.event != "ping":
-            self.read_for_webhook(repo.name)                # something changed there: read it again
+            named = delivery.pulls
+            if named:
+                self.read_pulls_for_webhook(repo.name, named)   # it says which changed: read those
+            else:
+                self.read_for_webhook(repo.name)            # something changed there: read it again
         self.draw()
 
     def read_for_webhook(self, name: str) -> None:
         """Read a repository again because a delivery says it changed: now, or when its turn
-        comes (webhook_gap). Deliveries while it waits are read with it."""
+        comes. That is WEBHOOK_SOONEST_S after the last such read at the soonest, and when
+        its ration is whole (`ration_covers_at`). Deliveries while it waits are read with it.
+
+        A whole ration is taken for it: what the last read of the repository cost, since
+        this one has not said yet what it costs. When it has, the ration is put right
+        (`settle`)."""
         key = name.lower()
         repo = self.store.get(name)
         if repo is None or not repo.shown or key in self.hook_read_due:
             return
-        soonest = self.hook_read_at.get(key, 0.0) + self.webhook_gap(key)
-        if time.time() < soonest:
+        whole = self.whole_ration(key)
+        soonest = max(self.hook_read_at.get(key, 0.0) + self.WEBHOOK_SOONEST_S, self.ration_covers_at(key, whole))
+        now = time.time()
+        if now < soonest:
             self.hook_read_due[key] = soonest               # tick starts it
             return
-        self.hook_read_at[key] = time.time()
+        self.hook_read_at[key] = now
+        self.spend(key, whole)
+        self.hook_aside[key] = (whole, now)
         self.update_pulls([repo.name], "webhook")
 
-    def webhook_gap(self, key: str) -> float:
-        """How long a repository waits between reads that deliveries ask for. A busy CI run
-        sends a stream of them, and each read costs what GitHub said the last one did: they
-        may use WEBHOOK_SHARE of its hourly allowance at most, split among the shown
-        repositories, so polls and the user's other tools have the rest."""
+    # ---- the ration: what the reads that deliveries ask for may cost -----------------------
+    # A busy CI run sends a stream of deliveries, and every read costs some of GitHub's hourly
+    # allowance. The reads they ask for may use WEBHOOK_SHARE of it at most, split evenly
+    # among the shown repositories, so polls and the user's other tools have the rest.
+    #
+    # Each repository's part comes to it steadily (`seconds_a_point`) and is saved up as far
+    # as one read of the whole repository costs: that much is its ration, whole. A read takes
+    # out what it costs. The whole repository is read when the ration is whole, so with no
+    # other reads it is read as often as its part allows and no oftener. A pull request on
+    # its own costs a point or so and is read as soon as the ration covers that: seconds
+    # after anything, where the whole repository waits minutes. While pull requests go on
+    # being read on their own, the read of the whole repository waits for them to stop. It
+    # is for what no delivery names, and the repository's timer reads it in any case.
+    #
+    # What a ration holds is kept in points (`ration_held`), not as the time it will be whole
+    # again. The pace the points come at changes when a repository is shown or hidden, and
+    # what a whole ration is changes with what the repository costs to read. Points already
+    # there are the same points after either; a time would be worth more of them, or fewer.
+    def seconds_a_point(self, key: str) -> float:
+        """How long a repository's ration takes to win back one of GitHub's points. 0 while
+        GitHub has not said what the hour's allowance is: then nothing is rationed."""
         got = self.pulls.get(key)
-        if got is None or got.cost <= 0 or got.limit <= 0:
-            return self.WEBHOOK_SOONEST_S
-        points_an_hour = got.limit * self.WEBHOOK_SHARE / max(1, len(self.store.shown()))
-        return max(self.WEBHOOK_SOONEST_S, got.cost * 3600 / points_an_hour)
+        if got is None or got.limit <= 0:
+            return 0.0
+        return 3600 / (got.limit * self.WEBHOOK_SHARE / max(1, len(self.store.shown())))
+
+    def whole_ration(self, key: str) -> int:
+        """What a repository's ration holds when it is whole: what the last read of the whole
+        repository cost."""
+        got = self.pulls.get(key)
+        return got.cost if got is not None else 0
+
+    def ration_now(self, key: str) -> float:
+        """What a repository's ration holds now, in GitHub's points: whole until something is
+        taken from it, and never more than whole.
+
+        It is counted on from when it was last counted, at the pace the points were coming
+        at then, and the pace of now is kept for the next time. Every use counts it, and the
+        clock does every second. So after the pace changes (another repository is shown, and
+        each one's part is smaller), at most a second is counted at the pace of before."""
+        whole = float(self.whole_ration(key))
+        held = self.ration_held.get(key)
+        if held is None:
+            return whole
+        points, at, pace = held
+        now = time.time()
+        # Nothing was rationed then (GitHub had not said the allowance): it is whole.
+        points = min(whole, points + max(0.0, now - at) / pace) if pace > 0 else whole
+        self.ration_held[key] = (points, now, self.seconds_a_point(key))
+        return points
+
+    def ration_covers_at(self, key: str, points: int) -> float:
+        """When a repository's ration holds `points`, enough for a read that costs them. A
+        read that costs more than a whole ration waits for a whole one. 0, long ago, when it
+        holds them now or nothing is rationed."""
+        pace = self.seconds_a_point(key)
+        if pace <= 0:
+            return 0.0
+        short = min(points, self.whole_ration(key)) - self.ration_now(key)
+        return time.time() + short * pace if short > self.RATION_SLACK else 0.0
+
+    def spend(self, key: str, points: int) -> None:
+        """Take what a read costs out of a repository's ration. Fewer than no points puts
+        them back: a read cost less than was taken for it. Nothing, while nothing is
+        rationed. A ration may be left owing, when a read cost more than it held: it holds
+        nothing until that is made up."""
+        pace = self.seconds_a_point(key)
+        if points and pace > 0:
+            self.ration_held[key] = (self.ration_now(key) - points, time.time(), pace)
+
+    def settle(self, key: str, began: float, cost: int | None = None) -> None:
+        """A read of the whole repository, begun at `began`, is over. If it is the one a
+        delivery asked for, its ration was charged before it began with what the read before
+        had cost. Now it says what it cost itself, and the ration takes or gets back the
+        difference. One that failed, or whose answer is not used, says nothing (`cost` is
+        None): what was taken stays taken.
+
+        A read begun before the delivery asked is not that read. The delivery came while it
+        was under way, and the one it asked for follows (`update_pulls`). The timer's reads
+        and u's are not rationed: they settle nothing."""
+        aside = self.hook_aside.get(key)
+        if aside is None or began < aside[1]:
+            return
+        del self.hook_aside[key]
+        if cost is not None:
+            self.spend(key, cost - aside[0])
+
+    # ---- the pull requests a delivery names, each read on its own --------------------------
+    def read_pulls_for_webhook(self, name: str, numbers: list[int]) -> None:
+        """Read these pull requests of a repository again, each on its own, because a
+        delivery says they changed: now, or when their turn comes (`start_pull_reads`)."""
+        key = name.lower()
+        wanted = self.pull_wanted.setdefault(key, [])
+        wanted += [number for number in numbers if number not in wanted]    # one waiting keeps its place
+        self.start_pull_reads(key)
+
+    def start_pull_reads(self, key: str) -> None:
+        """Start reading the pull requests of a repository that deliveries named, if it is
+        their turn. Asked when one is named, when a read of the repository ends, and by the
+        clock.
+
+        They wait while the whole repository is being read: that read may have begun before
+        they changed, so they are read when it ends. They wait while others of the
+        repository are being read on their own. Each waits until WEBHOOK_SOONEST_S after it
+        was last read so (a burst about one pull request is read once, and once more when
+        it is over), while the others go ahead.
+
+        Of those whose turn it is, as many are read as the repository's ration covers now
+        (`ration_now`), the ones named first. The rest keep their place and are read as the
+        points for them come: one waiting is not held up until there is enough for all.
+
+        With nothing to put them into (the repository has not been read, or its last read
+        failed), or with more than ALONE_MOST of them waiting, the repository is read
+        instead, in its turn."""
+        wanted = self.pull_wanted.get(key)
+        if not wanted:
+            return
+        repo = self.store.get(key)
+        if repo is None or not repo.shown or self.token_state != "ok":
+            del self.pull_wanted[key]
+            return
+        if key not in self.pulls or key in self.pull_trouble or len(wanted) > self.ALONE_MOST:
+            del self.pull_wanted[key]
+            return self.read_for_webhook(repo.name)
+        if key in self.fetching or key in self.pull_reading:
+            return
+        now = time.time()
+        lately = self.pull_read_at.setdefault(key, {})
+        for number in [number for number, at in lately.items() if now >= at + self.WEBHOOK_SOONEST_S]:
+            del lately[number]
+        ready = [number for number in wanted if number not in lately]
+        if self.seconds_a_point(key) > 0:
+            covered = int((self.ration_now(key) + self.RATION_SLACK) // self.ALONE_POINTS)
+            ready = ready[:max(0, covered)]                 # none, when the ration holds no point or owes
+        if not ready:
+            return                                          # tick starts them
+        numbers = sorted(ready)
+        points = len(numbers) * self.ALONE_POINTS
+        self.pull_wanted[key] = [number for number in wanted if number not in ready]
+        if not self.pull_wanted[key]:
+            del self.pull_wanted[key]
+        self.pull_run += 1
+        self.pull_reading[key] = (self.pull_run, now, numbers)
+        lately.update(dict.fromkeys(numbers, now))
+        self.spend(key, points)
+        log.info("reading (webhook): %s %s", repo.name, ", ".join(f"#{number}" for number in numbers))
+        self.fetch_alone(repo.name, numbers, self.pull_run, self.token_used)
+
+    @work(thread=True, group="pulls")
+    def fetch_alone(self, name: str, numbers: list[int], run: int, token_used: int) -> None:
+        """Read these pull requests of a repository, each on its own, with the token in use
+        (`token_used` says which that is, as in `fetch`). What was read comes back together,
+        with why the first that could not be read could not, and with `run`: which read of
+        the repository's pull requests this is (`pulls_read`)."""
+        read: list[PullRead] = []
+        trouble = ""
+        try:
+            github = GitHub(keychain.get(keychain.GITHUB_TOKEN) or "")
+            for number in numbers:
+                if self.closing.is_set():
+                    return
+                read.append(fetch_pull(github, name, number))
+        except keychain.KeychainError as e:
+            trouble = f"The Keychain could not be read: {e}"
+        except GitHubError as e:
+            trouble = str(e)
+        except Exception as e:                               # a reply shaped in a way nobody expected
+            log.exception("reading pull requests of %s on their own failed", name)
+            trouble = f"could not read GitHub's reply: {type(e).__name__}"
+        self.later(self.pulls_read, name, run, read, trouble, token_used)
+
+    def pulls_read(self, name: str, run: int, read: list[PullRead], trouble: str, token_used: int) -> None:
+        """Pull requests that deliveries named have been read on their own. Each takes its
+        place in what is held of the repository (`with_pulls`), and the board and the ticker
+        say what changed, as after any read. The repository's timer is not started again:
+        it times the reads of the whole repository, which catch what no delivery told of.
+
+        What was read is not used when the repository has left the list meanwhile, or the
+        token has changed (`read_before`), or a read of the whole repository that began
+        later has been taken in already: that one is the newer. When GitHub spells the
+        repository's name otherwise, the repository is read, and the list takes the name
+        from that. So it is, in its turn, when one of them could not be read.
+
+        `run` says which read this answers. A repository that left the list and came back
+        while its pull requests were read may have others being read by now: what is kept of
+        that read is theirs, and this answer, from before it left, takes none of it."""
+        key = name.lower()
+        reading = self.pull_reading.get(key)
+        if reading is None or reading[0] != run:            # it left the list while they were read
+            return
+        del self.pull_reading[key]
+        _, began, numbers = reading
+        repo, held = self.store.get(name), self.pulls.get(key)
+        usable = repo is not None and held is not None and self.token_state != "none"
+        if usable and not self.read_before(name, token_used):
+            # What it cost beyond what was set aside for it when it began.
+            self.spend(key, max(0, sum(one.cost for one in read) - len(numbers) * self.ALONE_POINTS))
+            if any(one.repo != repo.name for one in read):
+                self.update_pulls([repo.name], "renamed")
+            elif self.pulls_began.get(key, 0.0) > began:
+                log.info("%s: a reading of the whole repository is newer than these of its pull requests", name)
+            elif read:
+                # How many are open now came with each: the last one read knows best.
+                said = [one.total for one in read if one.total is not None]
+                got = with_pulls(held, {one.number: one.pull for one in read}, repo.long_lived,
+                                 said[-1] if said else None)
+                self.pulls[key] = got
+                if len(held.pulls) != len(got.pulls):
+                    self.say(f"{repo.name}: {got.total} open pull request{'' if got.total == 1 else 's'}")
+                self.note_changes(repo.name, held, got)
+            if trouble:
+                self.say(f"{repo.name}: #{numbers[len(read)]} was not read on its own: {trouble}")
+                self.read_for_webhook(repo.name)
+        self.start_pull_reads(key)                           # the ones named while these were read
+        self.draw()
 
     def sync_hooks(self, names: list[str]) -> None:
         """Make sure each named repository has our webhook, pointing at the tunnel that is
@@ -1503,6 +1750,7 @@ class Frolic(App):
             else:
                 self.fetching.add(key)
                 self.read_began[key] = time.time()
+                self.pull_wanted.pop(key, None)              # this read brings them with the rest
                 repo = self.store.get(name)                  # its long-lived branches, as they are now
                 wanted.append((name, None if repo is None or repo.long_lived is None else list(repo.long_lived)))
         if wanted:
@@ -1554,6 +1802,8 @@ class Frolic(App):
         key = repo.name.lower()
         before = self.pulls.get(key)
         self.pulls[key] = got
+        self.pulls_began[key] = self.read_began.get(name.lower(), 0.0)
+        self.settle(key, self.pulls_began[key], got.cost)
         self.pull_trouble.pop(key, None)
         if before is None or len(before.pulls) != len(got.pulls):
             self.say(f"{repo.name}: {got.total} open pull request{'' if got.total == 1 else 's'}")
@@ -1620,6 +1870,7 @@ class Frolic(App):
         A repository that left the list while it was read gets no timer at all."""
         key = name.lower()
         self.fetching.discard(key)
+        self.settle(key, self.read_began.get(key, 0.0))      # if it has not said what it cost, it will not
         again = key in self.stale                            # it changed while we were reading it
         self.stale.discard(key)
         name = now_named or name
@@ -1627,6 +1878,7 @@ class Frolic(App):
             self.read_at[name.lower()] = time.time()         # not for one removed, or a token forgotten,
             if again:                                        # while it was read: there is nothing to time
                 self.update_pulls([name], "again")
+            self.start_pull_reads(name.lower())              # the ones named while it was read
         self.draw()
 
     def open_pull(self, pull: PullRequest, ref: str) -> None:

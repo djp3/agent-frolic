@@ -9,7 +9,7 @@ import urllib.request
 
 import pytest
 
-from webhook import Receiver, sign, verify
+from webhook import ABOUT_ONE, MOST_NAMED, Delivery, Receiver, sign, verify
 
 SECRET = "0123456789abcdef" * 4
 
@@ -221,3 +221,69 @@ def test_only_so_many_are_heard_at_once_and_the_rest_are_closed_without_a_thread
         assert closed(conn)                                      # these time out and free their slots
     assert post(impatient, {"action": "opened"}) == 204          # and GitHub is heard again
     assert len(impatient.got) == 1
+
+
+# ---- which pull requests a delivery is about ---------------------------------------------
+
+def about(event, **payload):
+    """A delivery about djp3/agent-frolic, which GitHub knows as repository 7."""
+    return Delivery(event, "d-1", "djp3/agent-frolic", "",
+                    {"repository": {"id": 7, "full_name": "djp3/agent-frolic"}, **payload})
+
+
+@pytest.mark.parametrize("event", ABOUT_ONE)
+def test_a_delivery_about_a_pull_request_names_it(event):
+    assert about(event, pull_request={"number": 13, "title": "Agents on the board"}).pulls == [13]
+
+
+def test_a_comment_names_its_pull_request_and_one_on_an_issue_names_none():
+    assert about("issue_comment", issue={"number": 13, "pull_request": {"url": "https://example.net"}}).pulls == [13]
+    assert about("issue_comment", issue={"number": 13}).pulls == []
+
+
+def test_a_check_names_the_pull_requests_into_this_repository_that_it_ran_for():
+    here = {"number": 13, "base": {"ref": "develop", "repo": {"id": 7}}}
+    upstream = {"number": 2, "base": {"ref": "main", "repo": {"id": 99}}}      # a branch here, sent to another
+    assert about("check_run", check_run={"pull_requests": [here, upstream, dict(here, number=11)]}).pulls == [11, 13]
+    assert about("check_suite", check_suite={"pull_requests": [here, here]}).pulls == [13]
+    assert about("check_run", check_run={"pull_requests": []}).pulls == []    # for a fork's, GitHub lists none
+    assert about("check_run", check_suite={"pull_requests": [here]}).pulls == []     # the other event's place
+    many = [dict(here, number=n) for n in range(1, MOST_NAMED + 2)]
+    assert about("check_suite", check_suite={"pull_requests": many[:MOST_NAMED]}).pulls == list(range(1, MOST_NAMED + 1))
+    assert about("check_suite", check_suite={"pull_requests": many}).pulls == []     # about the repository
+
+
+@pytest.mark.parametrize("event", ["push", "create", "delete", "status", "ping", "unknown"])
+def test_what_is_about_no_pull_request_in_particular_names_none(event):
+    assert about(event, ref="refs/heads/develop", pull_request={"number": 13}, issue={"number": 13}).pulls == []
+
+
+@pytest.mark.parametrize("named", [
+    None, "13", [13], {}, {"number": "13"}, {"number": True}, {"number": 13.0}, {"number": 0}, {"number": -4},
+    {"number": 2 ** 31}])
+def test_a_pull_request_not_named_as_github_names_one_is_not_taken_for_one(named):
+    assert Delivery("pull_request", "d-1", "djp3/agent-frolic", "", {"pull_request": named}).pulls == []
+    issue = dict(named, pull_request={}) if isinstance(named, dict) else named
+    assert Delivery("issue_comment", "d-1", "djp3/agent-frolic", "", {"issue": issue}).pulls == []
+    assert Delivery("pull_request", "d-1", "djp3/agent-frolic", "").pulls == []          # a payload of nothing
+
+
+@pytest.mark.parametrize("payload", [
+    {"check_run": "tests"}, {"check_run": {}}, {"check_run": {"pull_requests": "13"}},
+    {"check_run": {"pull_requests": [None, 13, "13", {"number": 13}, {"number": 13, "base": "develop"},
+                                     {"number": 13, "base": {"repo": {"id": "7"}}}]}}])
+def test_a_check_not_shaped_as_github_shapes_one_names_none(payload):
+    assert about("check_run", **payload).pulls == []
+    there = {"number": 13, "base": {"repo": {"id": 7}}}
+    for repository in (None, {}, {"id": "7"}, {"id": 0}, {"id": True}):          # nor when "here" is not known
+        assert Delivery("check_run", "d-1", "djp3/agent-frolic", "",
+                        {"repository": repository, "check_run": {"pull_requests": [there]}}).pulls == []
+    assert Delivery("pull_request", "d-1", "djp3/agent-frolic", "", payload="not a payload").pulls == []
+
+
+def test_what_a_delivery_names_is_read_from_the_body_github_signed(receiver):
+    body = {"action": "review_requested", "number": 13, "pull_request": {"number": 13},
+            "repository": {"id": 7, "full_name": "djp3/agent-frolic"}}
+    assert post(receiver, body) == 204
+    (delivery,) = receiver.got
+    assert (delivery.said, delivery.pulls) == ("pull_request review_requested · djp3/agent-frolic", [13])

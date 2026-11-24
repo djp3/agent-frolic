@@ -53,7 +53,9 @@ def stand_ins(monkeypatch):
     FakeTunnel.made, FakeTunnel.gate = [], None
     FakePulls.open_, FakePulls.asked, FakePulls.broken, FakePulls.tips, FakePulls.spelled = {}, [], {}, {}, {}
     FakePulls.costs, FakePulls.access, FakePulls.orgs = {}, {}, set()
+    FakePulls.asked_alone, FakePulls.alone_costs, FakePulls.alone_broken, FakePulls.more = [], {}, {}, {}
     monkeypatch.setattr(main, "fetch_pulls", FakePulls.fetch)
+    monkeypatch.setattr(main, "fetch_pull", FakePulls.fetch_one)
     monkeypatch.setattr(main, "GitHub", FakeGitHub)
     monkeypatch.setattr(main, "Tunnel", FakeTunnel)
     monkeypatch.setattr(main, "wait_reachable", lambda url, nonce, **how: True)

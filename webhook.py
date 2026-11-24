@@ -44,6 +44,9 @@ HEALTH_PATH = "/health"
 MAX_BODY = 25 * 1024 * 1024       # GitHub caps a payload at 25 MB
 REMEMBERED = 2000                 # delivery ids kept, to drop a delivery sent twice
 CHUNK = 64 * 1024                 # a body is read this much at a time, against its deadline
+# The events that are about one pull request, named under "pull_request" in the payload.
+ABOUT_ONE = ("pull_request", "pull_request_review", "pull_request_review_comment", "pull_request_review_thread")
+MOST_NAMED = 10                   # a check that names more pull requests than this names none: see `pulls`
 
 
 def sign(secret: str, body: bytes) -> str:
@@ -73,6 +76,52 @@ class Delivery:
         """One line for a log: "pull_request opened · owner/name"."""
         what = f"{self.event} {self.action}".strip()
         return f"{what} · {self.repo}" if self.repo else what
+
+    @property
+    def pulls(self) -> list[int]:
+        """The numbers of the pull requests of `repo` this delivery is about, lowest first.
+        None when it is about none in particular (a push, a branch made or deleted, a
+        commit's status, a comment on an issue), and none when the payload is not shaped as
+        GitHub shapes it: then all that is known is that the repository changed.
+
+        A check lists the open pull requests whose head is the commit or the branch it ran
+        on, and those may be another repository's (a fork's branch, sent upstream): their
+        numbers count there, not here, so only the ones into this repository are taken. A
+        check that lists more than MOST_NAMED is about the repository, not about them."""
+        payload = self.payload if isinstance(self.payload, dict) else {}
+        if self.event in ABOUT_ONE:
+            found = [_number(payload.get("pull_request"))]
+        elif self.event == "issue_comment":
+            issue = payload.get("issue")
+            found = [_number(issue)] if isinstance(issue, dict) and isinstance(issue.get("pull_request"), dict) else []
+        elif self.event in ("check_run", "check_suite"):
+            check, here = payload.get(self.event), _id(payload.get("repository"))
+            listed = check.get("pull_requests") if isinstance(check, dict) else None
+            if not here or not isinstance(listed, list) or len(listed) > MOST_NAMED:
+                return []
+            found = [_number(pull) for pull in listed if _into(pull) == here]
+        else:
+            found = []
+        return sorted({number for number in found if number})
+
+
+def _number(thing: object) -> int:
+    """The number GitHub gives a pull request, 0 when `thing` holds none. GraphQL takes
+    nothing past 32 bits, and a number is never that large."""
+    number = thing.get("number") if isinstance(thing, dict) else None
+    return number if isinstance(number, int) and not isinstance(number, bool) and 0 < number < 2 ** 31 else 0
+
+
+def _id(thing: object) -> int:
+    """GitHub's id of a repository as a payload holds it, 0 when `thing` holds none."""
+    found = thing.get("id") if isinstance(thing, dict) else None
+    return found if isinstance(found, int) and not isinstance(found, bool) and found > 0 else 0
+
+
+def _into(pull: object) -> int:
+    """The id of the repository a pull request listed by a check goes into, 0 when unsaid."""
+    base = pull.get("base") if isinstance(pull, dict) else None
+    return _id(base.get("repo")) if isinstance(base, dict) else 0
 
 
 class Receiver:
