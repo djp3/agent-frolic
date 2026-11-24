@@ -11,14 +11,18 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     (grange.py), each as three words: who runs it, its name, and what it is doing. Which
     pull request it is on is in its name alone: the repository and the pull request's
     number, "acme-web-pr-98" for pull request 98 of acme/web (`said`). What the pull
-    request's branch and title say plays no part. An agent that names no pull request on
-    the board is on none of them, and is not drawn; nor is one whose name fits two, which
-    are not guessed between. `astray` says why, for a name that tried.
+    request's branch and title say plays no part. An agent whose name fits two is on
+    neither, since they are not guessed between; one that names no repository on the
+    list is not drawn. `astray` says why, for a name that tried.
   • AN AGENT WITH NO PULL REQUEST YET says the repository alone, as a word of its own:
     "acme-web reflow fix" (`early`). It is drawn on a line of its own under that
     repository, and kept with the other agents under the pull request number 0, which no
     pull request has. Idle, it is at its prompt: there is nobody else for it to wait on.
     The viewer's own, at its prompt, is something only they can get moving (`asking`).
+  • AN AGENT NAMED FOR A PULL REQUEST THAT IS NOT OPEN, one still to be opened or one
+    merged or closed since, is drawn the same way: its name is read as if it said the
+    repository alone, once that repository has been read (`early`, `Agent.named`). It
+    moves onto the pull request when a reading has it.
   • WHAT AN AGENT IS DOING is the farm's word, turned into one of four (`Agent.state`). An
     idle one is "at its prompt" when its pull request waits on the human who runs it, and
     "waiting" when it waits on someone else: the farm cannot tell those apart, and only
@@ -99,13 +103,15 @@ class Agent:
     operator: str                 # the login of the human it runs under
     serial: str                   # "01": counts sessions on one pull request
     repo: str
-    number: int                   # the pull request it is on; 0 while it has none yet (`early`)
+    number: int                   # the pull request it is on; 0 while it is on none (`early`)
     role: str                     # "author": works on it for its author; "review": reviews it
     state: str                    # "working" | "at its prompt" | "waiting" | "unknown"
     note: str = ""                # what it is doing, in its human's words: what its name goes on to say
     ident: str = ""               # what tells it from its human's other agents here, from one report to
                                   # the next: its session's name. Its serial is only its place among them
     command: bool = False         # idle, and a command it started still runs: its wheel turns, in white
+    named: int = 0                # on none, the pull request its name says all the same: that one is
+                                  # not open, and the agent is drawn as one that has none yet
 
     @property
     def name(self) -> str:
@@ -122,7 +128,8 @@ class Agent:
 
     @property
     def early(self) -> bool:
-        """It has no pull request yet: it is at work in its repository, on a line of its own."""
+        """It is on no pull request: it is at work in its repository, on a line of its own.
+        It has none yet, or the one its name says is not open (`named`)."""
         return self.number == 0
 
     @property
@@ -197,7 +204,8 @@ class Report(Protocol):
 # repository as GitHub names it with its "/" written "-", in either case, and the number
 # padded or not ("acme-web-pr-0098"). It is a word of the name, or the start of one: the
 # name's first, or one that follows a space. See `said`. An agent that has no pull request
-# yet says the repository alone, as a whole word: "acme-web reflow fix". See `early`.
+# yet says the repository alone, as a whole word: "acme-web reflow fix". One whose name says
+# a pull request that is not open is read as if it said the repository alone. See `early`.
 _WORD = re.compile(r"\S+")
 _NUMBERED = re.compile(r"-pr-0*([0-9]+)(?![0-9])", re.IGNORECASE)
 # The farm's words for what an agent is doing. One that is not here is "unknown": the farm
@@ -327,40 +335,77 @@ def _spelled(repos: Iterable[str]) -> dict[str, list[str]]:
     return out
 
 
-def _at_work_in(name: str, spelled: Mapping[str, list[str]]) -> tuple[list[str], int]:
-    """The repositories an agent's name says it is at work in with no pull request yet, and
-    where in the name that word ends: the first word of the name that is, whole, a
-    repository as a name writes it ("acme-web"). None for a name that has no such word,
-    and none for one that says a pull request (`said`), which is read that way alone."""
-    if not said(name):
+def _at_work_in(name: str, spelled: Mapping[str, list[str]],
+                pulls: Mapping[str, RepoPulls] | None = None, named: Named | None = None) -> tuple[list[str], int, int]:
+    """The repositories an agent's name says it is at work in while it is on no pull
+    request, where in the name what says so ends, and the pull request it names all the
+    same (0 for none). No repository, for a name that says none of this.
+
+    A name that says no pull request (`said`) says its repository with its first word
+    that is, whole, a repository as a name writes it ("acme-web").
+
+    A name that says a pull request ("acme-web-pr-98") says the repository before
+    "-pr-", when that pull request is not open there: still to be opened, or merged or
+    closed since. That is known from the readings alone. `pulls` is what has been read,
+    by repository in lower case, and `named` its pull requests by how a name says them
+    (`by_name`). A name that fits one of those is on it, or is a tie between two
+    (`fits`): it is not at work with none. And while a repository the name could mean
+    has not been read, nothing is said of it: that one may have the pull request, for
+    all that is known. Without the readings no such name says anything here."""
+    readings = said(name)
+    if not readings:
         for word in _WORD.finditer(name):
             repos = spelled.get(word[0].lower())
             if repos:
-                return repos, word.end()
-    return [], 0
+                return repos, word.end(), 0
+        return [], 0, 0
+    if pulls is None or named is None or fits(name, named):
+        return [], 0, 0
+    meant = [(repo, read) for read in readings for repo in spelled.get(read.repo, [])]
+    if not meant or any(repo.lower() not in pulls for repo, _ in meant):
+        return [], 0, 0
+    return [repo for repo, _ in meant], meant[0][1].end, meant[0][1].number
 
 
-def early(reported: Iterable[Report], names: Iterable[str],
-          listed: Iterable[str] = ()) -> list[tuple[Report, str, int]]:
-    """Each reported agent that has no pull request yet and says which of the shown
+class Early(NamedTuple):
+    """A reported agent that is on no pull request, and where it is at work."""
+    one: Report
+    repo: str                     # the repository, as the list spells it
+    end: int                      # where in its name what says so ends: the rest is its human's own words
+    named: int = 0                # the pull request its name says, which is not open; 0 when it says none
+
+
+def early(reported: Iterable[Report], names: Iterable[str], listed: Iterable[str] = (),
+          pulls: Mapping[str, RepoPulls] | None = None) -> list[Early]:
+    """Each reported agent that is on no pull request and says which of the shown
     repositories it is at work in: with that repository, as the list spells it, and where
-    in its name the word that says so ends, in the order reported.
+    in its name what says so ends, in the order reported.
 
-    The name has the repository as a word of its own, "<owner>-<repo>", in either case:
-    "acme-web reflow fix" is at work in acme/web, and "acme-web-reflow-fix" is not, since
-    where the repository's name ends in that cannot be told without a guess. `names` are
-    the repositories shown and `listed` every repository on the user's list. An agent is
-    put only in one that is shown, and never in one of two written alike, shown or not:
-    as for a pull request, hiding one of them does not say which was meant. One whose
-    session has ended is nowhere."""
+    One that has no pull request yet has the repository as a word of its own,
+    "<owner>-<repo>", in either case: "acme-web reflow fix" is at work in acme/web, and
+    "acme-web-reflow-fix" is not, since where the repository's name ends in that cannot
+    be told without a guess.
+
+    One whose name says a pull request that is not open ("acme-web-pr-98", and acme/web
+    has no pull request 98 open) is at work in that repository just the same, with the
+    number it names (`Early.named`): the pull request may be still to open, or merged
+    since, and the agent is there either way. This is asked of `pulls`, what has been
+    read, and only of a repository that has been read (`_at_work_in`); without `pulls`
+    there are none of these.
+
+    `names` are the repositories shown and `listed` every repository on the user's list.
+    An agent is put only in one that is shown, and never in one of two written alike,
+    shown or not: as for a pull request, hiding one of them does not say which was meant.
+    One whose session has ended is nowhere."""
     names = list(names)
     shown = {name.lower() for name in names}
     spelled = _spelled([*listed, *names])
+    named = by_name(pull for got in pulls.values() for pull in got.pulls) if pulls is not None else None
     out = []
     for one in reported:
-        repos, end = ([], 0) if one.state in GONE else _at_work_in(one.name, spelled)
+        repos, end, number = ([], 0, 0) if one.state in GONE else _at_work_in(one.name, spelled, pulls, named)
         if len(repos) == 1 and repos[0].lower() in shown:
-            out.append((one, repos[0], end))
+            out.append(Early(one, repos[0], end, number))
     return out
 
 
@@ -374,51 +419,46 @@ class Astray(NamedTuple):
 
 def astray(reported: Iterable[Report], names: Iterable[str], pulls: Mapping[str, RepoPulls],
            listed: Iterable[str] = ()) -> list[Astray]:
-    """Each reported agent whose name has "-pr-<number>" in it and that is on no pull
-    request, with why, in the order reported: what the setup lists, so that a name that
-    was mistyped does not simply go missing. It goes by `said` and `fits`, as `located`
-    does. `names` are the repositories shown, `pulls` what has been read, and `listed`
-    every repository on the user's list, shown or hidden.
+    """Each reported agent whose name has "-pr-<number>" in it and that is drawn nowhere,
+    with why, in the order reported: what the setup lists, so that a name that was
+    mistyped does not simply go missing. It goes by `said` and `fits`, as `located` does.
+    `names` are the repositories shown, `pulls` what has been read, and `listed` every
+    repository on the user's list, shown or hidden.
 
-    And each one that has no pull request yet whose name fits two repositories written
-    alike (`early`), one of them at least shown: it is drawn in neither.
+    And each one on no pull request whose name fits two repositories written alike
+    (`early`), one of them at least shown: it is drawn in neither.
 
-    Not here: an agent whose session has ended, one on a pull request of a hidden
-    repository (it is hidden with it), and one that names a repository not read yet,
-    which may have that pull request for all that is known."""
+    Not here: an agent whose session has ended; one on a pull request of a hidden
+    repository (it is hidden with it); one that names a pull request that is not open in
+    a repository on the list, which is drawn in that repository as one with none
+    (`early`), or hidden with it; and one that names a repository not read yet, which may
+    have that pull request for all that is known."""
     names = list(names)
     shown = {name.lower() for name in names}
     named = by_name(pull for got in pulls.values() for pull in got.pulls)
     every: dict[str, str] = {}                               # every repository known, by its name in lower case
     for name in [*listed, *names, *(got.repo for got in pulls.values())]:
         every.setdefault(name.lower(), name)
-    whole: dict[str, list[str]] = {}                         # by how a name writes it: "acme-web"
-    bare: dict[str, list[str]] = {}                          # and by its name without its owner: "web"
+    bare: dict[str, list[str]] = {}                          # by its name without its owner: "web"
     for low, name in every.items():
-        whole.setdefault(written(low), []).append(name)
         bare.setdefault(low.rpartition("/")[2], []).append(name)
-    spelled = _spelled(every.values())
+    spelled = _spelled(every.values())                       # and by how a name writes it: "acme-web"
     out = []
     for one in reported:
-        read = () if one.state in GONE else said(one.name)
-        if not read:
-            repos = [] if one.state in GONE else _at_work_in(one.name, spelled)[0]
-            if len(repos) > 1 and any(repo.lower() in shown for repo in repos):
-                out.append(Astray(one, "fits " + " and ".join(repos), "repositories"))
+        if one.state in GONE:
             continue
+        read = said(one.name)
         there = fits(one.name, named)
         if len(there) > 1 and any(pull.repo.lower() in shown for pull in there):
             out.append(Astray(one, "fits " + " and ".join(f"{pull.repo} #{pull.number}" for pull in there),
                               "pull requests"))
         if there:                                            # a tie, or one it is on, shown or hidden
             continue
-        meant = [(name, r.number) for r in read for name in whole.get(r.repo, [])]
-        if meant:                                            # a repository on the list, with no such pull request
-            gone = [f"{name} has no open pull request {number}" for name, number in meant
-                    if name.lower() in shown and name.lower() in pulls]
-            if len(gone) == len(meant):                      # each of them is shown and has been read
-                out.append(Astray(one, " · ".join(gone)))
-            continue
+        repos = _at_work_in(one.name, spelled, pulls, named)[0]
+        if len(repos) > 1 and any(repo.lower() in shown for repo in repos):
+            out.append(Astray(one, "fits " + " and ".join(repos), "repositories"))
+        if not read or any(spelled.get(r.repo) for r in read):
+            continue                                         # it says no pull request, or a repository on the list
         whose = [f"{written(name)}-pr-{r.number}" for r in read for name in bare.get(r.repo, [])]
         out.append(Astray(one, "say whose repository: " + " or ".join(whose) if whose
                           else "names no repository on your list"))
@@ -447,15 +487,17 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
     Two sessions with one name cannot be told apart: they are numbered by what they are
     doing, so nothing moves on screen when they trade.
 
-    The agents that have no pull request yet (`early`) are here too, each under its
+    The agents that are on no pull request (`early`) are here too, each under its
     repository and the number 0, which no pull request has: numbered among the agents the
-    same human has there with none, and kept and found as the others are."""
-    crews: dict[tuple[Key, str], list[tuple[Report, PullRequest | None, str, str]]] = {}
+    same human has there on none, and kept and found as the others are. One of them whose
+    name says a pull request that is not open has that number as its `named`."""
+    crews: dict[tuple[Key, str], list[tuple[Report, PullRequest | None, str, str, int]]] = {}
     for one, pull in located_in(reported, picture.names, picture.pulls):
         crews.setdefault((key_of(pull), one.owner.lower()), []).append(
-            (one, pull, pull.repo, words(one.name, pull)))
-    for one, repo, end in early(reported, picture.names, picture.known()):
-        crews.setdefault(((repo.lower(), 0), one.owner.lower()), []).append((one, None, repo, _rest(one.name, end)))
+            (one, pull, pull.repo, words(one.name, pull), 0))
+    for one, repo, end, named in early(reported, picture.names, picture.known(), picture.pulls):
+        crews.setdefault(((repo.lower(), 0), one.owner.lower()), []).append(
+            (one, None, repo, _rest(one.name, end), named))
     out: dict[Key, list[Agent]] = {}
     for (key, owner), crew in crews.items():
         crew.sort(key=lambda seat: (seat[0].name, seat[0].state))
@@ -475,15 +517,15 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
                 given[ident] = next(free)
         if numbers is not None:
             numbers[(key, owner)] = given
-        for ident, (one, pull, repo, note) in zip(idents, crew):
-            if pull is None:                                 # no pull request yet: it works for its human
+        for ident, (one, pull, repo, note, named) in zip(idents, crew):
+            if pull is None:                                 # on no pull request: it works for its human
                 number, role, state = 0, "author", doing_alone(one)
             else:
                 number, role = pull.number, "author" if one.owner.lower() == pull.author.lower() else "review"
                 state = doing(picture, one, pull, role)
             # A farm gone quiet said "shell" some time ago: whether the command still runs is not known.
             out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", repo, number, role, state,
-                                                 note, ident, one.state in COMMAND and not one.stale))
+                                                 note, ident, one.state in COMMAND and not one.stale, named))
     if numbers is not None:
         for gone in [crew for crew in numbers if crew not in crews]:
             del numbers[gone]
@@ -520,7 +562,7 @@ def doing(picture: "Picture", one: Report, pull: PullRequest, role: str) -> str:
 
 
 def doing_alone(one: Report) -> str:
-    """The state of an agent that has no pull request yet, from the farm's word for it. It
+    """The state of an agent that is on no pull request, from the farm's word for it. It
     has nobody but its human to wait on: idle, it is at its prompt, as one that asked them
     something is."""
     if one.stale:
@@ -528,6 +570,19 @@ def doing_alone(one: Report) -> str:
     if one.state in AT_WORK:
         return "working"
     return "at its prompt" if one.state in ASKING | IDLE else "unknown"
+
+
+def on_none(picture: "Picture", agent: Agent) -> str:
+    """What is said of an agent that is on no pull request, where its line ends: that it
+    has none yet, or, when its name says one, that that one is not open ("#98 is not
+    open"). A repository with more open than are read (pulls.MOST) may have it open all
+    the same, past the ones shown: of that one it is said only that it is not among them."""
+    if not agent.named:
+        return "no pull request yet"
+    got = picture.pulls.get(agent.repo.lower())
+    if got is not None and got.total > len(got.pulls):
+        return f"#{agent.named} is not among those shown"
+    return f"#{agent.named} is not open"
 
 
 # ---- the picture -----------------------------------------------------------------------
@@ -584,7 +639,7 @@ class Picture:
         return [*self.listed, *self.names, *(got.repo for got in self.pulls.values())]
 
     def early(self, repo: str) -> list[Agent]:
-        """The agents at work in this repository that have no pull request yet."""
+        """The agents at work in this repository that are on no pull request."""
         return self.agents.get((repo.lower(), 0), [])
 
     def read(self) -> list[RepoPulls]:
@@ -715,7 +770,7 @@ class Row:
     sha: str = ""                 # commit: the short hash
     total: int | None = None      # repo: how many pull requests are open there, None while it is unread
     listed: int = 0               # repo: how many of them the list holds (the most recent, past the most read)
-    agent: Agent | None = None    # agent: one at work in the repository that has no pull request yet
+    agent: Agent | None = None    # agent: one at work in the repository that is on no pull request
 
 
 def tree(picture: Picture) -> list[Row]:
@@ -736,8 +791,8 @@ def tree(picture: Picture) -> list[Row]:
     One with nothing open gets none: its own row carries how many are open (`total`, 0
     here), which the board writes on it, and a line more would only make the list longer.
 
-    Each agent at work in a repository with no pull request yet has a row of its own under
-    the repository's, before its branches: it stands on none of them yet."""
+    Each agent at work in a repository that is on no pull request has a row of its own
+    under the repository's, before its branches: it stands on none of them."""
     rows: list[Row] = []
     for name in picture.names:
         low = name.lower()
@@ -1171,7 +1226,7 @@ def _needs_effort(picture: Picture, now: datetime) -> list[Effort]:
 
 
 def asking(picture: Picture) -> list[Agent]:
-    """The viewer's own agents that have no pull request yet and are at their prompt, in the
+    """The viewer's own agents that are on no pull request and are at their prompt, in the
     order of the list. Each is something only the viewer can get moving, as a pull request
     that waits on them is: it is counted as theirs, and said where what needs effort is.
     It is not one of `needs_effort`'s, which are pull requests, each with where it stands."""
@@ -1282,7 +1337,7 @@ def in_focus(picture: Picture, pull: PullRequest, focus: Focus) -> bool:
 
 
 def agent_in_focus(agent: Agent, focus: Focus) -> bool:
-    """Whether an agent that has no pull request yet belongs to what is in focus: everyone,
+    """Whether an agent that is on no pull request belongs to what is in focus: everyone,
     its human with their agents, or itself. The human alone is their pull requests."""
     if focus.kind == "agent":
         return agent.key == focus.agent

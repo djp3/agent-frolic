@@ -42,9 +42,10 @@ Top to bottom:
     An agent at work in a repository with no pull request yet has a line of its own under
     the repository's: its human, what it is doing, and what its name goes on to say. It is
     not a pull request, so the arrows pass it by and the drawer has nothing to say of it.
+    So has one named for a pull request that is not open, and its line says which.
   • THE BAND. What needs effort, most urgent first, and a drawer for the selected pull
     request: owner and waits on first, then GitHub's facts, the name that puts an agent
-    on it, and its address. The viewer's own agents that have no pull request yet and are
+    on it, and its address. The viewer's own agents that are on no pull request and are
     at their prompt come before the pull requests that need effort.
   • THE TICKER. The last thing that happened: a webhook delivery, or what changed when
     GitHub was read again. A row that changed washes pale for a moment. A word about what
@@ -90,8 +91,8 @@ from canvas import Canvas, Lit, Segments, cut, lit, plain, seg_len, wash, write
 from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
                      Person, Picture, Row, agent_in_focus, agent_name, agent_state, asking, at_work, cells, counts,
                      focuses, human_cell, humans, in_focus, inks, key_of, labels,
-                     age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, progress, quiet,
-                     review_cell, reviewers, reviewing, said_of, silence, tree)
+                     age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, on_none,
+                     progress, quiet, review_cell, reviewers, reviewing, said_of, silence, tree)
 from pulls import PullRequest, span
 from theme import (AGE, AXIS, CRIT, DIVIDER, GOOD, INK, INK2, KEY, LIGHT_AT_WORK, MUTED, PLANE, RAISED, SURFACE,
                    WAITING, WARN, darker)
@@ -1058,7 +1059,7 @@ class Board(Screen):
         canvas.put(X_TREE + 4, y, cut(row.label, width - X_TREE - 5), INK if trouble else MUTED)
 
     def draw_agent(self, canvas: Canvas, y: int, line: Line, width: int) -> None:
-        """An agent at work in a repository with no pull request yet, on a line of its own
+        """An agent at work in a repository and on no pull request, on a line of its own
         under the repository's. Where a pull request has its owner and its state: the human
         who runs it, and what it is doing. Where a pull request has its number and title:
         the agent, and what its name goes on to say. The yellow dot is on its human when it
@@ -1079,7 +1080,7 @@ class Board(Screen):
                     (agent.name, f"bold {INK}" if yours else INK2)]
         if agent.note:
             said += [("  ", ""), (agent.note, INK2)]
-        x, end = X_TREE + 2, "no pull request yet"
+        x, end = X_TREE + 2, on_none(pic, agent)               # that it has none yet, or which one is not open
         room = width - 1 - x
         if room - seg_len(said) >= len(end) + 2:               # said when there is room after the agent's own words
             canvas.put(width - 1 - len(end), y, end, MUTED)
@@ -1170,7 +1171,7 @@ class Board(Screen):
             canvas.put(width - len(key_text) + 2, 0, "yours to fix", MUTED)
             canvas.put(width - 23, 0, "○ waits on someone else", MUTED)
         self.effort_rows = []
-        # The viewer's own agents that have no pull request yet and are at their prompt come
+        # The viewer's own agents that are on no pull request and are at their prompt come
         # first: an agent sits idle for want of them, which is what puts a pull request first too.
         entries: list[Agent | Effort] = [*asking(self.pic), *self.efforts]
         if not entries:
@@ -1191,7 +1192,7 @@ class Board(Screen):
         now = time.monotonic()
         for y, (e, ref) in enumerate(zip(entries[:shown], refs), start=1):
             if isinstance(e, Agent):                   # no pull request to go to: n and a click pass it by
-                urgency = "no pull request yet"
+                urgency = on_none(self.pic, e)
                 x_urgency = width - len(urgency)
                 canvas.put(0, y, "●", WAITING)
                 canvas.put(2, y, ref, f"bold {INK}")
