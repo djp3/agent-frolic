@@ -54,7 +54,8 @@ Top to bottom:
 
 Keys: up/down pick a pull request, and so does a click on one, on any of its lines in the
 list or on its line where it needs effort; o (or O) opens its page on GitHub in the browser,
-c (or C) copies the name that puts an agent on it, page
+c copies the name that puts an agent on it and C the command that names a Claude Code session
+so ("/rename " and the name), to paste at the agent's prompt, page
 up/down and home/end scroll the list (as the wheel does), n the next thing needing effort,
 tab / shift+tab step the focus (everyone, a human with their agents, the human alone, each
 agent; not f, which on the setup screen asks to forget the token),
@@ -112,14 +113,15 @@ BAND = 11                        # rows of the bottom band: the list and the dra
 X_OWNER, X_STATE, X_WAITS, X_RULE, X_TREE = 1, 18, 33, 51, 53
 # The hints at the foot of the screen, each a key and a word or two for what it does. They
 # are drawn as agent-farm's footer is: the key lit, its words beside it (`hint_text`).
-HINTS = [("↑↓", "Pull request"), ("o", "Open on GitHub"), ("c", "Copy agent name"), ("PgUp PgDn", "Scroll"),
-         ("n", "Next needing effort"),
+HINTS = [("↑↓", "Pull request"), ("o", "Open on GitHub"), ("c", "Copy agent name"), ("C", "Copy as /rename"),
+         ("PgUp PgDn", "Scroll"), ("n", "Next needing effort"),
          ("tab", "Focus"), ("esc", "Everyone"), ("m", "Repos"), ("u", "Update"), ("d", "Drawer"),
          ("s", "Setup"), ("q", "Quit")]
 # When the window is too narrow for every hint, these are left out, the first first, by their
 # keys. The way back to the setup and out of the board always stay: they are what a lost
-# user looks for. (c goes early for a key so new: the drawer says it too, beside the name.)
-LEFT_OUT_FIRST = ["d", "u", "m", "esc", "c", "tab", "PgUp PgDn", "n", "o", "↑↓"]
+# user looks for. (c goes early for a key so new: the drawer says it too, beside the name.
+# C goes first of all: it is c's other way, and the drawer says both.)
+LEFT_OUT_FIRST = ["C", "d", "u", "m", "esc", "c", "tab", "PgUp PgDn", "n", "o", "↑↓"]
 HINT_GAP = "  "
 THUMB, TRACK_LINE = "┃", "│"     # the list's scroll bar: its thumb, and the track it runs in
 
@@ -477,7 +479,7 @@ class Board(Screen):
         Binding("home", "edge(-1)", show=False), Binding("end", "edge(1)", show=False),
         Binding("n", "next_effort", show=False),
         Binding("o", "open_pull", show=False), Binding("O", "open_pull", show=False),
-        Binding("c", "copy_name", show=False), Binding("C", "copy_name", show=False),
+        Binding("c", "copy_name", show=False), Binding("C", "copy_name(True)", show=False),
         # tab, not f: on the setup screen f asks to forget the GitHub token, and a key that
         # is harmless on one screen should not be the destructive one on the other
         Binding("tab", "focus(1)", show=False), Binding("shift+tab", "focus(-1)", show=False),
@@ -1337,7 +1339,7 @@ class Board(Screen):
         # What an agent's session is named to be shown on this pull request: nobody should
         # have to work it out, or type it.
         out.append("name     ", style=MUTED).append(agent_name(pull), style=INK2)
-        out.append(" · c copies it for an agent\n", style=MUTED)
+        out.append(" · c copies it, C as /rename\n", style=MUTED)
         return out.append(pull.page, style=MUTED)              # the address o opens
 
     def ticker(self) -> Text:
@@ -1484,12 +1486,14 @@ class Board(Screen):
             return
         self.app.open_pull(pull, self.ref(pull))
 
-    def action_copy_name(self) -> None:
-        """Copy the name that puts an agent on the selected pull request, to name a session with."""
+    def action_copy_name(self, command: bool = False) -> None:
+        """Copy the name that puts an agent on the selected pull request, to name a session
+        with (c); or, with `command`, the command that names a Claude Code session so, to
+        paste at the agent's prompt (C)."""
         pull = self.pic.find(self.sel)
         if self.menu_open or pull is None:
             return
-        self.app.copy_name(pull, self.ref(pull))
+        self.app.copy_name(pull, self.ref(pull), command)
 
     def action_focus(self, step: int) -> None:
         """Step the focus: everyone, a human with all their agents, the human alone, each agent."""

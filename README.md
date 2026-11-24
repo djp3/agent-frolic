@@ -44,7 +44,8 @@ Below the list, everything that waits on a person or a team, the longest quiet f
 what it holds up. An agent of yours that has no pull request yet and is at its prompt comes
 before them. Beside it, a drawer for the selected pull request: owner, who it waits on,
 each reviewer's latest word, comments to resolve, checks, branch, the name that puts an agent
-on it, and its address. `o` opens it on GitHub, and `c` copies the name.
+on it, and its address. `o` opens it on GitHub, `c` copies the name, and `C` copies it as a
+`/rename` command for Claude Code.
 
 ### Changes arrive as they happen
 
@@ -318,7 +319,9 @@ the pull request's number: `<owner>-<repo>-pr-<number>`. An agent on pull reques
 - What the pull request's branch and title say plays no part.
 
 Nobody has to work the name out. The drawer shows it for the selected pull request, and `c`
-copies it, ready to paste where the session is named.
+copies it, ready to paste where the session is named. `C` copies the whole command that
+names a Claude Code session so, `/rename acme-web-pr-98`: paste it at the agent's prompt and
+press return.
 
 **Before there is a pull request**, an agent's name says the repository alone, as a word of
 its own: `acme-web`, or `acme-web reflow fix`. (Run on with more, as in `acme-web-reflow-fix`,
@@ -331,7 +334,8 @@ it is not read: where the repository's name ends could only be guessed.)
 - It is not a pull request, so the arrows and `n` pass it by.
 - When you open a pull request in a repository where you have such an agent, the ticker gives
   the name to rename its session to, and the board selects the new pull request, so `c` copies
-  that name. The agent moves onto the pull request once its session has the new name.
+  that name and `C` the `/rename` command with it. The agent moves onto the pull request once
+  its session has the new name.
 
 An agent whose name says no pull request is not drawn, and nothing is wrong with it. One whose
 name has `-pr-<number>` in it and still leads to no pull request on your board is listed in
