@@ -14,6 +14,11 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     request's branch and title say plays no part. An agent that names no pull request on
     the board is on none of them, and is not drawn; nor is one whose name fits two, which
     are not guessed between. `astray` says why, for a name that tried.
+  • AN AGENT WITH NO PULL REQUEST YET says the repository alone, as a word of its own:
+    "acme-web reflow fix" (`early`). It is drawn on a line of its own under that
+    repository, and kept with the other agents under the pull request number 0, which no
+    pull request has. Idle, it is at its prompt: there is nobody else for it to wait on.
+    The viewer's own, at its prompt, is something only they can get moving (`asking`).
   • WHAT AN AGENT IS DOING is the farm's word, turned into one of four (`Agent.state`). An
     idle one is "at its prompt" when its pull request waits on the human who runs it, and
     "waiting" when it waits on someone else: the farm cannot tell those apart, and only
@@ -84,7 +89,7 @@ class Agent:
     operator: str                 # the login of the human it runs under
     serial: str                   # "01": counts sessions on one pull request
     repo: str
-    number: int                   # the pull request it is on
+    number: int                   # the pull request it is on; 0 while it has none yet (`early`)
     role: str                     # "author": works on it for its author; "review": reviews it
     state: str                    # "working" | "at its prompt" | "waiting" | "unknown"
     note: str = ""                # what it is doing, in its human's words: what its name goes on to say
@@ -103,6 +108,11 @@ class Agent:
     def idle(self) -> bool:
         """Known to be doing nothing. One whose state is unknown is neither this nor working."""
         return self.state in ("at its prompt", "waiting")
+
+    @property
+    def early(self) -> bool:
+        """It has no pull request yet: it is at work in its repository, on a line of its own."""
+        return self.number == 0
 
     @property
     def key(self) -> tuple[str, str, int, str]:
@@ -152,7 +162,8 @@ class Report(Protocol):
 # An agent's name says which pull request it is on: "<owner>-<repo>-pr-<number>", the
 # repository as GitHub names it with its "/" written "-", in either case, and the number
 # padded or not ("acme-web-pr-0098"). It is a word of the name, or the start of one: the
-# name's first, or one that follows a space. See `said`.
+# name's first, or one that follows a space. See `said`. An agent that has no pull request
+# yet says the repository alone, as a whole word: "acme-web reflow fix". See `early`.
 _WORD = re.compile(r"\S+")
 _NUMBERED = re.compile(r"-pr-0*([0-9]+)(?![0-9])", re.IGNORECASE)
 # The farm's words for what an agent is doing. One that is not here is "unknown": the farm
@@ -227,7 +238,12 @@ def words(name: str, pull: PullRequest | None = None) -> str:
     led there; without one, what follows the first."""
     read = [one for one in said(name)
             if pull is None or (one.repo, one.number) == (written(pull.repo).lower(), pull.number)]
-    rest = name[read[0].end:].strip(" -_:·") if read else ""
+    return _rest(name, read[0].end) if read else ""
+
+
+def _rest(name: str, end: int) -> str:
+    """A name from `end` on, without what joins it to what came before."""
+    rest = name[end:].strip(" -_:·")
     return "" if rest.isdigit() else rest
 
 
@@ -264,11 +280,61 @@ def located_in(reported: Iterable[Report], names: Iterable[str],
     return located(reported, shown, [pull for got in pulls.values() for pull in got.pulls])
 
 
+def _spelled(repos: Iterable[str]) -> dict[str, list[str]]:
+    """Repositories by how a name writes them, in lower case: "acme-web" -> ["acme/web"].
+    Each once, as it is first spelled. Two under one key are two a name cannot tell apart."""
+    out: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    for repo in repos:
+        if repo.lower() not in seen:
+            seen.add(repo.lower())
+            out.setdefault(written(repo).lower(), []).append(repo)
+    return out
+
+
+def _at_work_in(name: str, spelled: Mapping[str, list[str]]) -> tuple[list[str], int]:
+    """The repositories an agent's name says it is at work in with no pull request yet, and
+    where in the name that word ends: the first word of the name that is, whole, a
+    repository as a name writes it ("acme-web"). None for a name that has no such word,
+    and none for one that says a pull request (`said`), which is read that way alone."""
+    if not said(name):
+        for word in _WORD.finditer(name):
+            repos = spelled.get(word[0].lower())
+            if repos:
+                return repos, word.end()
+    return [], 0
+
+
+def early(reported: Iterable[Report], names: Iterable[str],
+          listed: Iterable[str] = ()) -> list[tuple[Report, str, int]]:
+    """Each reported agent that has no pull request yet and says which of the shown
+    repositories it is at work in: with that repository, as the list spells it, and where
+    in its name the word that says so ends, in the order reported.
+
+    The name has the repository as a word of its own, "<owner>-<repo>", in either case:
+    "acme-web reflow fix" is at work in acme/web, and "acme-web-reflow-fix" is not, since
+    where the repository's name ends in that cannot be told without a guess. `names` are
+    the repositories shown and `listed` every repository on the user's list. An agent is
+    put only in one that is shown, and never in one of two written alike, shown or not:
+    as for a pull request, hiding one of them does not say which was meant. One whose
+    session has ended is nowhere."""
+    names = list(names)
+    shown = {name.lower() for name in names}
+    spelled = _spelled([*listed, *names])
+    out = []
+    for one in reported:
+        repos, end = ([], 0) if one.state in GONE else _at_work_in(one.name, spelled)
+        if len(repos) == 1 and repos[0].lower() in shown:
+            out.append((one, repos[0], end))
+    return out
+
+
 class Astray(NamedTuple):
-    """A reported agent whose name tries to say a pull request, and that is on none."""
+    """A reported agent whose name tries to say where it is, and that is drawn nowhere."""
     one: Report
     why: str                      # in plain words, to follow the agent's name
-    tie: bool = False             # its name fits more than one pull request, and none is guessed
+    tie: str = ""                 # what its name fits two of, when it does and none is guessed:
+                                  # "pull requests" or "repositories"
 
 
 def astray(reported: Iterable[Report], names: Iterable[str], pulls: Mapping[str, RepoPulls],
@@ -278,6 +344,9 @@ def astray(reported: Iterable[Report], names: Iterable[str], pulls: Mapping[str,
     was mistyped does not simply go missing. It goes by `said` and `fits`, as `located`
     does. `names` are the repositories shown, `pulls` what has been read, and `listed`
     every repository on the user's list, shown or hidden.
+
+    And each one that has no pull request yet whose name fits two repositories written
+    alike (`early`), one of them at least shown: it is drawn in neither.
 
     Not here: an agent whose session has ended, one on a pull request of a hidden
     repository (it is hidden with it), and one that names a repository not read yet,
@@ -293,14 +362,19 @@ def astray(reported: Iterable[Report], names: Iterable[str], pulls: Mapping[str,
     for low, name in every.items():
         whole.setdefault(written(low), []).append(name)
         bare.setdefault(low.rpartition("/")[2], []).append(name)
+    spelled = _spelled(every.values())
     out = []
     for one in reported:
         read = () if one.state in GONE else said(one.name)
         if not read:
+            repos = [] if one.state in GONE else _at_work_in(one.name, spelled)[0]
+            if len(repos) > 1 and any(repo.lower() in shown for repo in repos):
+                out.append(Astray(one, "fits " + " and ".join(repos), "repositories"))
             continue
         there = fits(one.name, named)
         if len(there) > 1 and any(pull.repo.lower() in shown for pull in there):
-            out.append(Astray(one, "fits " + " and ".join(f"{pull.repo} #{pull.number}" for pull in there), True))
+            out.append(Astray(one, "fits " + " and ".join(f"{pull.repo} #{pull.number}" for pull in there),
+                              "pull requests"))
         if there:                                            # a tie, or one it is on, shown or hidden
             continue
         meant = [(name, r.number) for r in read for name in whole.get(r.repo, [])]
@@ -336,16 +410,23 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
     picture frees every number itself.) Without it they are numbered by name, afresh each time.
 
     Two sessions with one name cannot be told apart: they are numbered by what they are
-    doing, so nothing moves on screen when they trade."""
-    crews: dict[tuple[Key, str], list[tuple[Report, PullRequest]]] = {}
+    doing, so nothing moves on screen when they trade.
+
+    The agents that have no pull request yet (`early`) are here too, each under its
+    repository and the number 0, which no pull request has: numbered among the agents the
+    same human has there with none, and kept and found as the others are."""
+    crews: dict[tuple[Key, str], list[tuple[Report, PullRequest | None, str, str]]] = {}
     for one, pull in located_in(reported, picture.names, picture.pulls):
-        crews.setdefault((key_of(pull), one.owner.lower()), []).append((one, pull))
+        crews.setdefault((key_of(pull), one.owner.lower()), []).append(
+            (one, pull, pull.repo, words(one.name, pull)))
+    for one, repo, end in early(reported, picture.names, picture.known()):
+        crews.setdefault(((repo.lower(), 0), one.owner.lower()), []).append((one, None, repo, _rest(one.name, end)))
     out: dict[Key, list[Agent]] = {}
     for (key, owner), crew in crews.items():
-        crew.sort(key=lambda pair: (pair[0].name, pair[0].state))
+        crew.sort(key=lambda seat: (seat[0].name, seat[0].state))
         seen: dict[str, int] = {}
         idents = []
-        for one, _ in crew:
+        for one, *_ in crew:
             seen[one.name] = nth = seen.get(one.name, 0) + 1
             # The second of two with one name is known by the name and its place among them,
             # set apart by a character no name can have (control characters are taken out of
@@ -359,10 +440,14 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
                 given[ident] = next(free)
         if numbers is not None:
             numbers[(key, owner)] = given
-        for ident, (one, pull) in zip(idents, crew):
-            role = "author" if one.owner.lower() == pull.author.lower() else "review"
-            out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", pull.repo, pull.number, role,
-                                                 doing(picture, one, pull, role), words(one.name, pull), ident))
+        for ident, (one, pull, repo, note) in zip(idents, crew):
+            if pull is None:                                 # no pull request yet: it works for its human
+                number, role, state = 0, "author", doing_alone(one)
+            else:
+                number, role = pull.number, "author" if one.owner.lower() == pull.author.lower() else "review"
+                state = doing(picture, one, pull, role)
+            out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", repo, number, role, state,
+                                                 note, ident))
     if numbers is not None:
         for gone in [crew for crew in numbers if crew not in crews]:
             del numbers[gone]
@@ -398,6 +483,17 @@ def doing(picture: "Picture", one: Report, pull: PullRequest, role: str) -> str:
     return "unknown"
 
 
+def doing_alone(one: Report) -> str:
+    """The state of an agent that has no pull request yet, from the farm's word for it. It
+    has nobody but its human to wait on: idle, it is at its prompt, as one that asked them
+    something is."""
+    if one.stale:
+        return "unknown"
+    if one.state in AT_WORK:
+        return "working"
+    return "at its prompt" if one.state in ASKING | IDLE else "unknown"
+
+
 # ---- the picture -----------------------------------------------------------------------
 
 @dataclass
@@ -427,6 +523,8 @@ class Picture:
     orgs: dict[str, bool] = field(default_factory=dict, repr=False, compare=False)  # the organizations that
                                                    # own a shown repository (lower case) -> whether the
                                                    # viewer has rights in one of them to act for it
+    listed: tuple[str, ...] = ()                   # every repository on the user's list, shown or hidden:
+                                                   # an agent is not put in one of two written alike (`early`)
 
     def __post_init__(self) -> None:
         for got in self.read():
@@ -444,6 +542,14 @@ class Picture:
             self.agents = placed(self, self.reported, self.numbers)
         elif self.numbers:
             self.numbers.clear()                  # nobody is reported: every number is free again
+
+    def known(self) -> list[str]:
+        """Every repository the picture knows of: on the user's list, shown, or read."""
+        return [*self.listed, *self.names, *(got.repo for got in self.pulls.values())]
+
+    def early(self, repo: str) -> list[Agent]:
+        """The agents at work in this repository that have no pull request yet."""
+        return self.agents.get((repo.lower(), 0), [])
 
     def read(self) -> list[RepoPulls]:
         """What was read, for the shown repositories that have been read, in order."""
@@ -565,7 +671,7 @@ class Picture:
 
 @dataclass
 class Row:
-    kind: str                     # "repo" | "note" | "base" | "commit" | "pull"
+    kind: str                     # "repo" | "note" | "agent" | "base" | "commit" | "pull"
     lead: str                     # the connector to draw before it
     repo: str
     pull: PullRequest | None = None
@@ -573,6 +679,7 @@ class Row:
     sha: str = ""                 # commit: the short hash
     total: int | None = None      # repo: how many pull requests are open there, None while it is unread
     listed: int = 0               # repo: how many of them the list holds (the most recent, past the most read)
+    agent: Agent | None = None    # agent: one at work in the repository that has no pull request yet
 
 
 def tree(picture: Picture) -> list[Row]:
@@ -591,7 +698,10 @@ def tree(picture: Picture) -> list[Row]:
 
     A repository that has not been read, or could not be read, gets a note row saying so.
     One with nothing open gets none: its own row carries how many are open (`total`, 0
-    here), which the board writes on it, and a line more would only make the list longer."""
+    here), which the board writes on it, and a line more would only make the list longer.
+
+    Each agent at work in a repository with no pull request yet has a row of its own under
+    the repository's, before its branches: it stands on none of them yet."""
     rows: list[Row] = []
     for name in picture.names:
         low = name.lower()
@@ -600,9 +710,10 @@ def tree(picture: Picture) -> list[Row]:
                         total=got.total if got else None, listed=len(got.pulls) if got else 0))
         if low in picture.notes:
             rows.append(Row("note", "", name, label=picture.notes[low]))
+        elif got is None:
+            rows.append(Row("note", "", name, label="not read yet"))
+        rows += [Row("agent", "", got.repo if got else name, agent=agent) for agent in picture.early(name)]
         if got is None:
-            if low not in picture.notes:
-                rows.append(Row("note", "", name, label="not read yet"))
             continue
         by_number = {p.number: p for p in got.pulls}             # (none open: nothing more is added)
         roots = [p for p in got.pulls if not p.parent]
@@ -1016,6 +1127,15 @@ def _needs_effort(picture: Picture, now: datetime) -> list[Effort]:
     return sorted(found.values(), key=lambda e: (e.waiting == 0, e.pull.updated or far))
 
 
+def asking(picture: Picture) -> list[Agent]:
+    """The viewer's own agents that have no pull request yet and are at their prompt, in the
+    order of the list. Each is something only the viewer can get moving, as a pull request
+    that waits on them is: it is counted as theirs, and said where what needs effort is.
+    It is not one of `needs_effort`'s, which are pull requests, each with where it stands."""
+    return [agent for name in picture.names for agent in picture.early(name)
+            if agent.state == "at its prompt" and picture.is_viewer(agent.operator)]
+
+
 # ---- the humans ------------------------------------------------------------------------
 
 @dataclass
@@ -1060,6 +1180,8 @@ def humans(picture: Picture) -> list[Person]:
     for agents in picture.agents.values():
         for agent in agents:
             card(agent.operator).agents.append(agent)
+    if asking(picture):                                      # theirs to answer: the dot is on their card
+        found[picture.viewer.lower()].dot = True
     far = datetime.max.replace(tzinfo=timezone.utc)
 
     def longest(person: Person) -> datetime:
@@ -1116,17 +1238,27 @@ def in_focus(picture: Picture, pull: PullRequest, focus: Focus) -> bool:
     return theirs or any(a.operator.lower() == focus.human for a in picture.on(pull))
 
 
+def agent_in_focus(agent: Agent, focus: Focus) -> bool:
+    """Whether an agent that has no pull request yet belongs to what is in focus: everyone,
+    its human with their agents, or itself. The human alone is their pull requests."""
+    if focus.kind == "agent":
+        return agent.key == focus.agent
+    return focus.kind == "all" or (focus.kind == "crew" and agent.operator.lower() == focus.human)
+
+
 # ---- the top line's counts -------------------------------------------------------------
 
 def counts(picture: Picture, repo: str) -> tuple[int, int]:
-    """For one repository: (pull requests the viewer can get moving, other people and
-    teams that something there waits on). A team the viewer acts for is not one of the
-    others, and an undecided one is not counted either way."""
+    """For one repository: (what the viewer can get moving, other people and teams that
+    something there waits on). The first is the pull requests that wait on the viewer and
+    their own agents there that have no pull request yet and are at their prompt
+    (`asking`). A team the viewer acts for is not one of the others, and an undecided one
+    is not counted either way."""
     low = repo.lower()
     found = [e for e in needs_effort(picture) if e.pull.repo.lower() == low]
     people = {w.lower() for e in found for w in e.standing.who
               if not picture.acts_as(w, e.pull) and not picture.undecided(w, e.pull)}
-    return sum(e.mine for e in found), len(people)
+    return sum(e.mine for e in found) + sum(a.repo.lower() == low for a in asking(picture)), len(people)
 
 
 def labels(names: list[str]) -> dict[str, str]:
@@ -1165,6 +1297,7 @@ class Change:
     key: Key
     said: str                     # one line: "#12 bob approved · waits on you to merge"
     pull: PullRequest | None      # None when it is no longer open
+    opened: bool = False          # it was not there at the reading before
 
 
 def changes(before: Picture | None, after: Picture, repo: str) -> list[Change]:
@@ -1181,7 +1314,7 @@ def changes(before: Picture | None, after: Picture, repo: str) -> list[Change]:
     for key, pull in new.items():
         if key not in old:
             out.append(Change(key, f"#{pull.number} opened by {after.shown(pull.author)} · "
-                                   f"{waits_words(after, pull)}", pull))
+                                   f"{waits_words(after, pull)}", pull, True))
         elif fingerprint(before, old[key]) != fingerprint(after, pull):
             out.append(Change(key, f"#{pull.number} {_difference(before, old[key], after, pull)}", pull))
     for key, pull in old.items():

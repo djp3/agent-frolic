@@ -39,9 +39,13 @@ Top to bottom:
     A list longer than its box scrolls: it follows the selected pull request, and the
     wheel, the page keys and the bar at its right edge move it freely, to every
     repository on screen, the ones with nothing open included.
+    An agent at work in a repository with no pull request yet has a line of its own under
+    the repository's: its human, what it is doing, and what its name goes on to say. It is
+    not a pull request, so the arrows pass it by and the drawer has nothing to say of it.
   • THE BAND. What needs effort, most urgent first, and a drawer for the selected pull
     request: owner and waits on first, then GitHub's facts, the name that puts an agent
-    on it, and its address.
+    on it, and its address. The viewer's own agents that have no pull request yet and are
+    at their prompt come before the pull requests that need effort.
   • THE TICKER. The last thing that happened: a webhook delivery, or what changed when
     GitHub was read again. A row that changed washes pale for a moment. A word about what
     the user just did (o is opening a page) takes its line for a few seconds, then gives
@@ -77,7 +81,8 @@ from textual.widgets import Static
 
 from canvas import Canvas, Segments, cut, plain, seg_len, wash, write
 from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
-                     Person, Picture, Row, agent_name, cells, counts, focuses, humans, in_focus, key_of, labels,
+                     Person, Picture, Row, agent_in_focus, agent_name, agent_state, asking, cells, counts, focuses,
+                     human_cell, humans, in_focus, key_of, labels,
                      age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, progress, quiet,
                      review_cell, reviewers, reviewing, silence, tree)
 from pulls import PullRequest, span
@@ -246,9 +251,10 @@ class Card:
 
 
 def agent_line(agent: Agent, yours: bool) -> Segments:
-    """ "⠋ #13": the agent's mark and the pull request it is on. Yellow only on an agent of
-    yours at its prompt; someone else's is grey."""
-    said = f"#{agent.number}"
+    """ "⠋ #13": the agent's mark and the pull request it is on, or the repository it is at
+    work in while it has none yet ("⠋ web"). Yellow only on an agent of yours at its
+    prompt; someone else's is grey."""
+    said = agent.repo.rpartition("/")[2] if agent.early else f"#{agent.number}"
     if agent.working:
         return [(SPIN[0] + " ", INK), (said, INK2)]
     if agent.state == "at its prompt":
@@ -483,8 +489,9 @@ class Board(Screen):
         self.grab: tuple[int, int] | None = None  # the scroll bar is held: (the row it was taken at, top then)
         self.page = 1                             # lines of the list its box holds
         self.where = (0, 0, 0)                    # (first line shown, last line shown, lines in all)
-        self.effort_rows: list[Key] = []          # the pull request on each line of what needs effort,
+        self.effort_rows: list[Key | None] = []   # the pull request on each line of what needs effort,
                                                   # as last drawn, top to bottom: a click finds it there
+                                                  # (None on the line of an agent that has none yet)
         self.unseen: tuple[list[str], list[str]] = ([], [])
         self.menu_open = False
         self.menu_at = 0
@@ -561,13 +568,14 @@ class Board(Screen):
         # The viewer's teams arrive on their own, after the sign-in: they are in it so that the
         # picture is built again when they do. Everything but the readings is compared by value.
         teams, held = app.teams_now()
+        listed = tuple(r.name for r in app.store.repos)       # the hidden ones too: see picture.early
         drawn_from = (names, notes, viewer, app.reported, int(time.time() // 60),
-                      teams, held, list(app.pulls.items()))
+                      teams, held, listed, list(app.pulls.items()))
         if self.same_sources(drawn_from):             # the focus and selection are still on it, too
             return
         self.drawn_from = drawn_from
         self.pic = Picture(names, app.pulls, viewer, notes=notes, teams=teams, held=held, reported=app.reported,
-                           numbers=app.agent_numbers)
+                           numbers=app.agent_numbers, listed=listed)
         self.efforts = needs_effort(self.pic)
         now = time.monotonic()
         cards = {p.login.lower(): plain(head_line(p)) for p in humans(self.pic)}
@@ -754,7 +762,7 @@ class Board(Screen):
         out: list[Line] = []
         for i, row in enumerate(tree(self.pic)):
             if row.pull is None:
-                out.append(Line(row, lead=row.lead))
+                out.append(Line(row, lead=row.lead, spin=self.spin(i * 3)))
                 continue
             tail = (row.lead[:-2] + ("│ " if row.lead.endswith("├ ") else "  ")
                     + ("│ " if row.pull.children else "  "))
@@ -833,17 +841,18 @@ class Board(Screen):
             if row.kind == "note":
                 self.draw_note(canvas, y, row, width)
                 continue
+            if row.kind == "agent":
+                self.draw_agent(canvas, y, line, width)
+                if not agent_in_focus(row.agent, self.focus):
+                    self.dim(canvas, y, width, cols)
+                continue
             if pull is None:
                 self.draw_rule(canvas, y, row, width)
                 continue
             self.draw_pull(canvas, y, line, cols, width)
             chosen = key_of(pull) == self.sel
             if not chosen and not in_focus(self.pic, pull, self.focus):
-                for x in range(width):                         # out of focus: dimmed where it stands
-                    if x != X_RULE:
-                        ink = canvas.cells[y][x][1].split(" ")[-1]
-                        faded = x >= cols[4] and ink.startswith("#")       # what is left of a bar is not made lighter
-                        canvas.cells[y][x] = (canvas.cells[y][x][0], darker(ink, DIM) if faded else DIM)
+                self.dim(canvas, y, width, cols)
             if chosen:
                 wash(canvas, y, 0, width, RAISED)
                 canvas.put(0, y, "▌", f"{INK} on {RAISED}")
@@ -854,6 +863,14 @@ class Board(Screen):
         for y in range(max(0, len(lines) - self.top), height):
             canvas.put(X_RULE, y, "│", DIVIDER)                # the rule runs on under a short list
         return canvas.text()
+
+    def dim(self, canvas: Canvas, y: int, width: int, cols: tuple) -> None:
+        """A line of the list that is out of focus: dimmed where it stands."""
+        for x in range(width):
+            if x != X_RULE:
+                ink = canvas.cells[y][x][1].split(" ")[-1]
+                faded = x >= cols[4] and ink.startswith("#")       # what is left of a bar is not made lighter
+                canvas.cells[y][x] = (canvas.cells[y][x][0], darker(ink, DIM) if faded else DIM)
 
     def scroll_bar(self) -> Text:
         """The bar beside the list: a thumb for the lines on screen, in a track as tall as
@@ -994,6 +1011,29 @@ class Board(Screen):
             canvas.put(X_TREE + 2, y, "✗", CRIT)
         canvas.put(X_TREE + 4, y, cut(row.label, width - X_TREE - 5), INK if trouble else MUTED)
 
+    def draw_agent(self, canvas: Canvas, y: int, line: Line, width: int) -> None:
+        """An agent at work in a repository with no pull request yet, on a line of its own
+        under the repository's. Where a pull request has its owner and its state: the human
+        who runs it, and what it is doing. Where a pull request has its number and title:
+        the agent, and what its name goes on to say. The yellow dot is on its human when it
+        is the viewer's and at its prompt: that is theirs to answer, and nobody else's."""
+        pic, agent = self.pic, line.row.agent
+        yours = pic.is_viewer(agent.operator) and agent.state == "at its prompt"
+        write(canvas, X_OWNER, y, human_cell(pic, agent.operator, yours), X_STATE - X_OWNER - 1)
+        write(canvas, X_STATE, y, agent_state(pic, agent), X_WAITS - X_STATE - 1)
+        canvas.put(X_RULE, y, "│", DIVIDER)
+        lit = agent.working or yours
+        said: Segments = [(mark_of(agent, line.spin) + " ", INK if lit else MUTED),
+                          (agent.name, f"bold {INK}" if lit else INK2)]
+        if agent.note:
+            said += [("  ", ""), (agent.note, INK2)]
+        x, end = X_TREE + 2, "no pull request yet"
+        room = width - 1 - x
+        if room - seg_len(said) >= len(end) + 2:               # said when there is room after the agent's own words
+            canvas.put(width - 1 - len(end), y, end, MUTED)
+            room -= len(end) + 2
+        write(canvas, x, y, said, max(0, room))
+
     def draw_pull(self, canvas: Canvas, y: int, line: Line, cols: tuple, width: int) -> None:
         x_review, x_ci, x_prog, names, x_quiet = cols
         pull = line.row.pull
@@ -1078,22 +1118,35 @@ class Board(Screen):
             canvas.put(width - len(key_text) + 2, 0, "yours to fix", MUTED)
             canvas.put(width - 23, 0, "○ waits on someone else", MUTED)
         self.effort_rows = []
-        if not self.efforts:
+        # The viewer's own agents that have no pull request yet and are at their prompt come
+        # first: an agent sits idle for want of them, which is what puts a pull request first too.
+        entries: list[Agent | Effort] = [*asking(self.pic), *self.efforts]
+        if not entries:
             canvas.put(0, 1, "Nothing waits on anyone." if self.pic.all() else "Nothing is open.", MUTED)
             return canvas.text()
 
         room = height - 1
-        shown = room if len(self.efforts) <= room else room - 1
-        self.effort_rows = [key_of(e.pull) for e in self.efforts[:shown]]
+        shown = room if len(entries) <= room else room - 1
+        self.effort_rows = [key_of(e.pull) if isinstance(e, Effort) else None for e in entries[:shown]]
         chosen = self.pic.find(self.sel)
         cause = None
         if chosen is not None:
             here = self.pic.stand(chosen)
             cause = key_of((here.end or here).pull)
-        refs = [self.ref(e.pull) for e in self.efforts[:shown]]
+        short = labels(self.pic.names)
+        refs = [self.ref(e.pull) if isinstance(e, Effort) else short.get(e.repo, e.repo) for e in entries[:shown]]
         key_w = max(len(r) for r in refs)
         now = time.monotonic()
-        for y, (e, ref) in enumerate(zip(self.efforts[:shown], refs), start=1):
+        for y, (e, ref) in enumerate(zip(entries[:shown], refs), start=1):
+            if isinstance(e, Agent):                   # no pull request to go to: n and a click pass it by
+                urgency = "no pull request yet"
+                x_urgency = width - len(urgency)
+                canvas.put(0, y, "●", WAITING)
+                canvas.put(2, y, ref, f"bold {INK}")
+                what = f"you · answer {e.name}" + (f" · {e.note}" if e.note else "")
+                canvas.put(3 + key_w, y, cut(what, x_urgency - key_w - 5), INK)
+                canvas.put(x_urgency, y, urgency, MUTED)
+                continue
             if not e.undecided:                        # else whose it is is not known yet: no mark
                 canvas.put(0, y, "●" if e.mine else "○", WAITING if e.mine else MUTED)
             canvas.put(2, y, ref, f"bold {INK}")
@@ -1114,8 +1167,8 @@ class Board(Screen):
                 wash(canvas, y, 0, width, shade)
             elif cause == key_of(e.pull):                      # what holds the selected pull request up
                 wash(canvas, y, 0, width, RAISED)
-        if len(self.efforts) > shown:
-            canvas.put(2, height - 1, f"and {len(self.efforts) - shown} more: n steps through them all", MUTED)
+        if len(entries) > shown:
+            canvas.put(2, height - 1, f"and {len(entries) - shown} more: n steps through them all", MUTED)
         return canvas.text()
 
     def drawer(self) -> Text:
@@ -1353,7 +1406,7 @@ class Board(Screen):
             return
         pane = self.query_one("#effort").content_region
         at = y - pane.y - 1                                    # its first line is the heading
-        if pane.contains(x, y) and 0 <= at < len(self.effort_rows):
+        if pane.contains(x, y) and 0 <= at < len(self.effort_rows) and self.effort_rows[at] is not None:
             self.pick(self.effort_rows[at])                    # the list goes to it, as it does for n
             event.stop()
 

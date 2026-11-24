@@ -41,7 +41,8 @@ branch and the commit they stand on. One that is ready but waits for the one ben
 ### What needs effort, most urgent first
 
 Below the list, everything that waits on a person or a team, the longest quiet first, with
-what it holds up. Beside it, a drawer for the selected pull request: owner, who it waits on,
+what it holds up. An agent of yours that has no pull request yet and is at its prompt comes
+before them. Beside it, a drawer for the selected pull request: owner, who it waits on,
 each reviewer's latest word, comments to resolve, checks, branch, the name that puts an agent
 on it, and its address. `o` opens it on GitHub, and `c` copies the name.
 
@@ -306,6 +307,19 @@ the pull request's number: `<owner>-<repo>-pr-<number>`. An agent on pull reques
 Nobody has to work the name out. The drawer shows it for the selected pull request, and `c`
 copies it, ready to paste where the session is named.
 
+**Before there is a pull request**, an agent's name says the repository alone, as a word of
+its own: `acme-web`, or `acme-web reflow fix`. (Run on with more, as in `acme-web-reflow-fix`,
+it is not read: where the repository's name ends could only be guessed.)
+
+- The agent is drawn on a line of its own under that repository's heading, with the person who
+  runs it, what it is doing, and what its name goes on to say.
+- Idle, it is at its prompt: it has nobody but its human to wait on. Your own, at its prompt,
+  counts among what you can get moving (●) and is first in the list of what needs effort.
+- It is not a pull request, so the arrows and `n` pass it by.
+- When you open a pull request in a repository where you have such an agent, the ticker gives
+  the name to rename its session to, and the board selects the new pull request, so `c` copies
+  that name. The agent moves onto the pull request once its session has the new name.
+
 An agent whose name says no pull request is not drawn, and nothing is wrong with it. One whose
 name has `-pr-<number>` in it and still leads to no pull request on your board is listed in
 part 4 of the setup, with why: the repository is not on your list, it has no open pull request
@@ -315,7 +329,8 @@ Two repositories can be written the same way (`acme/web-api` and `acme-web/api` 
 `acme-web-api`). If each has an open pull request of the same number, a name fits both. The
 agent is then drawn on neither, since the board does not guess. For as long as that lasts, the
 end of the ticker's line says an agent is not shown, and the setup says which two pull requests
-its name fits.
+its name fits. The same goes for an agent with no pull request yet whose name fits two such
+repositories.
 
 Nothing needs setting up in agent-frolic. It asks the agent-grange on your own Mac (at
 `127.0.0.1`, and nowhere else), and when one answers, the agents appear. The grange holds each
@@ -332,8 +347,9 @@ In either of the last two cases the board says so at the end of the ticker's lin
 as it lasts: without their agents, pull requests that agents are at work on look as if nobody
 were on them.
 
-Part 4 also counts the agents reported and how many of them are on the pull requests shown,
-and lists the ones that are not shown though their names say a pull request.
+Part 4 also counts the agents reported, how many of them are on the pull requests shown and
+how many have no pull request yet, and lists the ones that are not shown though their names
+say where they are.
 
 ## Files and logs
 
