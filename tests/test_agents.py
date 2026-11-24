@@ -847,6 +847,44 @@ async def test_the_board_draws_an_agent_with_no_pull_request_yet_under_its_repos
 
 
 @drive
+async def test_what_did_not_fit_among_what_needs_effort_is_said_with_what_n_reaches(isolated):
+    """The last row said "n steps through them all" of whatever did not fit. n steps through
+    pull requests, and an agent with no pull request yet has none to go to."""
+    a_board()
+    app = main.Frolic()
+
+    def last():
+        return next(row.split("  ")[0] for row in map(str.strip, screen(app).splitlines()) if row.startswith("and "))
+
+    async def with_agents(count, cursor):
+        FakeGrange.answers.put(team(*(("djp3", f"o-app task {n}", "idle") for n in range(count)), cursor=cursor))
+        await until(pilot, lambda: len(app.reported) == count)
+        await pilot.pause(0.3)
+
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        efforts = len(app.board.efforts)
+        assert efforts == 5 and "and " not in [row.strip()[:4] for row in screen(app).splitlines()]    # they all fit
+        await with_agents(5, cursor=2)                                    # ten in all: seven fit, the agents first
+        assert last() == "and 3 more: n steps through them all"           # so pull requests alone are left out
+        await with_agents(10, cursor=3)                                   # three of the agents do not fit either
+        assert last() == "and 8 more: n steps through the pull requests, and the list has the agents"
+        stops = set()
+        for _ in range(2 * efforts):
+            await pilot.press("n")
+            stops.add(app.board.sel)
+        assert len(stops) == efforts and all(number for _, number in stops)       # which is what n does
+        assert sum("no pull request yet" in row.split("│")[-1] for row in screen(app).splitlines()) >= 10   # the list
+        FakePulls.open_ = {"o/app": [], "o/web": []}                      # nothing open: agents alone
+        age(app)
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+        assert app.board.efforts == []
+        assert last() == "and 3 more of your agents: each is in the list, under its repository"
+
+
+@drive
 async def test_an_agent_of_the_viewers_is_counted_in_a_repository_that_could_not_be_read(isolated):
     """The counts beside a repository's name were drawn only once it had been read. An agent
     with no pull request yet is known of without any reading: its own line had the yellow

@@ -1176,8 +1176,18 @@ class Board(Screen):
                 wash(canvas, y, 0, width, shade)
             elif cause == key_of(e.pull):                      # what holds the selected pull request up
                 wash(canvas, y, 0, width, RAISED)
-        if len(entries) > shown:
-            canvas.put(2, height - 1, f"and {len(entries) - shown} more: n steps through them all", MUTED)
+        left = entries[shown:]
+        if left:
+            # n steps through pull requests, and an agent that has none yet has none to go to: when
+            # such agents are among what did not fit, the row says where they are instead.
+            agents = sum(isinstance(e, Agent) for e in left)
+            if not agents:
+                more = f"and {len(left)} more: n steps through them all"
+            elif agents == len(left):
+                more = f"and {agents} more of your agents: each is in the list, under its repository"
+            else:
+                more = f"and {len(left)} more: n steps through the pull requests, and the list has the agents"
+            canvas.put(2, height - 1, cut(more, width - 2), MUTED)
         return canvas.text()
 
     def drawer(self) -> Text:
