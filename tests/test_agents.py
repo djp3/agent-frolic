@@ -1188,6 +1188,38 @@ async def test_the_ticker_names_the_pull_request_for_an_agent_still_named_for_on
 
 
 @drive
+async def test_the_ticker_asks_for_no_rename_when_an_agent_of_the_viewers_is_on_the_new_pull_request_already(isolated):
+    """An agent named ahead of its pull request is on it from the reading that has it. The
+    ticker told the viewer to rename another agent of theirs in that repository to the same
+    name, and moved the selection to the new pull request."""
+    a_board()
+    app = main.Frolic()
+
+    async def opens(number, branch):
+        FakePulls.open_["o/web"] = FakePulls.open_["o/web"] + [
+            node(number, branch, author={"login": "djp3"}, baseRefOid=TIP,
+                 createdAt=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))]
+        age(app, only=["o/web"])
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "o-web-pr-31 hotfix", "busy"), ("djp3", "o-web notes", "idle"),
+                                    ("bob", "o-web-pr-34", "busy")))
+        await until(pilot, lambda: app.reported)
+        was = app.board.sel
+        await opens(31, "hotfix")
+        assert "web · #31 opened by you" in screen(app) and app.board.sel == was
+        assert not any("rename" in text for _, text, _ in app.lines)
+        assert [a.note for a in app.board.pic.agents[("o/web", 31)]] == ["hotfix"]        # it is on it, as named
+        await opens(34, "more")                              # bob's agent is on this one, and none of the viewer's
+        said = "you opened #34 · rename your agent there to o-web-pr-34 · c copies it, C as /rename"
+        assert f"web · {said}" in screen(app) and app.board.sel == ("o/web", 34)
+
+
+@drive
 async def test_a_name_that_fits_two_repositories_is_said_quietly_too(isolated):
     a_board_of_two_alike()
     app = main.Frolic()

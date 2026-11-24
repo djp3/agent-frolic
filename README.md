@@ -335,7 +335,8 @@ it is not read: where the repository's name ends could only be guessed.)
 - When you open a pull request in a repository where you have such an agent, the ticker gives
   the name to rename its session to, and the board selects the new pull request, so `c` copies
   that name and `C` the `/rename` command with it. The agent moves onto the pull request once
-  its session has the new name.
+  its session has the new name. (When an agent of yours is on the new pull request already,
+  named ahead of it, there is nothing to rename, and the ticker says only that you opened it.)
 
 **A name that says a pull request that is not open** is read as its repository alone. That is
 an agent named ahead of the pull request it is about to open, or one still named for a pull

@@ -1878,7 +1878,10 @@ class Frolic(App):
         is not open), that is most likely the agent's work, and the agent shows on it only
         once its session is named for it. The ticker says the name instead of the first
         change, and the board selects the new pull request, so that the drawer shows the
-        same name, c copies it, and C the command to rename with."""
+        same name, c copies it, and C the command to rename with.
+
+        Not for a pull request an agent of theirs is on already: that one was named ahead
+        of it, and no other agent of theirs is to be renamed for it."""
         if before is None:
             return
         viewer = self.identity.login if self.identity is not None else ""
@@ -1897,9 +1900,13 @@ class Frolic(App):
             self.say(f"{name} · {change.said}", INK)
         mine = [change.pull for change in found
                 if change.opened and viewer and change.pull.author.lower() == viewer.lower()]
-        theirs = [found.one for found in early(self.reported, [r.name for r in self.store.shown()],
-                                               [r.name for r in self.store.repos], self.pulls)
-                  if found.repo.lower() == key and found.one.owner.lower() == viewer.lower()] if mine else []
+        shown = [r.name for r in self.store.shown()]
+        if mine:
+            taken = {key_of(pull) for one, pull in located_in(self.reported, shown, self.pulls)
+                     if one.owner.lower() == viewer.lower()}
+            mine = [pull for pull in mine if key_of(pull) not in taken]
+        theirs = [there.one for there in early(self.reported, shown, [r.name for r in self.store.repos], self.pulls)
+                  if there.repo.lower() == key and there.one.owner.lower() == viewer.lower()] if mine else []
         if theirs:
             which = "your agent" if len(theirs) == 1 else "one of your agents"
             said = (f"you opened #{mine[0].number} · rename {which} there to {agent_name(mine[0])}"
