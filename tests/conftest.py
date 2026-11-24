@@ -12,7 +12,7 @@ import truststore
 import grange
 import keychain
 import main
-from standins import FakeBrowser, FakeGitHub, FakeGrange, FakePulls, FakeTunnel
+from standins import FakeBrowser, FakeClipboard, FakeGitHub, FakeGrange, FakePulls, FakeTunnel
 
 
 class MemoryKeychain:
@@ -61,6 +61,8 @@ def stand_ins(monkeypatch):
     monkeypatch.setattr(main, "wait_reachable", lambda url, nonce, **how: True)
     FakeBrowser.opened, FakeBrowser.broken = [], None
     monkeypatch.setattr(main, "open_page", FakeBrowser.open)
+    FakeClipboard.copied, FakeClipboard.broken = [], None
+    monkeypatch.setattr(main, "copy_text", FakeClipboard.copy)
     FakeGrange.answers, FakeGrange.asked, FakeGrange.made, FakeGrange.failing = queue.Queue(), [], [], None
     monkeypatch.setattr(main, "Grange", FakeGrange)
     monkeypatch.setattr(grange, "SPACING", 0.0)   # the stand-ins answer at once: no test waits out the gap

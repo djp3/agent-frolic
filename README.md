@@ -42,8 +42,8 @@ branch and the commit they stand on. One that is ready but waits for the one ben
 
 Below the list, everything that waits on a person or a team, the longest quiet first, with
 what it holds up. Beside it, a drawer for the selected pull request: owner, who it waits on,
-each reviewer's latest word, comments to resolve, checks, branch and address. `o` opens it on
-GitHub.
+each reviewer's latest word, comments to resolve, checks, branch, the name that puts an agent
+on it, and its address. `o` opens it on GitHub, and `c` copies the name.
 
 ### Changes arrive as they happen
 
@@ -162,6 +162,7 @@ Control and the window switcher show how many the board is keeping an eye on.
 | ↑ ↓ | pick a pull request |
 | click | pick the pull request under the pointer, in the list or where it needs effort |
 | o | open it on GitHub in your browser |
+| c | copy the name that puts an agent on it (see [agents](#made-to-work-with-agent-farm-and-agent-grange)) |
 | page up / page down, home / end | scroll the list (the wheel does too) |
 | n | jump to the next thing that needs effort |
 | tab / shift+tab | step the focus through the cards; what is not theirs dims |
@@ -291,12 +292,30 @@ it waits on, in fainter ink.
 | · | is idle, and the pull request waits on someone else |
 | ? | cannot be said: the agent-farm on its Mac has gone quiet, or says something this version does not know |
 
-An agent is tied to its pull request by its name, which carries the ticket and the pull request's
-number (`proj-86-pr-98` somewhere in it, in upper or lower case). The number alone is not
-enough, since each of your repositories may have a pull request 98: the agent is on the one that
-carries the same ticket (`proj-86`) in its branch name or its title. An agent whose name leads to
-no pull request on your board is not drawn. Whatever the name goes on to say
-(`proj-86-pr-98 fix tests`) is shown on the agent's line, as what it is at.
+An agent is tied to its pull request by the name of its session, which says the repository and
+the pull request's number: `<owner>-<repo>-pr-<number>`. An agent on pull request 98 of
+`acme/web` is named `acme-web-pr-98`.
+
+- The owner is the user or organization the repository belongs to, whoever runs the agent.
+- Upper and lower case are the same.
+- It may come anywhere in the name, as long as it starts the name or follows a space.
+- Whatever the name goes on to say (`acme-web-pr-98 fix tests`) is shown on the agent's line,
+  as what it is at.
+- What the pull request's branch and title say plays no part.
+
+Nobody has to work the name out. The drawer shows it for the selected pull request, and `c`
+copies it, ready to paste where the session is named.
+
+An agent whose name says no pull request is not drawn, and nothing is wrong with it. One whose
+name has `-pr-<number>` in it and still leads to no pull request on your board is listed in
+part 4 of the setup, with why: the repository is not on your list, it has no open pull request
+of that number, or the name leaves out whose repository it is.
+
+Two repositories can be written the same way (`acme/web-api` and `acme-web/api` are both
+`acme-web-api`). If each has an open pull request of the same number, a name fits both. The
+agent is then drawn on neither, since the board does not guess. For as long as that lasts, the
+end of the ticker's line says an agent is not shown, and the setup says which two pull requests
+its name fits.
 
 Nothing needs setting up in agent-frolic. It asks the agent-grange on your own Mac (at
 `127.0.0.1`, and nowhere else), and when one answers, the agents appear. The grange holds each
@@ -312,6 +331,9 @@ of the setup says what the grange reports:
 In either of the last two cases the board says so at the end of the ticker's line, for as long
 as it lasts: without their agents, pull requests that agents are at work on look as if nobody
 were on them.
+
+Part 4 also counts the agents reported and how many of them are on the pull requests shown,
+and lists the ones that are not shown though their names say a pull request.
 
 ## Files and logs
 

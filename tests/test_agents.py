@@ -15,8 +15,8 @@ import main
 from canvas import plain
 from grange import GrangeError, Reported, out_of_date
 import picture as pictures
-from picture import (LOOKS, Agent, Focus, Person, Picture, agent_cell, agent_state, carries, cells, doing, focuses,
-                     line_agents, located, located_in, look, named, needs_effort, placed, progress, words)
+from picture import (LOOKS, Agent, Focus, Person, Picture, agent_cell, agent_name, agent_state, astray, cells, doing,
+                     focuses, line_agents, located, located_in, look, needs_effort, placed, progress, words)
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
@@ -33,13 +33,13 @@ ASK_TEAM = lambda slug: {"nodes": [{"requestedReviewer": {"__typename": "Team", 
 
 def app_nodes():
     return [
-        node(98, "proj-86-pr-98-fix-tests", author={"login": "djp3"}, baseRefOid=TIP,
+        node(98, "proj-86-fix-tests", author={"login": "djp3"}, baseRefOid=TIP,
              reviewRequests=ASK("bob")),                                         # waits on bob
-        node(102, "proj-91-pr-102", base="proj-86-pr-98-fix-tests", author={"login": "djp3"},
+        node(102, "proj-91-more-tests", base="proj-86-fix-tests", author={"login": "djp3"},
              reviewDecision="APPROVED", latestOpinionatedReviews=APPROVED("bob")),   # to merge, once 98 lands
         node(99, "limits", author={"login": "djp3"}, baseRefOid=TIP, title="PROJ-87: rate limits",
              isDraft=True),                                                      # djp3: finish the draft
-        node(7, "proj-12-pr-7-docs", author={"login": "mira"}, baseRefOid=TIP,
+        node(7, "proj-12-docs", author={"login": "mira"}, baseRefOid=TIP,
              reviewRequests=ASK("djp3")),                                        # waits on djp3
         node(40, "sec-4-bump-a", author={"login": "dependabot"}, baseRefOid=TIP,
              reviewRequests=ASK_TEAM("platform")),                               # waits on a team
@@ -47,7 +47,7 @@ def app_nodes():
 
 
 def web_nodes():
-    return [node(98, "ops-3-pr-98-deploy", author={"login": "kenji"}, baseRefOid=TIP)]
+    return [node(98, "ops-3-deploy", author={"login": "kenji"}, baseRefOid=TIP)]
 
 
 def read(name, nodes):
@@ -73,76 +73,75 @@ def said(pic, repo, number):
 
 # ---- which pull request an agent is on -------------------------------------------------
 
-@pytest.mark.parametrize("name, found", [
-    ("proj-86-pr-98 fix tests", ("proj-86", 98)), ("PROJ-86-PR-98", ("PROJ-86", 98)),
-    ("agent-frolic-af-42-pr-0017-01", ("af-42", 17)), ("review of proj_x-9-pr-3", ("proj_x-9", 3)),
-    ("proj-86-pr-98 then proj-91-pr-102", ("proj-86", 98)),
-    ("fix tests", None), ("pr-98", None), ("proj-pr-98", None), ("proj-86-pr-", None), ("86-pr-98", None),
-    ("proj-86 pr-98", None), ("", None),
-    ("x_proj-86-pr-98", ("x_proj-86", 98)), ("9_proj-86-pr-98", None), ("_proj-86-pr-98", None)])
-def test_a_name_says_its_ticket_and_its_pull_requests_number(name, found):
-    assert named(name) == found
+@pytest.mark.parametrize("name, read", [
+    ("o-app-pr-98 fix tests", [("o-app", 98)]), ("O-App-PR-98", [("o-app", 98)]),
+    ("acme-web-pr-0017-01", [("acme-web", 17)]), ("review of o-app-pr-3", [("o-app", 3)]),
+    ("o-app-pr-98 then o-web-pr-98", [("o-app", 98)]),               # the first word that says one is the one
+    ("fix tests", []), ("pr-98", []), ("-pr-98", []), ("o-app-pr-", []), ("o-app-pr-x9", []),
+    ("o-app pr-98", []), ("o-app-pr 98", []), ("", []),
+    ("app-pr-98", [("app", 98)]),                                    # it reads: whether it fits is another matter
+    ("see:o-app-pr-98", [("see:o-app", 98)]),                        # a word runs from one space to the next
+    ("acme-notes-pr-2024-pr-7 tidy", [("acme-notes", 2024), ("acme-notes-pr-2024", 7)])])
+def test_a_name_says_a_repository_and_a_pull_requests_number(name, read):
+    assert [(one.repo, one.number) for one in pictures.said(name)] == read
 
 
-def test_the_number_alone_does_not_say_which_repository():
-    """Both repositories have a pull request 98: the ticket says which one."""
-    assert where(Reported("djp3", "proj-86-pr-98 fix tests", "busy")) == [("o/app", 98)]
-    assert where(Reported("kenji", "OPS-3-PR-98", "busy")) == [("o/web", 98)]
+def test_the_repository_in_the_name_says_whose_pull_request_98_it_is():
+    """Both repositories have a pull request 98."""
+    assert where(Reported("djp3", "o-app-pr-98 fix tests", "busy")) == [("o/app", 98)]
+    assert where(Reported("kenji", "O-WEB-PR-98", "busy")) == [("o/web", 98)]
 
 
-def test_a_pull_request_carries_its_ticket_in_its_branch_or_its_title():
-    assert where(Reported("djp3", "proj-87-pr-99", "busy")) == [("o/app", 99)]        # "PROJ-87: rate limits"
+def test_a_ticket_in_a_branch_or_a_title_plays_no_part():
+    """#98's branch has "proj-86" in it and #99's title "PROJ-87". A name that says a ticket
+    and a number is on neither, and one that says the repository needs no ticket."""
+    assert where(Reported("djp3", "proj-86-pr-98", "busy"), Reported("djp3", "proj-87-pr-99", "busy")) == []
+    assert where(Reported("djp3", "o-app-pr-99", "busy")) == [("o/app", 99)]
 
 
-def test_a_pull_request_that_does_not_carry_the_ticket_is_not_it():
-    """Another repository's pull request 7, most likely: one this board does not show."""
-    assert where(Reported("bob", "billing-3-pr-7", "busy"), Reported("bob", "proj-1-pr-7", "busy"),
-                 Reported("bob", "proj-120-pr-7", "busy"), Reported("bob", "xproj-12-pr-7", "busy")) == []
+def test_a_name_that_does_not_say_whose_repository_is_on_nothing():
+    """A teammate's board may show another repository of that name: the owner is never guessed."""
+    assert where(Reported("djp3", "app-pr-98", "busy"), Reported("djp3", "web-pr-98", "busy")) == []
 
 
-@pytest.mark.parametrize("branch, there", [
-    ("proj-86-fix", True), ("fix/proj-86", True), ("fix_for-proj-86", True), ("PROJ-86", True),
-    ("x_proj-86-fix", False), ("xproj-86-fix", False), ("9proj-86", False), ("proj-860", False)])
-def test_a_ticket_is_not_found_inside_a_longer_one(branch, there):
-    """A key may have an underscore in it, so "x_proj-86" is another ticket, as "xproj-86" is."""
-    pull = parse_pull("o/app", node(98, branch))
-    assert carries(pull, "proj-86") is there
-
-
-def test_the_search_for_a_ticket_is_made_once_however_often_it_is_asked():
-    pictures._carrying.cache_clear()
-    pull = parse_pull("o/app", node(98, "proj-86-pr-98"))
-    assert all(carries(pull, "proj-86") for _ in range(50)) and not carries(pull, "proj-87")
-    assert (pictures._carrying.cache_info().misses, pictures._carrying.cache_info().hits) == (2, 49)
-    assert carries(pull, "PROJ-86")                                               # another spelling, another search
-
-
-def test_an_agent_is_not_put_on_a_pull_request_whose_ticket_only_ends_as_its_own_does():
-    other = {"o/app": read("o/app", [node(98, "x_proj-86-pr-98-deploy")])}
-    pic = Picture(["o/app"], other, "djp3", reported=(Reported("djp3", "proj-86-pr-98", "busy"),))
-    assert pic.agents == {}
-    mine = Picture(["o/app"], other, "djp3", reported=(Reported("djp3", "x_proj-86-pr-98", "busy"),))
-    assert list(mine.agents) == [("o/app", 98)]
+def test_the_repository_is_read_from_where_its_word_begins():
+    """"my-o-app" is another owner's repository for all the name says, not o/app."""
+    assert where(Reported("djp3", "my-o-app-pr-98", "busy"), Reported("djp3", "see:o-app-pr-98", "busy")) == []
+    assert where(Reported("djp3", "see: o-app-pr-98", "busy")) == [("o/app", 98)]
 
 
 def test_an_agent_that_names_no_pull_request_here_is_on_none():
-    assert where(Reported("djp3", "scratch", "busy"), Reported("djp3", "proj-86-pr-5", "busy")) == []
+    assert where(Reported("djp3", "scratch", "busy"), Reported("djp3", "o-app-pr-5", "busy"),
+                 Reported("djp3", "o-docs-pr-98", "busy")) == []
 
 
 def test_an_agent_whose_session_has_ended_is_on_nothing():
-    assert where(Reported("djp3", "proj-86-pr-98", "dead")) == []
+    assert where(Reported("djp3", "o-app-pr-98", "dead")) == []
 
 
-def test_two_pull_requests_that_both_carry_it_are_not_guessed_between():
-    both = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", [node(98, "proj-86-pr-98-too")])}
-    pic = Picture(["o/app", "o/web"], both, "djp3")
-    assert located([Reported("djp3", "proj-86-pr-98", "busy")], pic.all()) == []
+def alike(first=5, second=5):
+    """Two repositories a name writes the same way ("acme-web-api"), each with one pull request."""
+    return {"acme/web-api": read("acme/web-api", [node(first, "a", author={"login": "djp3"}, baseRefOid=TIP)]),
+            "acme-web/api": read("acme-web/api", [node(second, "b", author={"login": "kenji"}, baseRefOid=TIP)])}
 
 
-def test_hiding_one_of_two_that_both_carry_it_does_not_say_which_was_meant():
-    both = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", [node(98, "proj-86-pr-98-too")])}
-    busy = (Reported("djp3", "proj-86-pr-98", "busy"),)
-    for shown in (["o/app", "o/web"], ["o/app"], ["o/web"]):
+def test_two_pull_requests_a_name_fits_are_not_guessed_between():
+    both = alike()
+    pic = Picture(list(both), both, "djp3")
+    assert located([Reported("djp3", "acme-web-api-pr-5", "busy")], pic.all()) == []
+
+
+def test_two_repositories_written_alike_are_told_apart_when_only_one_has_the_number():
+    both = alike(5, 6)
+    reported = (Reported("djp3", "acme-web-api-pr-5", "busy"), Reported("djp3", "acme-web-api-pr-6", "busy"))
+    assert sorted(Picture(list(both), both, "djp3", reported=reported).agents) == [
+        ("acme-web/api", 6), ("acme/web-api", 5)]
+
+
+def test_hiding_one_of_two_a_name_fits_does_not_say_which_was_meant():
+    both = alike()
+    busy = (Reported("djp3", "acme-web-api-pr-5", "busy"),)
+    for shown in (list(both), ["acme/web-api"], ["acme-web/api"]):
         pic = Picture(shown, both, "djp3", reported=busy)
         assert pic.agents == {}, shown
         assert all(pic.mine(pull) == Picture(shown, both, "djp3").mine(pull) for pull in pic.all())
@@ -150,49 +149,123 @@ def test_hiding_one_of_two_that_both_carry_it_does_not_say_which_was_meant():
 
 def test_a_repository_that_is_not_shown_has_no_agents():
     pic = Picture(["o/web"], {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())}, "djp3",
-                  reported=(Reported("djp3", "proj-86-pr-98", "busy"),))
+                  reported=(Reported("djp3", "o-app-pr-98", "busy"),))
     assert pic.agents == {}
+
+
+def test_a_repository_with_pr_and_a_number_in_its_own_name_has_its_agents():
+    """Its word reads two ways, and only one of them is a pull request that is there."""
+    pulls = {"acme/notes-pr-2024": read("acme/notes-pr-2024", [node(7, "x", author={"login": "djp3"})])}
+    pic = Picture(list(pulls), pulls, "djp3", reported=(Reported("djp3", "acme-notes-pr-2024-pr-7 tidy", "busy"),))
+    assert [(a.number, a.note) for a in pic.agents[("acme/notes-pr-2024", 7)]] == [(7, "tidy")]
+
+
+def test_the_name_to_use_puts_an_agent_on_its_pull_request():
+    pic = picture()
+    assert agent_name(pic.find(("o/app", 98))) == "o-app-pr-98"
+    assert agent_name(parse_pull("Acme/Web.Console", node(3, "x"))) == "Acme-Web.Console-pr-3"    # as GitHub spells it
+    for pull in pic.all():
+        one = Reported("bob", agent_name(pull), "busy")
+        assert located([one], pic.all()) == [(one, pull)]
+
+
+# ---- why an agent is on none --------------------------------------------------------------
+
+def lost(*names, shown=("o/app", "o/web"), pulls=None, state="busy"):
+    """(name, why) for each of djp3's agents so named that tried to say a pull request and
+    is on none. o/docs is on the list too, and has never been read."""
+    if pulls is None:
+        pulls = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())}
+    reported = [Reported("djp3", name, state) for name in names]
+    return [(one.one.name, one.why) for one in astray(reported, shown, pulls, ["o/app", "o/web", "o/docs"])]
+
+
+def test_a_name_that_tried_and_is_on_nothing_is_given_with_why():
+    assert lost("o-app-pr-5 fix", "app-pr-98", "o-tools-pr-3", "proj-86-pr-98") == [
+        ("o-app-pr-5 fix", "o/app has no open pull request 5"),
+        ("app-pr-98", "say whose repository: o-app-pr-98"),
+        ("o-tools-pr-3", "names no repository on your list"),
+        ("proj-86-pr-98", "names no repository on your list")]
+
+
+def test_an_agent_that_is_where_it_says_or_says_nothing_is_not_astray():
+    assert lost("o-app-pr-98", "O-Web-PR-98 deploy", "scratch", "pr-98") == []
+    assert lost("o-app-pr-5", state="dead") == []                                 # its session has ended
+
+
+def test_an_agent_of_a_hidden_repository_is_hidden_with_it_and_not_astray():
+    assert lost("o-app-pr-98", "o-app-pr-5", shown=("o/web",)) == []
+
+
+def test_a_repository_not_read_yet_may_have_the_pull_request_for_all_that_is_known():
+    assert lost("o-docs-pr-3") == []                                              # on the list, never read
+    only = {"o/web": read("o/web", web_nodes())}
+    assert lost("o-app-pr-98", pulls=only) == []                                  # shown, and its read still to come
+
+
+def test_a_name_that_fits_two_pull_requests_is_a_tie_and_says_which():
+    both, one = alike(), [Reported("djp3", "acme-web-api-pr-5", "busy")]
+    assert [(got.why, got.tie) for got in astray(one, list(both), both, list(both))] == [
+        ("fits acme/web-api #5 and acme-web/api #5", True)]
+    assert [got.tie for got in astray(one, ["acme/web-api"], both, list(both))] == [True]     # hiding one settles nothing
+    assert astray(one, [], both, list(both)) == []                                # both hidden: it is hidden with them
+
+
+def test_a_name_without_its_owner_is_told_every_repository_it_could_mean():
+    both, one = alike(), [Reported("djp3", "api-pr-5", "busy")]
+    assert [got.why for got in astray(one, list(both), both, ["acme-web/api", "bob/api"])] == [
+        "say whose repository: acme-web-api-pr-5 or bob-api-pr-5"]
+
+
+def test_every_agent_whose_name_tries_is_placed_or_astray_and_never_both():
+    reported = [Reported("djp3", name, "busy") for name in (
+        "o-app-pr-98", "o-app-pr-5", "app-pr-98", "o-tools-pr-3", "scratch", "o-web-pr-98 deploy")]
+    pulls = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())}
+    on = [one.name for one, _ in located_in(reported, ["o/app", "o/web"], pulls)]
+    off = [one.one.name for one in astray(reported, ["o/app", "o/web"], pulls)]
+    assert sorted(on + off) == sorted(one.name for one in reported if pictures.said(one.name))
+    assert not set(on) & set(off)
 
 
 # ---- who it works for, and its number ---------------------------------------------------
 
 def test_the_authors_agent_works_for_them_and_anyone_elses_reviews():
-    pic = picture(Reported("DJP3", "proj-86-pr-98 fix tests", "busy"), Reported("bob", "proj-86-pr-98 review", "busy"))
+    pic = picture(Reported("DJP3", "o-app-pr-98 fix tests", "busy"), Reported("bob", "o-app-pr-98 review", "busy"))
     assert [(a.operator, a.role, a.serial) for a in pic.on(pic.find(("o/app", 98)))] == [
         ("DJP3", "author", "01"), ("bob", "review", "01")]
 
 
 def test_agents_keep_their_numbers_whatever_order_they_are_reported_in():
-    one, two = Reported("djp3", "proj-86-pr-98 a", "busy"), Reported("djp3", "proj-86-pr-98 b", "idle")
+    one, two = Reported("djp3", "o-app-pr-98 a", "busy"), Reported("djp3", "o-app-pr-98 b", "idle")
     for order in ((one, two), (two, one)):
-        pic = picture(*order, Reported("bob", "proj-86-pr-98", "busy"))
+        pic = picture(*order, Reported("bob", "o-app-pr-98", "busy"))
         assert [(a.operator, a.serial, a.note) for a in pic.agents[("o/app", 98)]] == [
             ("djp3", "01", "a"), ("djp3", "02", "b"), ("bob", "01", "")]
 
 
 @pytest.mark.parametrize("name, said", [
-    ("proj-86-pr-98 fix tests", "fix tests"), ("PROJ-86-PR-98: Fix tests ", "Fix tests"),
-    ("proj-86-pr-98-fix-tests", "fix-tests"), ("proj-86-pr-98", ""), ("agent-frolic-af-42-pr-0017-01", ""),
-    ("review of proj-86-pr-98", ""), ("scratch", "")])
+    ("o-app-pr-98 fix tests", "fix tests"), ("O-APP-PR-98: Fix tests ", "Fix tests"),
+    ("o-app-pr-98-fix-tests", "fix-tests"), ("o-app-pr-98", ""), ("acme-web-pr-0017-01", ""),
+    ("review of o-app-pr-98", ""), ("scratch", "")])
 def test_what_a_name_goes_on_to_say_is_what_the_agent_is_at(name, said):
     assert words(name) == said
 
 
 def test_what_an_agent_is_at_is_said_on_its_line_of_the_list():
-    pic = picture(Reported("djp3", "proj-86-pr-98 fix tests", "busy"))
+    pic = picture(Reported("djp3", "o-app-pr-98 fix tests", "busy"))
     assert [a.note for a in pic.agents[("o/app", 98)]] == ["fix tests"]
 
 
 def test_two_sessions_with_one_name_are_two_agents():
-    twice = Reported("djp3", "proj-86-pr-98", "busy")
+    twice = Reported("djp3", "o-app-pr-98", "busy")
     assert [(a.serial, a.key) for a in picture(twice, twice).agents[("o/app", 98)]] == [
-        ("01", ("djp3", "o/app", 98, "proj-86-pr-98")), ("02", ("djp3", "o/app", 98, "proj-86-pr-98\x002"))]
+        ("01", ("djp3", "o/app", 98, "o-app-pr-98")), ("02", ("djp3", "o/app", 98, "o-app-pr-98\x002"))]
 
 
 def test_no_two_agents_are_known_by_the_same_thing_whatever_they_are_named():
     """The second of two sessions with one name was known as "name ·2", and a third session
     may be named exactly that: two agents with one key, and tab could not step past them."""
-    named = ("proj-86-pr-98", "proj-86-pr-98", "proj-86-pr-98 ·2", "proj-86-pr-98 2", "proj-86-pr-98 ·2")
+    named = ("o-app-pr-98", "o-app-pr-98", "o-app-pr-98 ·2", "o-app-pr-98 2", "o-app-pr-98 ·2")
     pic = picture(*(Reported("djp3", name, "busy") for name in named))
     agents = pic.agents[("o/app", 98)]
     assert len(agents) == 5 and len({a.key for a in agents}) == 5
@@ -201,7 +274,7 @@ def test_no_two_agents_are_known_by_the_same_thing_whatever_they_are_named():
 
 
 def test_an_agent_is_known_by_its_name_when_one_before_it_ends_so_a_focus_on_it_stays():
-    a, b, c = (Reported("djp3", f"proj-86-pr-98 {letter}", "busy") for letter in "abc")
+    a, b, c = (Reported("djp3", f"o-app-pr-98 {letter}", "busy") for letter in "abc")
     before, after = picture(a, b, c), picture(b, c)                               # a ends
     was = {agent.note: agent for agent in before.agents[("o/app", 98)]}
     now = {agent.note: agent for agent in after.agents[("o/app", 98)]}
@@ -215,7 +288,7 @@ def test_an_agent_is_known_by_its_name_when_one_before_it_ends_so_a_focus_on_it_
 def numbered(numbers, *names):
     """{what its name goes on to say: its number} for djp3's sessions on #98, built with `numbers`."""
     pic = Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", numbers=numbers,
-                  reported=tuple(Reported("djp3", f"proj-86-pr-98 {name}", "busy") for name in names))
+                  reported=tuple(Reported("djp3", f"o-app-pr-98 {name}", "busy") for name in names))
     return {agent.note: agent.serial for agent in pic.agents.get(("o/app", 98), [])}
 
 
@@ -235,9 +308,9 @@ def test_numbers_are_forgotten_with_the_agents_that_had_them():
     numbers = {}
     numbered(numbers, "a", "b")
     assert list(numbers) == [(("o/app", 98), "djp3")]
-    assert numbered(numbers, "b") == {"b": "02"} and numbers[(("o/app", 98), "djp3")] == {"proj-86-pr-98 b": 2}
+    assert numbered(numbers, "b") == {"b": "02"} and numbers[(("o/app", 98), "djp3")] == {"o-app-pr-98 b": 2}
     Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", numbers=numbers,
-            reported=(Reported("mira", "proj-12-pr-7", "busy"),))              # djp3 has none on #98 any more
+            reported=(Reported("mira", "o-app-pr-7", "busy"),))              # djp3 has none on #98 any more
     assert list(numbers) == [(("o/app", 7), "mira")]
     assert numbered(numbers, "b") == {"b": "01"}                                  # so b is numbered afresh
 
@@ -256,7 +329,7 @@ def test_without_numbers_kept_agents_are_numbered_by_name_each_time():
 
 
 def test_two_sessions_with_one_name_do_not_move_on_screen_when_they_trade_what_they_do():
-    busy, idle = Reported("djp3", "proj-86-pr-98", "busy"), Reported("djp3", "proj-86-pr-98", "idle")
+    busy, idle = Reported("djp3", "o-app-pr-98", "busy"), Reported("djp3", "o-app-pr-98", "idle")
     one, other = picture(busy, idle).agents[("o/app", 98)], picture(idle, busy).agents[("o/app", 98)]
     assert [(a.serial, a.state, a.key) for a in one] == [(a.serial, a.state, a.key) for a in other]
 
@@ -269,31 +342,31 @@ def state(owner, name, word, stale=False):
 
 
 def test_an_agent_the_farm_calls_busy_is_working():
-    assert state("djp3", "proj-86-pr-98", "busy") == ["working"]
+    assert state("djp3", "o-app-pr-98", "busy") == ["working"]
 
 
 def test_an_agent_that_asked_its_human_something_is_at_its_prompt_wherever_the_pull_request_stands():
-    assert state("djp3", "proj-86-pr-98", "waiting") == ["at its prompt"]         # though #98 waits on bob
+    assert state("djp3", "o-app-pr-98", "waiting") == ["at its prompt"]         # though #98 waits on bob
 
 
 @pytest.mark.parametrize("word", ["idle", "shell"])
 def test_an_idle_agent_is_at_its_prompt_only_when_the_move_is_its_humans(word):
-    assert state("djp3", "proj-87-pr-99", word) == ["at its prompt"]              # djp3: finish the draft
-    assert state("djp3", "proj-86-pr-98", word) == ["waiting"]                    # it waits on bob
-    assert state("bob", "proj-86-pr-98", word) == ["at its prompt"]               # and bob's own is at its prompt
-    assert state("djp3", "proj-91-pr-102", word) == ["waiting"]                   # queued behind #98
-    assert state("kenji", "proj-12-pr-7", word) == ["waiting"]                    # nobody asked kenji
+    assert state("djp3", "o-app-pr-99", word) == ["at its prompt"]              # djp3: finish the draft
+    assert state("djp3", "o-app-pr-98", word) == ["waiting"]                    # it waits on bob
+    assert state("bob", "o-app-pr-98", word) == ["at its prompt"]               # and bob's own is at its prompt
+    assert state("djp3", "o-app-pr-102", word) == ["waiting"]                   # queued behind #98
+    assert state("kenji", "o-app-pr-7", word) == ["waiting"]                    # nobody asked kenji
 
 
 def test_an_idle_agent_that_reviews_for_a_team_that_was_asked_is_at_its_prompt():
     """Which team its human is on is not known: a team was asked, and it is not the author's."""
-    assert state("bob", "sec-4-pr-40", "idle") == ["at its prompt"]
-    assert state("dependabot", "sec-4-pr-40", "idle") == ["waiting"]
+    assert state("bob", "o-app-pr-40", "idle") == ["at its prompt"]
+    assert state("dependabot", "o-app-pr-40", "idle") == ["waiting"]
 
 
 def test_the_viewers_own_idle_agent_is_at_its_prompt_for_a_team_only_when_they_are_on_it():
     """The yellow on their card says a move is theirs: for a team they are not on, it is not."""
-    mine = Reported("djp3", "sec-4-pr-40 review", "idle")                        # #40 is asked of team platform
+    mine = Reported("djp3", "o-app-pr-40 review", "idle")                        # #40 is asked of team platform
     off, on = picture(mine), picture(mine, teams={"team/o/platform": "Platform"})
     assert [a.state for a in off.agents[("o/app", 40)]] == ["waiting"] and not off.mine(off.find(("o/app", 40)))
     assert [a.state for a in on.agents[("o/app", 40)]] == ["at its prompt"] and on.mine(on.find(("o/app", 40)))
@@ -302,11 +375,11 @@ def test_the_viewers_own_idle_agent_is_at_its_prompt_for_a_team_only_when_they_a
 def test_the_viewers_idle_agent_is_at_its_prompt_where_they_may_act_as_maintainer():
     """An outsider's approved pull request waits on the organization to merge it."""
     def state(access):
-        nodes = [node(41, "ops-9-pr-41", author={"login": "wen"}, authorAssociation="CONTRIBUTOR", baseRefOid=TIP,
+        nodes = [node(41, "ops-9-hotfix", author={"login": "wen"}, authorAssociation="CONTRIBUTOR", baseRefOid=TIP,
                       reviewDecision="APPROVED", latestOpinionatedReviews=APPROVED("kenji"))]
         got = RepoPulls("acme/app", "main", stack([parse_pull("acme/app", n) for n in nodes], "main"), 1, NOW, TIP,
                         access=access, org=True)
-        pic = Picture(["acme/app"], {"acme/app": got}, "djp3", reported=(Reported("djp3", "ops-9-pr-41", "idle"),))
+        pic = Picture(["acme/app"], {"acme/app": got}, "djp3", reported=(Reported("djp3", "acme-app-pr-41", "idle"),))
         return [a.state for a in pic.agents[("acme/app", 41)]]
 
     assert state("admin") == ["at its prompt"] and state("read") == ["waiting"]
@@ -314,12 +387,12 @@ def test_the_viewers_idle_agent_is_at_its_prompt_where_they_may_act_as_maintaine
 
 @pytest.mark.parametrize("word", ["unknown", "pondering", "", "BUSY"])
 def test_a_word_this_app_does_not_know_is_unknown_and_never_work(word):
-    assert state("djp3", "proj-86-pr-98", word) == ["unknown"]
+    assert state("djp3", "o-app-pr-98", word) == ["unknown"]
 
 
 @pytest.mark.parametrize("word", ["busy", "waiting", "idle"])
 def test_what_a_farm_gone_quiet_last_said_is_not_what_its_agents_do_now(word):
-    assert state("mira", "proj-12-pr-7", word, stale=True) == ["unknown"]
+    assert state("mira", "o-app-pr-7", word, stale=True) == ["unknown"]
 
 
 def test_doing_is_asked_of_the_farms_word_and_the_standing_alone():
@@ -330,7 +403,7 @@ def test_doing_is_asked_of_the_farms_word_and_the_standing_alone():
 # ---- what it changes on the board -------------------------------------------------------
 
 def test_a_pull_request_an_agent_is_at_work_on_is_moving_and_off_the_list_of_what_needs_effort():
-    quiet, busy = picture(), picture(Reported("mira", "proj-12-pr-7 review fixes", "busy"))
+    quiet, busy = picture(), picture(Reported("mira", "o-app-pr-7 review fixes", "busy"))
     seven = quiet.find(("o/app", 7))
     assert quiet.mine(seven) and ("o/app", 7) in {(e.pull.repo, e.pull.number) for e in needs_effort(quiet, NOW)}
     assert not busy.mine(seven) and ("o/app", 7) not in {(e.pull.repo, e.pull.number) for e in needs_effort(busy, NOW)}
@@ -341,14 +414,14 @@ def test_a_pull_request_an_agent_is_at_work_on_is_moving_and_off_the_list_of_wha
                                                ("busy", True, 0)])
 def test_an_agent_that_is_not_known_to_be_working_takes_nothing_off_the_list(word, stale, idle):
     """And only one known to be idle is counted as waiting for it: of the rest nothing is known."""
-    pic = picture(Reported("mira", "proj-12-pr-7", word, stale))
+    pic = picture(Reported("mira", "o-app-pr-7", word, stale))
     effort = {(e.pull.repo, e.pull.number): e for e in needs_effort(pic, NOW)}
     assert pic.mine(pic.find(("o/app", 7))) and effort[("o/app", 7)].waiting == idle
 
 
 def test_each_agent_is_drawn_beneath_its_human_with_what_it_is_doing():
-    pic = picture(Reported("djp3", "proj-86-pr-98 a", "busy"), Reported("djp3", "proj-86-pr-98 b", "idle"),
-                  Reported("bob", "proj-86-pr-98 review", "waiting"), Reported("mira", "proj-12-pr-7", "busy", True))
+    pic = picture(Reported("djp3", "o-app-pr-98 a", "busy"), Reported("djp3", "o-app-pr-98 b", "idle"),
+                  Reported("bob", "o-app-pr-98 review", "waiting"), Reported("mira", "o-app-pr-7", "busy", True))
     assert said(pic, "o/app", 98) == ["  you |  |   bob", "  └ ⠋ agent 01 | working |   └ ▷ agent 01",
                                       "  └ · agent 02 | waiting |"]
     assert said(pic, "o/app", 7) == ["  mira |  | ● you", "  └ ? agent 01 | unknown |"]
@@ -356,7 +429,7 @@ def test_each_agent_is_drawn_beneath_its_human_with_what_it_is_doing():
 
 def test_an_agent_whose_human_is_not_waited_on_is_on_the_row_all_the_same():
     """It takes the pull request off the list of what needs effort: the row must say why."""
-    pic = picture(Reported("kenji", "proj-12-pr-7 poke", "busy"))                 # #7 waits on djp3; nobody asked kenji
+    pic = picture(Reported("kenji", "o-app-pr-7 poke", "busy"))                 # #7 waits on djp3; nobody asked kenji
     seven = pic.find(("o/app", 7))
     assert not pic.mine(seven) and said(pic, "o/app", 7) == ["  mira | waiting |   you", " |  |   kenji",
                                                              " |  |   └ ⠋ agent 01"]
@@ -365,24 +438,24 @@ def test_an_agent_whose_human_is_not_waited_on_is_on_the_row_all_the_same():
 
 
 def test_a_reviewers_agent_stays_on_the_row_when_the_move_goes_back_to_the_author():
-    pic = picture(Reported("bob", "proj-87-pr-99 review", "idle"))                # #99 is djp3's draft to finish
+    pic = picture(Reported("bob", "o-app-pr-99 review", "idle"))                # #99 is djp3's draft to finish
     assert said(pic, "o/app", 99) == ["● you | to act |   bob", " |  |   └ · agent 01"]
 
 
 def test_an_agent_on_a_pull_request_that_waits_on_the_one_below_is_on_its_own_row():
-    pic = picture(Reported("kenji", "proj-91-pr-102", "busy"), Reported("bob", "proj-86-pr-98", "busy"))
+    pic = picture(Reported("kenji", "o-app-pr-102", "busy"), Reported("bob", "o-app-pr-98", "busy"))
     assert said(pic, "o/app", 102) == ["  you | waiting |   #98 →", " |  |   bob", " |  |   └ ⠋ agent 01",
                                        " |  |   kenji", " |  |   └ ⠋ agent 01"]
 
 
 def test_no_agent_is_drawn_twice_on_a_row():
-    pic = picture(Reported("bob", "proj-86-pr-98 review", "busy"), Reported("djp3", "proj-86-pr-98", "busy"))
+    pic = picture(Reported("bob", "o-app-pr-98 review", "busy"), Reported("djp3", "o-app-pr-98", "busy"))
     drawn = [a.key for line in line_agents(pic, pic.find(("o/app", 98))) for a in line]
     assert sorted(drawn) == sorted(a.key for a in pic.agents[("o/app", 98)]) and len(drawn) == 2
 
 
 def test_an_agent_whose_state_is_unknown_has_its_place_on_a_card_and_in_the_order():
-    unknown = picture(Reported("mira", "proj-12-pr-7", "busy", True)).agents[("o/app", 7)][0]
+    unknown = picture(Reported("mira", "o-app-pr-7", "busy", True)).agents[("o/app", 7)][0]
     assert plain(board.agent_line(unknown, yours=False)) == "? #7"
     assert look(unknown).order > LOOKS["waiting"].order
 
@@ -416,7 +489,7 @@ async def test_a_state_with_no_look_of_its_own_does_not_stop_the_board(isolated,
     app = main.Frolic()
     async with app.run_test(size=(170, 46)) as pilot:
         await settle(app, pilot)
-        FakeGrange.answers.put(team(("djp3", "proj-86-pr-98 fix tests", "busy")))
+        FakeGrange.answers.put(team(("djp3", "o-app-pr-98 fix tests", "busy")))
         await until(pilot, lambda: app.reported)
         for _ in range(3):
             await pilot.press("down")                            # to #98, so that the drawer has it
@@ -430,7 +503,7 @@ async def test_a_state_with_no_look_of_its_own_does_not_stop_the_board(isolated,
 
 def test_a_picture_is_given_its_agents_or_the_reports_they_come_from_not_both():
     """Given both it kept the second and dropped the first, without a word."""
-    reported = (Reported("djp3", "proj-86-pr-98", "busy"),)
+    reported = (Reported("djp3", "o-app-pr-98", "busy"),)
     given = picture(*reported).agents
     with pytest.raises(ValueError, match="not both"):
         Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", given, reported=reported)
@@ -438,7 +511,7 @@ def test_a_picture_is_given_its_agents_or_the_reports_they_come_from_not_both():
 
 
 def test_the_setups_tally_and_the_picture_go_by_the_same_rule():
-    reported = (Reported("djp3", "proj-86-pr-98", "busy"), Reported("kenji", "ops-3-pr-98", "busy"),
+    reported = (Reported("djp3", "o-app-pr-98", "busy"), Reported("kenji", "o-web-pr-98", "busy"),
                 Reported("djp3", "scratch", "idle"))
     pulls = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())}
     for names in (["o/app", "o/web"], ["o/app"], ["O/Web"], []):
@@ -447,7 +520,7 @@ def test_the_setups_tally_and_the_picture_go_by_the_same_rule():
 
 
 def test_placed_is_what_the_picture_holds():
-    reported = (Reported("djp3", "proj-86-pr-98", "busy"),)
+    reported = (Reported("djp3", "o-app-pr-98", "busy"),)
     assert picture(*reported).agents == placed(picture(), reported)
 
 
@@ -482,8 +555,8 @@ def ticker(app) -> str:
     return screen(app).splitlines()[-2].rstrip()
 
 
-THE_TEAM = (("djp3", "proj-86-pr-98 fix tests", "busy"), ("djp3", "scratch", "idle"),
-            ("mira", "proj-12-pr-7 docs", "busy"), ("kenji", "billing-3-pr-7", "busy"))
+THE_TEAM = (("djp3", "o-app-pr-98 fix tests", "busy"), ("djp3", "scratch", "idle"),
+            ("mira", "o-app-pr-7 docs", "busy"), ("kenji", "o-billing-pr-7", "busy"))
 
 
 @drive
@@ -526,7 +599,7 @@ async def test_a_new_answer_replaces_the_last_whole(isolated):
         await settle(app, pilot)
         FakeGrange.answers.put(team(*THE_TEAM, cursor=4))
         await until(pilot, lambda: len(app.reported) == 4)
-        FakeGrange.answers.put(team(("mira", "proj-12-pr-7 docs", "idle"), cursor=5))
+        FakeGrange.answers.put(team(("mira", "o-app-pr-7 docs", "idle"), cursor=5))
         await until(pilot, lambda: len(app.reported) == 1)
         await pilot.pause(0.3)
         assert {key: [a.state for a in agents] for key, agents in app.board.pic.agents.items()} == {
@@ -537,7 +610,7 @@ async def test_a_new_answer_replaces_the_last_whole(isolated):
 async def test_on_the_board_an_agent_keeps_its_number_when_the_one_before_it_ends(isolated):
     a_board()
     app = main.Frolic()
-    mine = [("djp3", "proj-86-pr-98 a", "busy"), ("djp3", "proj-86-pr-98 b", "busy")]
+    mine = [("djp3", "o-app-pr-98 a", "busy"), ("djp3", "o-app-pr-98 b", "busy")]
     async with app.run_test(size=(150, 40)) as pilot:
         await settle(app, pilot)
         FakeGrange.answers.put(team(*mine, cursor=4))
@@ -553,37 +626,109 @@ async def test_on_the_board_an_agent_keeps_its_number_when_the_one_before_it_end
         assert app.agent_numbers == {}
 
 
+def a_board_of_two_alike():
+    """A board of two repositories a name writes the same way, each with a pull request 5."""
+    keychain.put(keychain.GITHUB_TOKEN, TOKEN)
+    store = RepoStore()
+    store.add("acme/web-api", admin=True)
+    store.add("acme-web/api", admin=True)
+    FakePulls.tips = {"acme/web-api": TIP, "acme-web/api": TIP}
+    FakePulls.open_ = {"acme/web-api": [node(5, "a", author={"login": "djp3"}, baseRefOid=TIP)],
+                       "acme-web/api": [node(5, "b", author={"login": "kenji"}, baseRefOid=TIP)]}
+
+
 @drive
 async def test_a_repository_that_is_removed_takes_its_reading_with_it_and_settles_the_tie(isolated):
-    """Hidden, a repository's reading is kept, and still counts when two pull requests carry
-    one ticket: hiding does not say which was meant. Removed, it is gone for good, its side of
-    the tie with it, and a read of it that ends afterwards is not kept either."""
-    a_board()
-    FakePulls.open_["o/web"] = [node(98, "proj-86-pr-98-too", author={"login": "kenji"}, baseRefOid=TIP)]
+    """Hidden, a repository's reading is kept, and still counts when a name fits a pull
+    request of each of two: hiding does not say which was meant. Removed, it is gone for good,
+    its side of the tie with it, and a read of it that ends afterwards is not kept either."""
+    a_board_of_two_alike()
     app = main.Frolic()
     async with app.run_test(size=(170, 46)) as pilot:
         await settle(app, pilot)
-        FakeGrange.answers.put(team(("djp3", "proj-86-pr-98", "busy")))
+        FakeGrange.answers.put(team(("djp3", "acme-web-api-pr-5", "busy")))
         await until(pilot, lambda: app.reported)
         await pilot.pause(0.3)
-        assert app.board.pic.agents == {}                        # two carry it: it is on neither
-        app.show_repo("o/web", False)
+        assert app.board.pic.agents == {}                        # it fits two: it is on neither
+        app.show_repo("acme-web/api", False)
         await pilot.pause(0.3)
-        assert app.board.pic.agents == {} and "o/web" in app.pulls     # hidden: still a tie
-        late = app.pulls["o/web"]
+        assert app.board.pic.agents == {} and "acme-web/api" in app.pulls     # hidden: still a tie
+        late = app.pulls["acme-web/api"]
         await to_setup(app, pilot)
         await pilot.press("down")
-        assert app.selected().name == "o/web"
+        assert app.selected().name == "acme-web/api"
         await pilot.press("x")
         await pilot.pause()
         await pilot.press("y")
         await settle(app, pilot)
-        assert app.store.get("o/web") is None and "o/web" not in app.pulls
-        app.pulls_known("o/web", late, app.token_used)           # a read of it that ends only now
-        assert "o/web" not in app.pulls
+        assert app.store.get("acme-web/api") is None and "acme-web/api" not in app.pulls
+        app.pulls_known("acme-web/api", late, app.token_used)    # a read of it that ends only now
+        assert "acme-web/api" not in app.pulls
         await pilot.press("s")
         await pilot.pause(0.3)
-        assert list(app.board.pic.agents) == [("o/app", 98)]     # removed: the tie is settled
+        assert list(app.board.pic.agents) == [("acme/web-api", 5)]     # removed: the tie is settled
+        assert app.agents_tied() == ""
+
+
+TIED = "1 agent not shown: its name fits two pull requests · s says which"
+
+
+@drive
+async def test_a_name_that_fits_two_pull_requests_is_said_quietly_for_as_long_as_it_does(isolated):
+    """The agent is on neither, and without a word it would simply be missing."""
+    a_board_of_two_alike()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        assert app.agents_tied() == "" and "not shown" not in screen(app)
+        FakeGrange.answers.put(team(("djp3", "acme-web-api-pr-5 fix", "busy"), ("bob", "scratch", "idle")))
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.5)                                   # drawn more than once
+        ticker = app.board.ticker()
+        assert ticker.plain.endswith("   " + TIED) and "✗" not in ticker.plain
+        assert str(ticker.spans[-1].style) == MUTED              # fainter than what is amiss, and with no mark
+        assert TIED in screen(app)
+        said = "djp3's agent acme-web-api-pr-5 fix is not shown: its name fits acme/web-api #5 and acme-web/api #5"
+        assert [(text, style) for _, text, style in app.lines if "not shown" in text] == [(said, main.INK)]   # once
+        await to_setup(app, pilot)
+        drawn = screen(app)
+        assert "2 reported · 0 on the pull requests shown here" in drawn
+        assert "not shown djp3 › acme-web-api-pr-5 fix   fits acme/web-api #5 and acme-web/api #5" in drawn
+        await pilot.press("s")
+        FakeGrange.answers.put(team(("bob", "scratch", "idle"), cursor=2))     # its session has ended
+        await until(pilot, lambda: len(app.reported) == 1)
+        await pilot.pause(0.3)
+        assert app.agents_tied() == "" and TIED not in screen(app)
+
+
+@drive
+async def test_what_is_amiss_with_the_grange_is_said_before_a_name_that_fits_two(isolated):
+    a_board_of_two_alike()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "acme-web-api-pr-5", "busy"), ("bob", "acme-web-api-pr-5", "idle")))
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        assert app.agents_tied() == "2 agents not shown: each name fits two pull requests · s says which"
+        FakeGrange.answers.put(out_of_date({"error": "image out of date", "fix": "make update"}, retry=0.01))
+        await until(pilot, lambda: app.grange_state == "stale")
+        await pilot.pause(0.3)
+        ticker = app.board.ticker().plain
+        assert "✗ agent-grange is out of date" in ticker and "fits two" not in ticker
+
+
+@drive
+async def test_in_a_window_too_narrow_for_both_the_news_stays_and_the_quiet_notice_gives_way(isolated):
+    a_board_of_two_alike()
+    app = main.Frolic()
+    async with app.run_test(size=(70, 40)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "acme-web-api-pr-5", "busy")))
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        assert app.agents_tied() == TIED
+        assert app.board.ticker().plain == app.board.happened().plain          # the line as it would be without it
 
 
 @drive
@@ -611,17 +756,43 @@ async def test_the_setup_says_what_the_grange_reports(isolated):
         assert "4  Agents" in drawn and "✓ answers on 127.0.0.1:7788 as djp3" in drawn
         assert "3 granges · 1 with no word from its agent-farm" in drawn
         assert "4 reported · 2 on the pull requests shown here" in drawn
-        counted = app.here_for
+        assert "not shown kenji › o-billing-pr-7   names no repository on your list" in drawn
+        assert "scratch" not in drawn                            # it says no pull request: nothing is amiss with it
+        counted = app.told_for
         app.setup.draw()
-        assert app.here_for is counted                           # drawn again: not counted again
+        assert app.told_for is counted                           # drawn again: not counted again
         assert all(kept is app.pulls[key] for kept, key in zip(counted[2], app.pulls))   # the readings themselves
         app.pulls["o/web"] = replace(app.pulls["o/web"])         # read again: the same within, another object
         app.setup.draw()
-        assert app.here_for is not counted and app.here_for[2][1] is app.pulls["o/web"]
+        assert app.told_for is not counted and app.told_for[2][1] is app.pulls["o/web"]
         app.show_repo("o/app", False)                            # a repository hidden: counted afresh
         await pilot.pause(0.1)
         assert "4 reported · 0 on the pull requests shown here" in screen(app)
         assert [said for _, said, _ in app.lines].count("agent-grange answers: 3 granges, 4 agents") == 1
+
+
+@drive
+async def test_the_agents_not_shown_have_a_few_rows_of_the_setup_and_one_row_each(isolated):
+    """Their names are typed on a teammate's Mac and may be long, and there may be many: the
+    part keeps its height, so the pull requests and the log below keep theirs."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await settle(app, pilot)
+        await to_setup(app, pilot)
+        long = "o-app-pr-5 " + "x" * 200
+        FakeGrange.answers.put(team(("djp3", long, "busy"), *(("djp3", f"o-app-pr-{n}", "idle") for n in range(1, 6))))
+        await until(pilot, lambda: app.grange_state == "ok")
+        await pilot.pause(0.2)
+        rows = screen(app).splitlines()
+        top = next(i for i, row in enumerate(rows) if "4  Agents" in row)
+        part = rows[top:next(i for i in range(top, len(rows)) if set(rows[i].strip()) == {"─"})]
+        assert len(part) == 4 + app.ASTRAY_SHOWN, part           # the four it had, and no more than these
+        assert "6 reported · 0 on the pull requests shown here" in part[3]
+        assert "not shown djp3 › o-app-pr-5 xxxx" in part[4]                 # the name is cut, and why it is
+        assert part[4].rstrip().endswith("…   o/app has no open pull request 5")      # not shown is said whole
+        assert part[5].strip() == "djp3 › o-app-pr-1   o/app has no open pull request 1"
+        assert part[-1].strip() == "and 3 more"                  # six of them: three, and a count of the rest
 
 
 @drive
@@ -756,7 +927,7 @@ async def test_a_granges_own_name_takes_one_row_too_however_long_it_is(isolated)
         rows = screen(app).splitlines()
         top = next(i for i, row in enumerate(rows) if "4  Agents" in row)
         part = rows[top:next(i for i in range(top, len(rows)) if set(rows[i].strip()) == {"─"})]
-        assert len(part) == 4, part                                # its heading, the grange, the team, the agents
+        assert len(part) == 5, part                # its heading, the grange, the team, the agents, the one not shown
         assert "✓ answers on 127.0.0.1:7788 as ggg" in part[1] and part[1].rstrip().endswith("…")
         assert all(len(row.rstrip()) <= 100 for row in part)
 

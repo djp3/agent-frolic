@@ -191,6 +191,19 @@ class FakeBrowser:
         FakeBrowser.opened.append(url)
 
 
+class FakeClipboard:
+    """Stands in for the Mac's clipboard: it remembers what it was handed. No test puts
+    anything on the real one, which is the user's."""
+    copied: list = []
+    broken: Exception | None = None       # set it, and copying fails this way
+
+    @staticmethod
+    def copy(text):
+        if FakeClipboard.broken is not None:
+            raise FakeClipboard.broken
+        FakeClipboard.copied.append(text)
+
+
 class FakeGrange:
     """The agent-grange on this Mac. It holds every question, as a grange with nothing new
     to say does, until a test hands it an answer: `FakeGrange.answers.put(...)` with a

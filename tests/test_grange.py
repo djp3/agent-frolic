@@ -16,7 +16,7 @@ PICTURE = {
     "cursor": 9124, "grange": "djp3", "incarnation": 1763323200123,
     "granges": [
         {"grange": "djp3", "seen_age_s": 0.0, "farm_age_s": 7.2, "farm_stale": False,
-         "agents": [{"owner": "djp3", "name": "proj-86-pr-98 fix tests", "state": "busy"}]},
+         "agents": [{"owner": "djp3", "name": "acme-web-pr-98 fix tests", "state": "busy"}]},
         {"grange": "mira", "seen_age_s": 2.4, "farm_age_s": 95.0, "farm_stale": True,
          "agents": [{"owner": "mira", "name": "proj-12-pr-7 docs", "state": "idle"}]},
     ],
@@ -95,7 +95,7 @@ def test_the_whole_picture_is_read_this_macs_grange_first(serve):
     got = Grange(serve(answering(PICTURE)).port).read()
     assert (got.cursor, got.grange) == (9124, "djp3")
     assert got.granges == (
-        Farm("djp3", False, (Reported("djp3", "proj-86-pr-98 fix tests", "busy"),)),
+        Farm("djp3", False, (Reported("djp3", "acme-web-pr-98 fix tests", "busy"),)),
         Farm("mira", True, (Reported("mira", "proj-12-pr-7 docs", "idle", stale=True),)))
     assert [(a.owner, a.state) for a in got.reported()] == [("djp3", "busy"), ("mira", "idle")]
 
@@ -182,9 +182,9 @@ def test_control_characters_are_taken_out_of_what_was_typed_elsewhere():
 def test_a_newline_or_a_tab_in_a_field_becomes_a_space_so_each_stays_on_its_line():
     """Every one of these is drawn on one line of the board or the setup."""
     got = grange.parse({"cursor": 1, "grange": "dj\tp3\n", "granges": [{"grange": "mi\r\nra", "agents": [
-        {"owner": " mira\n", "name": "proj-86-pr-98 fix\ntests\t\tnow \u2028 then", "state": "bu\nsy"}]}]})
+        {"owner": " mira\n", "name": "acme-web-pr-98 fix\ntests\t\tnow \u2028 then", "state": "bu\nsy"}]}]})
     assert (got.grange, got.granges[0].grange) == ("dj p3", "mi ra")
-    assert got.reported() == [Reported("mira", "proj-86-pr-98 fix tests now then", "bu sy")]
+    assert got.reported() == [Reported("mira", "acme-web-pr-98 fix tests now then", "bu sy")]
     shown = [got.grange, got.granges[0].grange, *(part for a in got.reported() for part in (a.owner, a.name, a.state))]
     assert not any(c in text for text in shown for c in "\n\r\t")
     wrong = grange.out_of_date({"summary": "image is\n3 behind", "fix": "make update\t(then make up)"})
@@ -193,7 +193,7 @@ def test_a_newline_or_a_tab_in_a_field_becomes_a_space_so_each_stays_on_its_line
 
 def test_an_owner_of_nothing_but_white_space_is_no_owner():
     got = grange.parse({"cursor": 1, "granges": [{"grange": "djp3", "agents": [
-        {"owner": " \n\t", "name": "proj-86-pr-98", "state": "busy"}]}]})
+        {"owner": " \n\t", "name": "acme-web-pr-98", "state": "busy"}]}]})
     assert got.reported() == []
 
 
@@ -203,16 +203,16 @@ def test_an_owner_that_is_not_shaped_as_a_github_login_is_no_owner(owner):
     """The picture uses an owner as a login: whose card the agent is on, whether a move is
     theirs. Taken as it came, "team/o/platform" would put an agent on that team's card."""
     got = grange.parse({"cursor": 1, "granges": [{"grange": "djp3", "agents": [
-        {"owner": owner, "name": "proj-86-pr-98", "state": "busy"},
-        {"owner": "djp3", "name": "proj-86-pr-98", "state": "busy"}]}]})
-    assert got.reported() == [Reported("djp3", "proj-86-pr-98", "busy")]
+        {"owner": owner, "name": "acme-web-pr-98", "state": "busy"},
+        {"owner": "djp3", "name": "acme-web-pr-98", "state": "busy"}]}]})
+    assert got.reported() == [Reported("djp3", "acme-web-pr-98", "busy")]
 
 
 @pytest.mark.parametrize("owner", ["djp3", "DJP3", "d", "mira-k", "a1-b2-c3", "d" * 39,
                                    "mira_acme", "mira-k_acme", "m_a"])             # as an enterprise names its people
 def test_a_github_login_is_an_owner(owner):
     got = grange.parse({"cursor": 1, "granges": [{"grange": "djp3", "agents": [
-        {"owner": owner, "name": "proj-86-pr-98", "state": "busy"}]}]})
+        {"owner": owner, "name": "acme-web-pr-98", "state": "busy"}]}]})
     assert [a.owner for a in got.reported()] == [owner]
 
 
@@ -289,9 +289,9 @@ def test_what_the_app_does_not_show_is_not_read_so_nothing_in_it_can_void_the_an
     """The ages of each grange and the restart count: whatever they hold."""
     body = {"cursor": 1, "grange": "djp3", "incarnation": [10 ** 400], "granges": [
         {"grange": "djp3", "seen_age_s": 10 ** 400, "farm_age_s": {"not": "a time"}, "farm_stale": False,
-         "agents": [{"owner": "djp3", "name": "proj-86-pr-98", "state": "busy"}]}]}
+         "agents": [{"owner": "djp3", "name": "acme-web-pr-98", "state": "busy"}]}]}
     got = Grange(serve(answering(body)).port).read()
-    assert got == Reading(1, "djp3", (Farm("djp3", False, (Reported("djp3", "proj-86-pr-98", "busy"),)),))
+    assert got == Reading(1, "djp3", (Farm("djp3", False, (Reported("djp3", "acme-web-pr-98", "busy"),)),))
     kept = {name for cls in (Farm, Reading) for name in cls.__dataclass_fields__}
     assert not {"seen_age_s", "farm_age_s", "incarnation"} & kept
 
