@@ -23,6 +23,10 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     merged or closed since, is drawn the same way: its name is read as if it said the
     repository alone, once that repository has been read (`early`, `Agent.named`). It
     moves onto the pull request when a reading has it.
+  • AN AGENT'S NUMBER, "agent 07", counts among all the agents its human has on the board,
+    whichever pull request or repository each is on: it says one session of theirs. A
+    human's numbers run from 01 to however many agents they have there, with none left
+    out (`numbered`).
   • WHAT AN AGENT IS DOING is the farm's word, turned into one of four (`Agent.state`). An
     idle one is "at its prompt" when its pull request waits on the human who runs it, and
     "waiting" when it waits on someone else: the farm cannot tell those apart, and only
@@ -63,7 +67,6 @@ request. Nothing here touches the screen or the network, so all of it is tested 
 """
 from __future__ import annotations
 
-import itertools
 import math
 import re
 from dataclasses import dataclass, field
@@ -101,14 +104,14 @@ def key_of(pull: PullRequest) -> Key:
 @dataclass
 class Agent:
     operator: str                 # the login of the human it runs under
-    serial: str                   # "01": counts sessions on one pull request
+    serial: str                   # "07": its number among all its human's agents on the board
     repo: str
     number: int                   # the pull request it is on; 0 while it is on none (`early`)
     role: str                     # "author": works on it for its author; "review": reviews it
     state: str                    # "working" | "at its prompt" | "waiting" | "unknown"
     note: str = ""                # what it is doing, in its human's words: what its name goes on to say
-    ident: str = ""               # what tells it from its human's other agents here, from one report to
-                                  # the next: its session's name. Its serial is only its place among them
+    ident: str = ""               # what tells it from its human's other agents, from one report to the
+                                  # next: its session's name. Its serial is for the eye (`numbered`)
     command: bool = False         # idle, and a command it started still runs: its wheel turns, in white
     named: int = 0                # on none, the pull request its name says all the same: that one is
                                   # not open, and the agent is drawn as one that has none yet
@@ -134,8 +137,8 @@ class Agent:
 
     @property
     def key(self) -> tuple[str, str, int, str]:
-        """What the focus holds on to. By `ident` when it has one: a serial moves to another
-        agent when one before it starts or ends."""
+        """What the focus holds on to. By `ident` when it has one: a serial is free for
+        another agent once its own has gone."""
         return (self.operator.lower(), self.repo.lower(), self.number, self.ident or self.serial)
 
 
@@ -465,73 +468,114 @@ def astray(reported: Iterable[Report], names: Iterable[str], pulls: Mapping[str,
     return out
 
 
-Numbers = dict[tuple[Key, str], dict[str, int]]    # (pull request, its human in lower case) -> the number
-                                                    # each of their agents there has, by `Agent.ident`
+Numbers = dict[str, dict[str, int]]    # a human, in lower case -> the number of each of their agents
+                                       # on the board, by `Agent.ident` (`numbered`)
+
+
+def _ident(name: str, nth: int) -> str:
+    """What the nth of a human's sessions with this name is known by (`Agent.ident`): the
+    name, for the first. A later one is known by the name and its place among them, set
+    apart by a character no name can have (control characters are taken out of all the
+    grange sends): written with ordinary ones, it could be a third's name."""
+    return name if nth == 1 else f"{name}\x00{nth}"
+
+
+def numbered(idents: Iterable[str], before: Mapping[str, int]) -> dict[str, int]:
+    """The numbers of one human's agents on the board, by what each is known by
+    (`Agent.ident`): 1 to however many there are, each once and none left out. That comes
+    first. An agent's number is its own only as far as that allows.
+
+    `idents` are their agents on the board, in the order to number new ones in. `before`
+    is what this answered for them last time.
+
+    An agent keeps its number while that is no higher than the count of them. A new one
+    takes the lowest number that is free: the next one up, or the one an agent has just
+    left. A session that was renamed cannot be told from one that ended as another began;
+    this way it keeps its number through the new name. When agents have gone and left
+    numbers free below, the ones whose numbers are now too high take those, so one that
+    goes costs one other its number and no more.
+
+    An agent that is not on the board has no number, whatever is reported of it: a number
+    kept for it would be one the board does not show."""
+    idents = list(idents)
+    held: dict[str, int] = {}
+    for ident in idents:
+        n = before.get(ident, 0)
+        if 1 <= n <= len(idents) and n not in held.values():
+            held[ident] = n
+    free = (n for n in range(1, len(idents) + 1) if n not in set(held.values()))
+    new = [ident for ident in idents if ident not in before]
+    high = sorted((ident for ident in idents if ident in before and ident not in held), key=lambda ident: before[ident])
+    for ident in [*new, *high]:
+        held[ident] = next(free)
+    return held
 
 
 def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | None = None) -> dict[Key, list[Agent]]:
     """The reported agents as the picture has them: each on its pull request (`located`),
-    working for its author when the author runs it and reviewing otherwise, numbered
-    among the agents the same human has there, doing what `doing` makes of the farm's
-    word, and noted with what its name goes on to say (`words`). On a pull request the
-    author's agents come first.
-
-    What an agent is known by from one report to the next is its name (`Agent.ident`), so
-    a focus on it stays on it. Its number is for the eye. Given `numbers`, the numbers
-    handed out before, an agent keeps its own for as long as its session is reported:
-    one that is new takes the lowest that is free, and a number is free again only when
-    its session has gone. `numbers` is brought up to date here, for the next report; it
-    is the caller's to keep. (With nobody reported this is not asked at all, and the
-    picture frees every number itself.) Without it they are numbered by name, afresh each time.
-
-    Two sessions with one name cannot be told apart: they are numbered by what they are
-    doing, so nothing moves on screen when they trade.
+    working for its author when the author runs it and reviewing otherwise, doing what
+    `doing` makes of the farm's word, and noted with what its name goes on to say
+    (`words`). On a pull request the author's agents come first.
 
     The agents that are on no pull request (`early`) are here too, each under its
-    repository and the number 0, which no pull request has: numbered among the agents the
-    same human has there on none, and kept and found as the others are. One of them whose
-    name says a pull request that is not open has that number as its `named`."""
-    crews: dict[tuple[Key, str], list[tuple[Report, PullRequest | None, str, str, int]]] = {}
+    repository and the number 0, which no pull request has: kept and found as the others
+    are. One of them whose name says a pull request that is not open has that number as
+    its `named`.
+
+    Each is numbered among all the agents the same human has on the board, whichever pull
+    request or repository each is on: "agent 07" is one session of theirs, and no other.
+    A human's numbers run from 01 to however many agents they have on the board, with
+    none left out (`numbered`). What an agent is known by from one report to the next is
+    its name (`Agent.ident`), so a focus on it stays on it. Its number is for the eye.
+    Given `numbers`, the numbers from before, an agent keeps its own as far as leaving
+    none out allows. `numbers` is brought up to date here, for the next report; it is the
+    caller's to keep. (With nobody reported this is not asked at all, and the picture
+    forgets every number itself.) Without it every agent is new each time. New ones are
+    numbered down the board: by repository as shown, in each the ones on no pull request
+    and then by the pull request's number, and by name on one pull request.
+
+    Two sessions with one name cannot be told apart: they are numbered by what they are
+    doing, so nothing moves on screen when they trade."""
+    seats: list[tuple[Key, Report, PullRequest | None, str, str, int]] = []
     for one, pull in located_in(reported, picture.names, picture.pulls):
-        crews.setdefault((key_of(pull), one.owner.lower()), []).append(
-            (one, pull, pull.repo, words(one.name, pull), 0))
+        seats.append((key_of(pull), one, pull, pull.repo, words(one.name, pull), 0))
     for one, repo, end, named in early(reported, picture.names, picture.known(), picture.pulls):
-        crews.setdefault(((repo.lower(), 0), one.owner.lower()), []).append(
-            (one, None, repo, _rest(one.name, end), named))
-    out: dict[Key, list[Agent]] = {}
-    for (key, owner), crew in crews.items():
-        crew.sort(key=lambda seat: (seat[0].name, seat[0].state))
+        seats.append(((repo.lower(), 0), one, None, repo, _rest(one.name, end), named))
+    crews: dict[str, list[int]] = {}                         # each human's seats, by where each is in `seats`
+    for at, seat in enumerate(seats):
+        crews.setdefault(seat[1].owner.lower(), []).append(at)
+    down = {name.lower(): at for at, name in enumerate(picture.names)}
+    known: dict[int, tuple[str, int]] = {}                   # a seat -> what its agent is known by, and its number
+    for owner, crew in crews.items():
+        crew.sort(key=lambda at: (
+            down.get(seats[at][0][0], len(down)), seats[at][0][1], seats[at][1].name, seats[at][1].state))
         seen: dict[str, int] = {}
         idents = []
-        for one, *_ in crew:
-            seen[one.name] = nth = seen.get(one.name, 0) + 1
-            # The second of two with one name is known by the name and its place among them,
-            # set apart by a character no name can have (control characters are taken out of
-            # all the grange sends): written with ordinary ones, it could be a third's name.
-            idents.append(one.name if nth == 1 else f"{one.name}\x00{nth}")
-        before = numbers.get((key, owner), {}) if numbers is not None else {}
-        given = {ident: before[ident] for ident in idents if ident in before}
-        free = (n for n in itertools.count(1) if n not in set(given.values()))
-        for ident in idents:
-            if ident not in given:
-                given[ident] = next(free)
+        for at in crew:
+            name = seats[at][1].name
+            seen[name] = seen.get(name, 0) + 1
+            idents.append(_ident(name, seen[name]))
+        held = numbered(idents, numbers.get(owner, {}) if numbers is not None else {})
         if numbers is not None:
-            numbers[(key, owner)] = given
-        for ident, (one, pull, repo, note, named) in zip(idents, crew):
-            if pull is None:                                 # on no pull request: it works for its human
-                number, role, state = 0, "author", doing_alone(one)
-            else:
-                number, role = pull.number, "author" if one.owner.lower() == pull.author.lower() else "review"
-                state = doing(picture, one, pull, role)
-            # A farm gone quiet said "shell" some time ago: whether the command still runs is not known.
-            out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", repo, number, role, state,
-                                                 note, ident, one.state in COMMAND and not one.stale, named))
+            numbers[owner] = held
+        for at, ident in zip(crew, idents):
+            known[at] = (ident, held[ident])
     if numbers is not None:
-        for gone in [crew for crew in numbers if crew not in crews]:
+        for gone in [who for who in numbers if who not in crews]:    # none of theirs is on the board now
             del numbers[gone]
-    for agents in out.values():
-        agents.sort(key=lambda a: (a.role != "author", a.operator.lower(), a.serial))
-    return out
+    out: dict[Key, list[tuple[int, Agent]]] = {}
+    for at, (key, one, pull, repo, note, named) in enumerate(seats):
+        if pull is None:                                     # on no pull request: it works for its human
+            number, role, state = 0, "author", doing_alone(one)
+        else:
+            number, role = pull.number, "author" if one.owner.lower() == pull.author.lower() else "review"
+            state = doing(picture, one, pull, role)
+        ident, serial = known[at]
+        # A farm gone quiet said "shell" some time ago: whether the command still runs is not known.
+        out.setdefault(key, []).append((serial, Agent(one.owner, f"{serial:02d}", repo, number, role, state,
+                                                      note, ident, one.state in COMMAND and not one.stale, named)))
+    return {key: [agent for _, agent in sorted(crew, key=lambda seat: (
+        seat[1].role != "author", seat[1].operator.lower(), seat[0]))] for key, crew in out.items()}
 
 
 def doing(picture: "Picture", one: Report, pull: PullRequest, role: str) -> str:
