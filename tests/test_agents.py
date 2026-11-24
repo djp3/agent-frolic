@@ -847,6 +847,34 @@ async def test_the_board_draws_an_agent_with_no_pull_request_yet_under_its_repos
 
 
 @drive
+async def test_an_agent_of_the_viewers_is_counted_in_a_repository_that_could_not_be_read(isolated):
+    """The counts beside a repository's name were drawn only once it had been read. An agent
+    with no pull request yet is known of without any reading: its own line had the yellow
+    dot, and neither the top line nor the repository's heading counted it."""
+    a_board()
+    FakePulls.broken["o/web"] = "GitHub could not be reached."
+    app = main.Frolic()
+
+    def heading():
+        return next(row for row in screen(app).splitlines() if "╪ o/web" in row)
+
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        assert "o/web" not in app.pulls and "could not be read" in screen(app)
+        assert screen(app).splitlines()[0].split() == ["app", "●2", "○2", "web"]         # nothing is known of it:
+        assert "●" not in heading() and "open" not in heading()                           # no count, and no dot for none
+        FakeGrange.answers.put(team(("bob", "o-web deploy", "idle")))                     # someone else's: not theirs
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        assert screen(app).splitlines()[0].split() == ["app", "●2", "○2", "web"] and "●" not in heading()
+        FakeGrange.answers.put(team(("djp3", "o-web hotfix", "idle"), cursor=2))          # their own, at its prompt
+        await until(pilot, lambda: app.reported[0].owner == "djp3")
+        await pilot.pause(0.3)
+        assert screen(app).splitlines()[0].split() == ["app", "●2", "○2", "web", "●1"]
+        assert "╪ o/web  ●1 ═" in heading() and "open" not in heading()                   # the count, and no number open
+
+
+@drive
 async def test_the_ticker_names_the_pull_request_the_viewer_opened_where_their_agent_had_none(isolated):
     """The agent shows on it only once its session is named for it: the ticker says the name,
     and the board selects the pull request, so that the drawer shows that name and c copies it."""

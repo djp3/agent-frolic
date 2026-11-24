@@ -680,8 +680,13 @@ class Board(Screen):
         short = labels([r.name for r in repos])
         for repo in repos:
             out.append(short[repo.name], style=f"bold underline {INK}" if repo.shown else MUTED)
-            if repo.shown and repo.name.lower() in self.pic.pulls:
-                for text, style in count_marks(*counts(self.pic, repo.name)) or [(" ·", AXIS)]:
+            if repo.shown:
+                # A repository not read yet, or one that could not be read, may still have
+                # something to count: the viewer's own agents there that have no pull request
+                # yet, which no reading is needed to know of. The small dot for "nothing" is
+                # said only of one that has been read.
+                read = repo.name.lower() in self.pic.pulls
+                for text, style in count_marks(*counts(self.pic, repo.name)) or ([(" ·", AXIS)] if read else []):
                     out.append(text, style=style)
             out.append("      ")
         return out
@@ -980,7 +985,9 @@ class Board(Screen):
         the `beside` cells its whole name leaves: (the counts, the timer).
 
         How many are open stays whatever the room: for a repository with none it is the only
-        place the board says so, since tree() gives it no line beneath. The timer is the thin
+        place the board says so, since tree() gives it no line beneath. One that has not been
+        read has no such number, but may have ●n all the same: the viewer's own agents there
+        with no pull request yet, which no reading is needed to know of. The timer is the thin
         bar its pull requests' ages have, its white the time left until the next read, and
         after it the minutes left, counted up to nought, so that the figure reaches nought as
         the white runs out.
@@ -994,11 +1001,13 @@ class Board(Screen):
         whole, alone = time_cells(thin_bar(1 - ran, until=True), figure), time_cells(None, figure)
         opened: Segments = []
         fuller: list[Segments] = []
+        marks = count_marks(*counts(self.pic, row.repo), gap="  ")
         if row.total is not None:
-            marks = count_marks(*counts(self.pic, row.repo), gap="  ")
             opened = [(f"  {row.total} open", MUTED)]
             more: Segments = [(f", the {row.listed} most recent shown", MUTED)] if row.total > row.listed else []
             fuller = [marks + opened + more, marks + opened]
+        elif marks:                                            # not read: the counts alone, where there is room
+            fuller = [marks]
         ways = [(said, whole) for said in fuller + [opened]] + [(opened, alone), (opened, [])]
         return next((way for way in ways if seg_len(way[0]) + (seg_len(way[1]) + 2 if way[1] else 0) <= beside),
                     ways[-1])
