@@ -1003,7 +1003,7 @@ async def test_the_ticker_names_the_pull_request_the_viewer_opened_where_their_a
         app.tick()
         await settle(app, pilot)
         await pilot.pause(0.3)
-        said = "you opened #31 · rename your agent there to o-web-pr-31 · c copies it"
+        said = "you opened #31 · rename your agent there to o-web-pr-31 · c copies it, C as /rename"
         assert f"web · {said}" in screen(app) and app.board.sel == ("o/web", 31) != was
         assert "name     o-web-pr-31 · c copies it" in screen(app)                        # the drawer: the same name
         await pilot.press("c")
