@@ -6,7 +6,7 @@ from rich.cells import cell_len
 
 import keychain
 import main
-from canvas import Canvas, cut, seg_len, write
+from canvas import LIGHT_EVERY, Canvas, Lit, cut, lit, seg_len, write
 from repos import RepoStore
 from standins import TOKEN, FakePulls, drive, screen, settle
 from test_pulls import node, review
@@ -34,6 +34,52 @@ def test_text_is_cut_to_its_room_in_cells():
     c = Canvas(10, 1)
     assert write(c, 0, 0, [("中文", ""), ("标题很长", "")], 7) == 7
     assert cell_len(row(c).rstrip()) == 7
+
+
+def test_a_lit_style_is_the_style_at_rest_wherever_nobody_asks_for_the_light():
+    quiet = Lit("grey", "green")
+    assert quiet == "grey" and isinstance(quiet, str) and quiet.shine == "green"
+    c = Canvas(12, 1)
+    assert write(c, 0, 0, [("⣾ ", "wheel"), ("agent 01", quiet)], 12) == 10
+    assert [style for _, style in c.cells[0][:10]] == ["wheel"] * 2 + ["grey"] * 8
+    c = Canvas(12, 1)
+    write(c, 0, 0, [("⣾ ", "wheel"), ("agent 01", quiet)], 12, style="dim", light=4.0)   # a style for it all: no light
+    assert {style for _, style in c.cells[0][:10]} == {"dim"}
+
+
+def test_a_light_runs_through_lit_words_from_left_to_right_and_another_follows_it():
+    quiet = Lit("grey", "green")
+    assert lit("agent 01", quiet, 5, 5.0) == [("a", "bold green"), ("g", "green"), ("ent 01", "grey")]
+    assert lit("agent 01", quiet, 5, 8.0) == [("ag", "grey"), ("e", "green"), ("n", "bold green"), ("t", "green"),
+                                              (" 01", "grey")]
+    assert lit("agent 01", quiet, 5, 8.0 + 3 * LIGHT_EVERY) == lit("agent 01", quiet, 5, 8.0)   # the next ones
+    assert lit("agent 01", quiet, 5, 8.0 - LIGHT_EVERY) == lit("agent 01", quiet, 5, 8.0)
+    assert lit("agent 01", quiet, 5, 15.0) == [("agent 01", "grey")]            # it has passed, the next is not here
+    assert lit("agent 01", quiet, 15, 8.0) == [("agent 01", "grey")]            # nor on words that stand elsewhere
+    # Words that are bold at rest stay bold in the light, so nothing changes weight twice as it passes.
+    assert lit("ab", Lit("bold white", "green"), 0, 1.0) == [("ab", "bold green")]
+    # And underlined ones stay underlined: the line under a name does not break where the light is.
+    assert lit("abcd", Lit("underline white", "green"), 0, 0.0) == [
+        ("a", "bold underline green"), ("b", "underline green"), ("cd", "underline white")]
+    assert lit("abc", Lit("bold underline white", "green"), 0, 0.0) == [
+        ("ab", "bold underline green"), ("c", "bold underline white")]
+    # It goes by cells: a wide character is two of them, so the x stands on cell 4, one from the light.
+    assert lit("中文x", quiet, 0, 3.0) == [("中", "grey"), ("文x", "green")]
+    c = Canvas(12, 1)
+    write(c, 0, 0, [("⣾ ", "wheel"), ("agent 01", quiet)], 12, light=5.0)       # the words start at cell 2
+    assert [style for _, style in c.cells[0][:10]] == ["wheel"] * 2 + ["grey"] * 2 + [
+        "green", "bold green", "green"] + ["grey"] * 3
+
+
+def test_what_is_cut_from_lit_words_is_the_same_wherever_the_light_stands():
+    """The words are cut first and lit after: cut piece by piece, as the light divides
+    them, the "…" would come and go as it passed."""
+    drawn = set()
+    for light in range(LIGHT_EVERY):
+        c = Canvas(9, 1)
+        assert write(c, 0, 0, [("⣾ ", "wheel"), ("agent 01", Lit("grey", "green"))], 7, light=float(light)) == 7
+        drawn.add(row(c))
+    assert drawn == {"⣾ agen…"}
 
 
 def test_writing_over_half_of_a_wide_character_leaves_no_half_behind():

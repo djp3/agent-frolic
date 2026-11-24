@@ -541,7 +541,7 @@ async def test_the_top_line_and_the_menu_show_the_same_counts_the_same_way(isola
 
 @drive
 async def test_the_picture_is_built_again_only_when_what_it_is_drawn_from_changes(isolated, monkeypatch):
-    """The board is drawn five times a second; a new reading comes every few minutes."""
+    """The board is drawn several times a second; a new reading comes every few minutes."""
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(150, 46)) as pilot:
@@ -1807,7 +1807,7 @@ COPILOT_ASKED = {"nodes": [{"requestedReviewer": {"__typename": "Bot", "login": 
 
 
 @drive
-async def test_while_copilot_reviews_its_dots_turn_in_the_row_on_its_card_and_in_the_drawer(isolated, monkeypatch):
+async def test_while_copilot_reviews_its_wheel_turns_in_the_row_on_its_card_and_in_the_drawer(isolated, monkeypatch):
     keychain.put(keychain.GITHUB_TOKEN, TOKEN)
     RepoStore().add("djp3/agent-frolic", admin=True)
     FakePulls.open_ = {"djp3/agent-frolic": [
@@ -1816,66 +1816,195 @@ async def test_while_copilot_reviews_its_dots_turn_in_the_row_on_its_card_and_in
     app = main.Frolic()
     async with app.run_test(size=(150, 40)) as pilot:
         await settle(app, pilot)
-        for dots in ("⠼", "⠧"):                                    # as the clock moves them on
-            monkeypatch.setattr(app.board, "spin", lambda offset=0: dots)
+        for wheel in ("⡿", "⣯"):                                    # as the clock moves it on
+            monkeypatch.setattr(app.board, "spin", lambda offset=0: wheel)
             app.draw()
             await pilot.pause()
             row = line(app, "#12 GraphQL client")
-            assert who(app, "#12 GraphQL client") == ["you", "waiting", dots, "copilot"]      # whom it waits on
-            assert f"{dots} copilot" in row.split("│")[1]                                     # its review
-            assert f"{dots} copilot" in line(app, "bob").split("─")[0]                        # its card in the strip
-            assert f"review   {dots} copilot reviewing" in screen(app)                        # the drawer
+            assert who(app, "#12 GraphQL client") == ["you", "waiting", wheel, "copilot"]     # whom it waits on
+            assert f"{wheel} copilot" in row.split("│")[1]                                    # its review
+            assert f"{wheel} copilot" in line(app, "bob").split("─")[0]                       # its card in the strip
+            assert f"review   {wheel} copilot reviewing" in screen(app)                       # the drawer
             assert "waits on copilot to review" in screen(app)
-        assert who(app, "#14 Ticket badges") == ["you", "waiting", "bob"]                     # a person asked: no dots
+        assert who(app, "#14 Ticket badges") == ["you", "waiting", "bob"]                     # a person asked: no wheel
         assert "◔ bob" in line(app, "#14 Ticket badges")
         card = next(person for person in board.humans(app.board.pic) if person.name == "copilot")
-        assert board.plain(board.head_line(card)) == "⠋ copilot"                               # laid out at rest
-        # With the focus on its card the name is underlined, and the dots before it are not.
+        assert board.plain(board.head_line(card)) == "⣾ copilot"                               # laid out at rest
+        # With the focus on its card the name is underlined, and the wheel before it is not. The
+        # light still runs through the name, bold and underlined as it goes.
         while app.board.focus.human != "copilot-pull-request-reviewer":
             await pilot.press("tab")
             await pilot.pause()
+
+        async def name(light: float | None = None) -> list:
+            """The pieces of Copilot's name on its card, with the light held on `light` cells
+            into it (or off it): (text, underlined, bold, ink)."""
+            row = next(s.text for s in app.screen._compositor.render_strips() if "copilot" in s.text and "bob" in s.text)
+            at = cell_len(row[:row.index("copilot")])
+            inside = at - app.board.query_one("#strip").content_region.x      # the light counts the strip's own cells
+            monkeypatch.setattr(app.board, "light", lambda offset=0: inside + (10 if light is None else light))
+            app.draw()
+            await pilot.pause()
+            strip = next(s for s in app.screen._compositor.render_strips() if "copilot" in s.text and "bob" in s.text)
+            found, x = [], 0
+            for part in strip:
+                if at <= x < at + len("copilot"):
+                    found.append((part.text, bool(part.style.underline), bool(part.style.bold),
+                                  part.style.color.get_truecolor().hex.lower()))
+                x += cell_len(part.text)
+            return found
+
+        white, green = theme.INK.lower(), theme.LIGHT_AT_WORK.lower()
+        assert await name() == [("copilot", True, True, white)]
+        assert await name(3) == [("co", True, True, white), ("pil", True, True, green), ("ot", True, True, white)]
         strip = next(s for s in app.screen._compositor.render_strips() if "copilot" in s.text and "bob" in s.text)
         under = {part.text.strip(): bool(part.style and part.style.underline) for part in strip if part.text.strip()}
-        assert under["copilot"] and not under[dots]
+        assert not under[wheel]
         await pilot.press("escape")
+        assert await name(3) == [("co", False, False, white), ("p", False, False, green),     # out of focus, as it
+                                 ("i", False, True, green), ("l", False, False, green),       # was: bold only at
+                                 ("ot", False, False, white)]                                 # the light's heart
         FakePulls.open_["djp3/agent-frolic"][0] = node(                                       # it has answered
             12, "client", author={"login": "djp3"}, title="GraphQL client",
             latestReviews={"nodes": [review("copilot-pull-request-reviewer", "COMMENTED", "2026-11-14T15:30:00Z")]})
         await pilot.press("u")
         await settle(app, pilot)
-        assert "copilot" in line(app, "#12 GraphQL client") and dots not in screen(app)
+        assert "copilot" in line(app, "#12 GraphQL client") and wheel not in screen(app)
 
 
-def test_a_line_laid_out_with_its_dots_at_rest_is_drawn_with_them_where_they_stand():
-    assert board.turned([("⠋ ", "a"), ("copilot", "b"), ("  ", "c")], "⠼") == [
-        ("⠼ ", "a"), ("copilot", "b"), ("  ", "c")]
-    assert board.turned([("● ", "a"), ("you", "b")], "⠼") == [("● ", "a"), ("you", "b")]
-    # Only a line's mark, its first piece, is ever the dots: a name made of the same
+def test_a_line_laid_out_with_its_wheel_at_rest_is_drawn_with_it_where_it_stands():
+    assert board.turned([("⣾ ", "a"), ("copilot", "b"), ("  ", "c")], "⡿") == [
+        ("⡿ ", "a"), ("copilot", "b"), ("  ", "c")]
+    assert board.turned([("● ", "a"), ("you", "b")], "⡿") == [("● ", "a"), ("you", "b")]
+    # Only a line's mark, its first piece, is ever the wheel: a name made of the same
     # characters is left as it is.
-    assert board.turned([("  ", "a"), ("⠋x", "b")], "⠼") == [("  ", "a"), ("⠋x", "b")]
-    assert board.turned([("⠋ ", "a"), ("⠙⠙", "b")], "⠼") == [("⠼ ", "a"), ("⠙⠙", "b")]
-    assert board.turned([], "⠼") == []
+    assert board.turned([("  ", "a"), ("⣾x", "b")], "⡿") == [("  ", "a"), ("⣾x", "b")]
+    assert board.turned([("⣾ ", "a"), ("⣽⣽", "b")], "⡿") == [("⡿ ", "a"), ("⣽⣽", "b")]
+    assert board.turned([], "⡿") == []
+
+
+def test_the_wheel_takes_one_place_a_beat_though_a_beat_comes_a_moment_early_or_late(monkeypatch):
+    """Counted from the clock alone, a beat that came just before or after the clock's own
+    step drew a place twice, or skipped one: the wheel stuttered for as long as the board
+    was open."""
+    now = [0.0]
+    monkeypatch.setattr(board, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    deck = SimpleNamespace(began=500.0)
+    seen = []
+    for beat in range(17):
+        now[0] = 500.0 + beat * board.BEAT + (0.04, -0.04, 0.0)[beat % 3]
+        seen.append(board.Board.spin(deck))
+    assert "".join(seen) == (board.SPIN * 3)[:17] and len(set(board.SPIN)) == 8
+    assert board.Board.spin(deck, 3) == board.SPIN[(16 + 3) % 8]            # a line's own place, set apart
+    assert board.BEAT * len(board.SPIN) == 1.0                              # once round, each second
+    now[0] = 502.0
+    assert board.Board.light(deck, 6) == 2.0 * board.LIGHT_SPEED + 6        # and the light, two seconds on
 
 
 @drive
-async def test_a_card_whose_name_looks_like_the_turning_dots_keeps_its_name(isolated, monkeypatch):
-    """A team may be called anything, two characters that begin with one of the dots
-    included. Its name is not taken for the dots and turned, on a card that has nothing to
-    do with Copilot, and it is underlined like any other name when its card is picked."""
-    a_team_board()
-    FakeGitHub.teams_listed = [Team("Acme", "platform", "⠋x")]
+async def test_the_board_is_drawn_on_every_beat_only_while_a_wheel_turns(isolated, monkeypatch):
+    """Eight times a second shows each place of a wheel. With none turning it is four, as
+    it was: that is all the washes and the timers ask, and a board is open all day."""
+    a_board()
     app = main.Frolic()
     async with app.run_test(size=(150, 46)) as pilot:
         await settle(app, pilot)
-        monkeypatch.setattr(app.board, "spin", lambda offset=0: "⠼")
+        deck, draw, drawn = app.board, app.board.draw, []
+
+        def draws(beats: int) -> int:
+            monkeypatch.setattr(deck, "draw", lambda: drawn.append(1))
+            drawn.clear()
+            for _ in range(beats):
+                deck.animate_tick()
+            monkeypatch.setattr(deck, "draw", draw)
+            return len(drawn)
+
+        async def reported(*agents) -> None:
+            app.reported = agents
+            app.draw()
+            await pilot.pause()
+
+        assert not deck.moving and draws(8) == 4
+        for word in ("busy", "shell"):                                       # at work, and on a command
+            await reported(Reported("djp3", "djp3-agent-frolic-pr-12", word))
+            assert deck.moving and draws(8) == 8, word
+        await reported(Reported("djp3", "djp3-agent-frolic-pr-12", "idle"))  # still: at its prompt, or waiting
+        assert not deck.moving and draws(8) == 4
+        await reported(Reported("djp3", "djp3-agent-frolic", "busy"))        # at work with no pull request yet
+        assert deck.moving
+        await reported()
+        FakePulls.open_["djp3/agent-frolic"][0] = node(12, "client", author={"login": "djp3"}, baseRefOid=TIP,
+                                                       title="GraphQL client", reviewRequests=COPILOT_ASKED)
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert deck.moving and draws(8) == 8                                 # Copilot is reviewing
+
+
+@drive
+async def test_a_wheel_and_a_light_show_an_agent_at_work_in_green_and_one_on_a_command_in_white(isolated, monkeypatch):
+    """In the list, on its human's card and in the drawer. The light is a color that comes
+    and goes on the words: where it stands is the clock's, here held still."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        green, lit_green, white = theme.GOOD.lower(), theme.LIGHT_AT_WORK.lower(), theme.LIGHT_ON_COMMAND.lower()
+        ink = theme.INK.lower()
+
+        async def inks(needle: str, light: float) -> set:
+            monkeypatch.setattr(app.board, "light", lambda offset=0: light)
+            app.draw()
+            await pilot.pause()
+            return {color for color, _ in colors(app, needle)}
+
+        app.reported = (Reported("djp3", "djp3-agent-frolic-pr-12 fix", "busy"),        # #12 waits on bob
+                        Reported("djp3", "djp3-agent-frolic-pr-13 watch", "shell"))     # #13 is queued behind it
+        monkeypatch.setattr(app.board, "spin", lambda offset=0: "⡿")
+        at_work, on_command = "└ ⡿ agent 01   working", "└ ⡿ agent 01   command"
+        # In the list an agent's name starts at cell 7: a light on cell 9 is on both names.
+        there = await inks(at_work, 9.0)
+        assert {green, lit_green} <= there and white not in there                       # the wheel, and the light
+        there = await inks(on_command, 9.0)
+        assert {ink, white} <= there and not {green, lit_green} & there                 # white, both of them
+        # On cell 16 it is between the name and the state's word, and on neither.
+        assert lit_green not in await inks(at_work, 16.0) and white not in await inks(on_command, 16.0)
+        assert green in await inks(at_work, 16.0)                                       # the wheel is green all along
+        # On a card "#12" starts at cell 3.
+        assert {green, lit_green} <= await inks("⡿ #12", 4.0) and white in await inks("⡿ #13", 4.0)
+        assert lit_green not in await inks("⡿ #12", 12.0)
+        assert "owner    you › ⡿ agent 01 at work" in screen(app)                       # the drawer, on #12
+        assert {green, lit_green} <= await inks("owner    you › ⡿ agent 01 at work", 2.0)
+        await pilot.press("down")
+        await pilot.pause()
+        assert app.board.sel == ("djp3/agent-frolic", 13)
+        assert "owner    you › ⡿ agent 01 waiting on a command" in screen(app)
+        assert "agents   you › agent 01 waiting on a command" in screen(app)
+        assert white in await inks("owner    you › ⡿ agent 01 waiting on a command", 2.0)
+        # A command is not work: #13 is no further along for it.
+        pic = app.board.pic
+        assert [board.progress(pic, pic.find(("djp3/agent-frolic", number)))[0] for number in (12, 13)] == [
+            "in progress", "queued"]
+
+
+@drive
+async def test_a_card_whose_name_looks_like_the_turning_wheel_keeps_its_name(isolated, monkeypatch):
+    """A team may be called anything, two characters that begin with one of the wheel's
+    included. Its name is not taken for the wheel and turned, on a card that has nothing to
+    do with Copilot, and it is underlined like any other name when its card is picked."""
+    a_team_board()
+    FakeGitHub.teams_listed = [Team("Acme", "platform", "⣾x")]
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        monkeypatch.setattr(app.board, "spin", lambda offset=0: "⡿")
         app.draw()
         await pilot.pause()
-        assert who(app, "#201 Bump a") == ["dependabot", "waiting", "●", "⠋x"]
+        assert who(app, "#201 Bump a") == ["dependabot", "waiting", "●", "⣾x"]
         cards = line(app, "team/docs")                                                    # the strip is the first
-        assert "● ⠋x" in cards and "⠼" not in cards                                       # its name, and no dots
+        assert "● ⣾x" in cards and "⡿" not in cards                                       # its name, and no wheel
         await pilot.press("tab", "tab")                                                   # → you → the team
         await pilot.pause()
         assert app.board.focus == board.Focus("crew", "team/acme/platform")
         strip = next(s for s in app.screen._compositor.render_strips() if "team/docs" in s.text)
         under = {part.text.strip(): bool(part.style and part.style.underline) for part in strip if part.text.strip()}
-        assert under["⠋x"] and not under["●"]                                             # the name, not its mark
+        assert under["⣾x"] and not under["●"]                                             # the name, not its mark

@@ -12,18 +12,19 @@ import board
 import grange
 import keychain
 import main
-from canvas import plain
+from canvas import Lit, plain
 from grange import GrangeError, Reported, out_of_date
 import picture as pictures
-from picture import (LOOKS, Agent, Focus, Person, Picture, agent_cell, agent_name, agent_state, astray, cells, doing,
-                     early, focuses, line_agents, located, located_in, look, needs_effort, placed, progress, words)
+from picture import (LOOKS, ON_COMMAND, SPIN, Agent, Focus, Person, Picture, agent_cell, agent_name, agent_state,
+                     asking, astray, cells, doing, early, focuses, inks, line_agents, located, located_in, look,
+                     needs_effort, placed, progress, said_of, words)
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
 from standins import (TOKEN, FakeClipboard, FakeGrange, FakePulls, age, drive, screen, settle, team, to_setup,
                       until)
 from test_pulls import node, review
-from theme import MUTED
+from theme import GOOD, INK, INK2, LIGHT_AT_WORK, LIGHT_ON_COMMAND, MUTED, WAITING
 
 NOW = datetime(2026, 11, 14, 16, 0, tzinfo=timezone.utc)
 TIP = "a1" * 20
@@ -565,7 +566,7 @@ def test_an_agent_that_is_not_known_to_be_working_takes_nothing_off_the_list(wor
 def test_each_agent_is_drawn_beneath_its_human_with_what_it_is_doing():
     pic = picture(Reported("djp3", "o-app-pr-98 a", "busy"), Reported("djp3", "o-app-pr-98 b", "idle"),
                   Reported("bob", "o-app-pr-98 review", "waiting"), Reported("mira", "o-app-pr-7", "busy", True))
-    assert said(pic, "o/app", 98) == ["  you |  |   bob", "  └ ⠋ agent 01 | working |   └ ▷ agent 01",
+    assert said(pic, "o/app", 98) == ["  you |  |   bob", "  └ ⣾ agent 01 | working |   └ ▷ agent 01",
                                       "  └ · agent 02 | waiting |"]
     assert said(pic, "o/app", 7) == ["  mira |  | ● you", "  └ ? agent 01 | unknown |"]
 
@@ -575,7 +576,7 @@ def test_an_agent_whose_human_is_not_waited_on_is_on_the_row_all_the_same():
     pic = picture(Reported("kenji", "o-app-pr-7 poke", "busy"))                 # #7 waits on djp3; nobody asked kenji
     seven = pic.find(("o/app", 7))
     assert not pic.mine(seven) and said(pic, "o/app", 7) == ["  mira | waiting |   you", " |  |   kenji",
-                                                             " |  |   └ ⠋ agent 01"]
+                                                             " |  |   └ ⣾ agent 01"]
     assert [[a.operator for a in line] for line in line_agents(pic, seven)] == [[], [], ["kenji"]]
     assert MUTED in {style for _, style in cells(pic, seven)[1][2]}               # kenji: the faintest ink
 
@@ -587,8 +588,8 @@ def test_a_reviewers_agent_stays_on_the_row_when_the_move_goes_back_to_the_autho
 
 def test_an_agent_on_a_pull_request_that_waits_on_the_one_below_is_on_its_own_row():
     pic = picture(Reported("kenji", "o-app-pr-102", "busy"), Reported("bob", "o-app-pr-98", "busy"))
-    assert said(pic, "o/app", 102) == ["  you | waiting |   #98 →", " |  |   bob", " |  |   └ ⠋ agent 01",
-                                       " |  |   kenji", " |  |   └ ⠋ agent 01"]
+    assert said(pic, "o/app", 102) == ["  you | waiting |   #98 →", " |  |   bob", " |  |   └ ⣾ agent 01",
+                                       " |  |   kenji", " |  |   └ ⣾ agent 01"]
 
 
 def test_no_agent_is_drawn_twice_on_a_row():
@@ -608,12 +609,67 @@ def test_every_state_is_drawn_from_the_one_table_wherever_it_is_drawn():
     pic = picture()
     for state, its in LOOKS.items():
         agent = Agent("djp3", "01", "o/app", 98, "author", state)
-        mark = its.mark or "⠋"
+        mark = its.mark or "⣾"
         assert plain(agent_cell(pic, agent)) == f"  └ {mark} agent 01" and plain(agent_state(pic, agent)) == its.word
         assert plain(board.agent_line(agent, yours=True)) == f"{mark} #98"
     card = board.make_card(Person("djp3", "you", agents=[Agent("djp3", f"{n:02d}", "o/app", n, "author", state)
                                                          for n, state in enumerate(reversed(list(LOOKS)), 1)]), 1)
-    assert [plain(line).split()[0] for line, _ in card.cols[0]] == ["▷", "⠋", "·", "?"]   # in the table's order
+    assert [plain(line).split()[0] for line, _ in card.cols[0]] == ["▷", "⣾", "·", "?"]   # in the table's order
+
+
+def test_an_idle_agent_that_waits_on_a_command_it_started_is_drawn_so():
+    """The farm's "shell": a wheel in white, "command" for its word, and its place on a
+    card after the ones at work."""
+    pic = picture(Reported("djp3", "o-app-pr-98 a", "shell"), Reported("djp3", "o-app-pr-98 b", "idle"),
+                  Reported("djp3", "o-app-pr-99", "shell"), Reported("mira", "o-app-pr-7", "shell", True))
+    assert said(pic, "o/app", 98) == ["  you |  |   bob", f"  └ {SPIN[0]} agent 01 | command |",
+                                      "  └ · agent 02 | waiting |"]
+    assert said(pic, "o/app", 99) == ["● you |  |", f"  └ {SPIN[0]} agent 01 | command |"]   # the move is theirs still
+    on, idle = pic.agents[("o/app", 98)]
+    assert on.command and not idle.command and look(on) is ON_COMMAND and said_of(on) == "waiting on a command"
+    assert LOOKS["working"].order < ON_COMMAND.order < LOOKS["waiting"].order
+    assert plain(board.agent_line(on, yours=True)) == f"{SPIN[0]} #98"
+    # A farm gone quiet said "shell" some time ago: whether the command still runs is not known.
+    stale, = pic.agents[("o/app", 7)]
+    assert not stale.command and stale.state == "unknown" and said(pic, "o/app", 7)[1] == "  └ ? agent 01 | unknown |"
+
+
+@pytest.mark.parametrize("word", ["idle", "shell"])
+def test_an_agent_on_a_command_is_idle_still_wherever_idle_is_asked_about(word):
+    """How it is drawn is all that a command changes: one left running would otherwise
+    read as work for ever. Its pull request needs effort as before, it is counted among
+    the agents that sit idle for it, and the viewer's own with no pull request yet is
+    theirs to answer."""
+    pic = picture(Reported("djp3", "o-app-pr-99", word), Reported("mira", "o-app-pr-7 a", word),
+                  Reported("djp3", "o-app tidy", word))
+    draft, seven = pic.find(("o/app", 99)), pic.find(("o/app", 7))
+    assert [a.state for a in pic.on(draft)] == ["at its prompt"] and [a.state for a in pic.on(seven)] == ["waiting"]
+    assert [a.command for a in pic.on(draft) + pic.on(seven)] == [word == "shell"] * 2
+    assert not pic.working(draft) and not pic.working(seven) and progress(pic, draft)[0] != "in progress"
+    effort = {(e.pull.repo, e.pull.number): e for e in needs_effort(pic, NOW)}
+    assert effort[("o/app", 99)].waiting == 1 and effort[("o/app", 7)].waiting == 1
+    assert [(a.state, a.note) for a in asking(pic)] == [("at its prompt", "tidy")]
+
+
+def test_the_colors_of_an_agent_whose_wheel_turns_are_said_in_one_place():
+    """Green at work, white on a command: the wheel, and the light through the name and
+    the state's word, over an ink the light shows on. A still agent has none of it."""
+    pic = picture()
+    at_work = Agent("djp3", "01", "o/app", 98, "author", "working")
+    on_command = Agent("djp3", "02", "o/app", 98, "author", "at its prompt", command=True)
+    still = Agent("djp3", "03", "o/app", 98, "author", "at its prompt")
+    for agent, wheel, light, rest in ((at_work, GOOD, LIGHT_AT_WORK, (INK, INK2)),
+                                      (on_command, INK, LIGHT_ON_COMMAND, (INK2, MUTED))):
+        mark, name, word = inks(agent)
+        assert mark == wheel and (name, word) == rest and name.shine == word.shine == light
+        assert agent_cell(pic, agent)[1:] == [(f"{SPIN[0]} ", wheel), (agent.name, name)]
+        assert isinstance(agent_cell(pic, agent)[2][1], Lit) and agent_state(pic, agent) == [(look(agent).word, word)]
+        assert board.agent_line(agent, yours=True) == [(f"{SPIN[0]} ", wheel), ("#98", word)]
+        assert board.agent_line(agent, yours=True)[1][1].shine == light
+    assert LIGHT_AT_WORK != GOOD and LIGHT_ON_COMMAND != INK                 # each lighter than its ink at rest
+    assert inks(still) is None and not any(isinstance(style, Lit) for _, style in agent_cell(pic, still))
+    assert board.agent_line(still, yours=True)[0] == ("▷ ", WAITING)           # yellow: at its prompt, and theirs
+    assert board.agent_line(on_command, yours=True)[0][1] != WAITING           # the wheel is never yellow
 
 
 def test_a_state_with_no_look_of_its_own_is_drawn_as_unknown_and_never_fails():
@@ -711,7 +767,7 @@ async def test_the_board_draws_the_agents_the_grange_reports(isolated):
         assert app.grange_state == "asking" and "agent 01" not in screen(app)
         FakeGrange.answers.put(team(*THE_TEAM, cursor=4))
         await until(pilot, lambda: app.reported)
-        await pilot.pause(0.3)                                   # the board draws five times a second
+        await pilot.pause(0.3)                                   # the board draws several times a second
         assert app.grange_state == "ok" and len(app.reported) == 4
         assert {key: [(a.operator, a.state) for a in agents] for key, agents in app.board.pic.agents.items()} == {
             ("o/app", 98): [("djp3", "working")], ("o/app", 7): [("mira", "working")]}

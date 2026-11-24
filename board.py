@@ -61,6 +61,12 @@ agent; not f, which on the setup screen asks to forget the token),
 escape back to everyone, m the repository menu (space shows or hides one; it is saved),
 u read GitHub now, d fold the drawer, s the setup, q quit.
 
+What moves: before an agent at work a wheel turns, green, and a green light runs through
+its words; one that waits on a command it started has both in white; Copilot, while it
+reviews, is drawn as an agent at work. The wheel has eight places and takes one a draw,
+so while anything turns the board is drawn eight times a second (`animate_tick`), and four
+times otherwise.
+
 The board holds no data of its own: every draw builds the picture from what the app has
 read. Nothing here talks to GitHub.
 """
@@ -79,15 +85,15 @@ from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.widgets import Static
 
-from canvas import Canvas, Segments, cut, plain, seg_len, wash, write
+from canvas import Canvas, Lit, Segments, cut, lit, plain, seg_len, wash, write
 from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
-                     Person, Picture, Row, agent_in_focus, agent_name, agent_state, asking, cells, counts, focuses,
-                     human_cell, humans, in_focus, key_of, labels,
+                     Person, Picture, Row, agent_in_focus, agent_name, agent_state, asking, at_work, cells, counts,
+                     focuses, human_cell, humans, in_focus, inks, key_of, labels,
                      age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, progress, quiet,
-                     review_cell, reviewers, reviewing, silence, tree)
+                     review_cell, reviewers, reviewing, said_of, silence, tree)
 from pulls import PullRequest, span
-from theme import (AGE, AXIS, CRIT, DIVIDER, INK, INK2, KEY, MUTED, PLANE, RAISED, SURFACE, WAITING, WARN,
-                   darker)
+from theme import (AGE, AXIS, CRIT, DIVIDER, GOOD, INK, INK2, KEY, LIGHT_AT_WORK, MUTED, PLANE, RAISED, SURFACE,
+                   WAITING, WARN, darker)
 
 PROGRESS = 22                    # cells of the progress column, the blank one before the age among them
 TIMER_INK = INK2                 # the filled part of a repository's timer: the time left until its next read
@@ -95,6 +101,8 @@ AGE_INK = AGE                    # the filled part of an age's bar: the time sin
 BAR_TRACK = AXIS                 # the part of either that is not filled
 FLASH = ["#4a4a46", "#444441", "#3d3d3a", "#363633", "#2f2f2d", "#292927"]   # a wash, fading
 FLASH_STEP = 0.17                # seconds each shade of the wash lasts
+BEAT = 0.125                     # seconds from one draw to the next while a wheel turns: a place of the wheel
+LIGHT_SPEED = 14                 # cells a second the light runs through an agent's words
 MARK_KEPT_S = 60.0               # how long a "this just changed" record is kept: far past the
                                  # wash, and past the three seconds the "changed" notes look back
 DIM = "#5c5b56"                  # pull requests out of focus
@@ -251,12 +259,14 @@ class Card:
 
 
 def agent_line(agent: Agent, yours: bool) -> Segments:
-    """ "⠋ #13": the agent's mark and the pull request it is on, or the repository it is at
-    work in while it has none yet ("⠋ web"). Yellow only on an agent of yours at its
+    """ "⣾ #13": the agent's mark and the pull request it is on, or the repository it is at
+    work in while it has none yet ("⣾ web"). One whose wheel turns has the wheel's color
+    and a light through what follows (`inks`). Yellow only on an agent of yours at its
     prompt; someone else's is grey."""
     said = agent.repo.rpartition("/")[2] if agent.early else f"#{agent.number}"
-    if agent.working:
-        return [(SPIN[0] + " ", INK), (said, INK2)]
+    moving = inks(agent)
+    if moving is not None:
+        return [(SPIN[0] + " ", moving[0]), (said, moving[2])]
     if agent.state == "at its prompt":
         return [(mark_of(agent) + " ", WAITING if yours else MUTED), (said, f"bold {INK}" if yours else INK2)]
     return [(mark_of(agent) + " ", MUTED), (said, MUTED)]
@@ -285,21 +295,21 @@ def remember_change(marks: dict, key: object, now: float) -> None:
 
 def head_line(person: Person) -> Segments:
     """A card's name line: the name alone. On yours, and on a team's you are on, the yellow
-    dot says things wait on you. On a program that is reviewing something now, the dots
-    turn, as they do before an agent at work. The name sits where the agents' pull
-    requests sit beneath it, whatever stands before it."""
+    dot says things wait on you. On a program that is reviewing something now, the wheel
+    turns and a light runs through the name, as before an agent at work. The name sits
+    where the agents' pull requests sit beneath it, whatever stands before it."""
     if person.dot:
         return [("● ", WAITING), (person.name, f"bold {INK}")]
     if person.at_work:
-        return [(SPIN[0] + " ", INK), (person.name, INK)]
+        return [(SPIN[0] + " ", GOOD), (person.name, Lit(INK, LIGHT_AT_WORK))]
     return [("  ", MUTED), (person.name, INK if person.yours else INK2)]
 
 
 def turned(line: Segments, spin: str) -> Segments:
-    """A line with its dots where they stand now: it was laid out with them at rest. The
-    dots are the line's mark, which is its first piece and nothing after it. What follows is
+    """A line with its wheel where it stands now: it was laid out with it at rest. The
+    wheel is the line's mark, which is its first piece and nothing after it. What follows is
     a name, and a name is left as it is: a team may be called anything, two characters that
-    begin with one of the dots included."""
+    begin with one of the wheel's included."""
     if not line:
         return line
     (mark, style), rest = line[0], line[1:]
@@ -355,7 +365,8 @@ class Line:
     part: int = 0                                # which line of its pull request this is
     cells: tuple[Segments, Segments, Segments] | None = None      # owner, state, waits on
     lead: str = ""                               # the tree connectors on this line
-    spin: str = SPIN[0]                          # where the dots that turn stand on this line
+    spin: str = SPIN[0]                          # where the wheel that turns stands on this line
+    light: float = 0.0                           # and the light that runs through its words (canvas.lit)
 
 
 def progress_cells(word: str, done: int, total: int) -> Segments:
@@ -498,6 +509,9 @@ class Board(Screen):
         self.drawer_open = True
         self.drawer_w = 66
         self.card_lines: list[int] = []           # where the lines between the humans' cards stand
+        self.began = time.monotonic()             # when the wheels began to turn: they are timed from it
+        self.beat = 0                             # the beats since (animate_tick)
+        self.moving = False                       # something in the picture has a wheel that turns
         self.strip_rows = 1                       # rows the strip takes now: the names, and the agents beneath
         self.card_sig: dict[str, str] = {}        # what each card's name line said at the last look
         self.card_flash: dict[str, float] = {}    # a card whose name line just changed
@@ -522,7 +536,9 @@ class Board(Screen):
 
     def on_mount(self) -> None:
         self.fit()
-        self.set_interval(0.25, self.animate_tick)      # washes fade and the timers run between the app's ticks
+        self.began = time.monotonic()
+        self.set_interval(BEAT, self.animate_tick)      # the wheels turn; washes fade and the timers run
+                                                        # between the app's ticks
         self.draw()
         self.call_after_refresh(self.draw)
 
@@ -536,7 +552,11 @@ class Board(Screen):
         self.call_after_refresh(self.draw)
 
     def animate_tick(self) -> None:
-        if self.is_current:
+        """A draw on every beat while a wheel turns, so that each of its places shows, and
+        on every other beat when none does: four times a second is all the washes and the
+        timers ask, and a board is open all day."""
+        self.beat += 1
+        if self.is_current and (self.moving or self.beat % 2 == 0):
             self.draw()
 
     def fit(self) -> None:
@@ -551,8 +571,8 @@ class Board(Screen):
     # ---- the picture, from what the app has read ----------------------------------------
     def look(self) -> None:
         """Build the picture afresh, when what it is drawn from has changed, and notice what
-        changed on the cards and the list. The board is drawn five times a second; most of
-        those times nothing has, and the picture from before stands."""
+        changed on the cards and the list. The board is drawn four times a second and
+        more; most of those times nothing has, and the picture from before stands."""
         app = self.app
         names = [r.name for r in app.store.shown()]
         notes: dict[str, str] = {}
@@ -577,6 +597,8 @@ class Board(Screen):
         self.pic = Picture(names, app.pulls, viewer, notes=notes, teams=teams, held=held, reported=app.reported,
                            numbers=app.agent_numbers, listed=listed)
         self.efforts = needs_effort(self.pic)
+        self.moving = (any(inks(agent) is not None for agents in self.pic.agents.values() for agent in agents)
+                       or any(at_work(pull, who) for pull in self.pic.all() for who in pull.asked))
         now = time.monotonic()
         cards = {p.login.lower(): plain(head_line(p)) for p in humans(self.pic)}
         for login, said in cards.items():
@@ -612,7 +634,16 @@ class Board(Screen):
         return [key_of(row.pull) for row in tree(self.pic) if row.pull is not None]
 
     def spin(self, offset: int = 0) -> str:
-        return SPIN[(int(time.monotonic() * 8) + offset) % len(SPIN)]
+        """Where the wheel stands now: a place a beat, once round each second. Counted from
+        when the beats began and to the nearest, so that a beat that comes a moment early
+        or late draws its own place still, and none is skipped or drawn twice. `offset`
+        sets one line's wheel apart from the next's."""
+        return SPIN[(round((time.monotonic() - self.began) / BEAT) + offset) % len(SPIN)]
+
+    def light(self, offset: int = 0) -> float:
+        """Where the light stands now on a line, in cells (canvas.lit). `offset` sets one
+        line's apart from the next's, as it does their wheels."""
+        return (time.monotonic() - self.began) * LIGHT_SPEED + offset
 
     def shade(self, since: float) -> str | None:
         """The wash for something that changed `since` seconds ago, or None once it has faded."""
@@ -718,29 +749,33 @@ class Board(Screen):
             picked = kind in ("crew", "human") and self.focus.human == card.human
             whole = kind == "all" or (kind == "crew" and picked)   # the whole card is in focus
             turn += 3
-            head = turned(card.head, self.spin(turn))              # a reviewing program's dots turn too
+            head = turned(card.head, self.spin(turn))              # a reviewing program's wheel turns too
             if picked:                                             # the name: all that follows the mark,
-                # told by where it stands in the line, not by what it is made of
-                head = head[:1] + [(text, f"bold underline {INK}") for text, _ in head[1:]]
-            write(canvas, x, 0, head, max(0, width - x))
+                # told by where it stands in the line, not by what it is made of. A name the light
+                # runs through keeps its light: a program at work is at work in focus too.
+                under = f"bold underline {INK}"
+                head = head[:1] + [(text, Lit(under, style.shine) if isinstance(style, Lit) else under)
+                                   for text, style in head[1:]]
+            write(canvas, x, 0, head, max(0, width - x), light=self.light(turn))
             lines: list[tuple[int, int, int, bool, float]] = [
                 (0, x, card.width, picked, now - self.card_flash.get(card.human, -999.0))]
             cx = x
             for col, col_w in zip(card.cols, card.widths):
                 for i, (line, key) in enumerate(col):
-                    turn += 3                                      # each agent's dots turn on their own
-                    write(canvas, cx, 1 + i, turned(line, self.spin(turn)), max(0, width - cx))
+                    turn += 3                                      # each agent's wheel turns on its own
+                    write(canvas, cx, 1 + i, turned(line, self.spin(turn)), max(0, width - cx),
+                          light=self.light(turn))
                     lines.append((1 + i, cx, col_w, kind == "agent" and key is not None
                                   and self.focus.agent == key, 999.0))
                 cx += col_w + 2
             if whole:                                              # backgrounds go on after the words
                 for y in range(rows):
                     wash(canvas, y, x - 1, x + card.width + 1, RAISED)
-            for y, at, w, lit, since in lines:
+            for y, at, w, raised, since in lines:
                 shade = self.shade(since)
                 if shade:
                     wash(canvas, y, at - 1, at + w + 1, shade)
-                elif lit:
+                elif raised:
                     wash(canvas, y, at - 1, at + w + 1, RAISED)
         self.card_lines = [x for card in cards[:-1] if (x := 1 + card.x + card.width + 1) < width]
         for x in self.card_lines:                              # a line between one human and the next
@@ -766,14 +801,14 @@ class Board(Screen):
         the tree never breaks."""
         out: list[Line] = []
         for i, row in enumerate(tree(self.pic)):
+            spin, light = self.spin(i * 3), self.light(i * 3)
             if row.pull is None:
-                out.append(Line(row, lead=row.lead, spin=self.spin(i * 3)))
+                out.append(Line(row, lead=row.lead, spin=spin, light=light))
                 continue
             tail = (row.lead[:-2] + ("│ " if row.lead.endswith("├ ") else "  ")
                     + ("│ " if row.pull.children else "  "))
-            spin = self.spin(i * 3)
             for part, three in enumerate(cells(self.pic, row.pull, spin)):
-                out.append(Line(row, part, three, row.lead if part == 0 else tail, spin))
+                out.append(Line(row, part, three, row.lead if part == 0 else tail, spin, light))
         return out
 
     def empty_words(self) -> str:
@@ -1025,15 +1060,21 @@ class Board(Screen):
         under the repository's. Where a pull request has its owner and its state: the human
         who runs it, and what it is doing. Where a pull request has its number and title:
         the agent, and what its name goes on to say. The yellow dot is on its human when it
-        is the viewer's and at its prompt: that is theirs to answer, and nobody else's."""
+        is the viewer's and at its prompt: that is theirs to answer, and nobody else's. One
+        whose wheel turns has the wheel's color, and a light through its words (`inks`)."""
         pic, agent = self.pic, line.row.agent
         yours = pic.is_viewer(agent.operator) and agent.state == "at its prompt"
         write(canvas, X_OWNER, y, human_cell(pic, agent.operator, yours), X_STATE - X_OWNER - 1)
-        write(canvas, X_STATE, y, agent_state(pic, agent), X_WAITS - X_STATE - 1)
+        write(canvas, X_STATE, y, agent_state(pic, agent), X_WAITS - X_STATE - 1, light=line.light)
         canvas.put(X_RULE, y, "│", DIVIDER)
-        lit = agent.working or yours
-        said: Segments = [(mark_of(agent, line.spin) + " ", INK if lit else MUTED),
-                          (agent.name, f"bold {INK}" if lit else INK2)]
+        moving = inks(agent)
+        if moving is not None:                         # at work it is bold, as it was: it stands where a
+            # pull request's number does
+            name = Lit(f"bold {moving[1]}", moving[1].shine) if agent.working else moving[1]
+            said: Segments = [(mark_of(agent, line.spin) + " ", moving[0]), (agent.name, name)]
+        else:
+            said = [(mark_of(agent, line.spin) + " ", INK if yours else MUTED),
+                    (agent.name, f"bold {INK}" if yours else INK2)]
         if agent.note:
             said += [("  ", ""), (agent.note, INK2)]
         x, end = X_TREE + 2, "no pull request yet"
@@ -1041,15 +1082,15 @@ class Board(Screen):
         if room - seg_len(said) >= len(end) + 2:               # said when there is room after the agent's own words
             canvas.put(width - 1 - len(end), y, end, MUTED)
             room -= len(end) + 2
-        write(canvas, x, y, said, max(0, room))
+        write(canvas, x, y, said, max(0, room), light=line.light)
 
     def draw_pull(self, canvas: Canvas, y: int, line: Line, cols: tuple, width: int) -> None:
         x_review, x_ci, x_prog, names, x_quiet = cols
         pull = line.row.pull
         owner, state, waits = line.cells
-        write(canvas, X_OWNER, y, owner, X_STATE - X_OWNER - 1)        # column 1: who
-        write(canvas, X_STATE, y, state, X_WAITS - X_STATE - 1)
-        write(canvas, X_WAITS, y, waits, X_RULE - X_WAITS - 1)
+        write(canvas, X_OWNER, y, owner, X_STATE - X_OWNER - 1, light=line.light)      # column 1: who
+        write(canvas, X_STATE, y, state, X_WAITS - X_STATE - 1, light=line.light)
+        write(canvas, X_WAITS, y, waits, X_RULE - X_WAITS - 1, light=line.light)
         canvas.put(X_RULE, y, "│", DIVIDER)
         canvas.put(X_TREE, y, line.lead, AXIS)                         # column 2: the tree
         x = X_TREE + len(line.lead)
@@ -1199,16 +1240,23 @@ class Board(Screen):
         pic = self.pic
         here = pic.stand(pull)
         end = here.end or here
-        spin = self.spin()
+        spin, light = self.spin(), self.light()
         out = Text()
         out.append(f"{pull.repo} · ", style=MUTED).append(f"#{pull.number} ", style=f"bold {INK}")
         out.append(pull.title + "\n", style=INK)
 
         def actor(agent: Agent) -> None:
-            color = INK if agent.working else INK2 if agent.state == "at its prompt" else MUTED
-            out.append(" › ", style=MUTED).append(mark_of(agent, spin) + " ", style=color)
-            out.append(f"{agent.name} {'at work' if agent.working else agent.state}",
-                       style=INK if agent.working else INK2)
+            said = f"{agent.name} {said_of(agent)}"
+            out.append(" › ", style=MUTED)
+            moving = inks(agent)
+            if moving is None:
+                out.append(mark_of(agent, spin) + " ", style=INK2 if agent.state == "at its prompt" else MUTED)
+                out.append(said, style=INK2)
+                return
+            out.append(mark_of(agent, spin) + " ", style=moving[0])
+            at = cell_len(out.plain.rpartition("\n")[2])            # where on its line the words begin
+            for piece, ink in lit(said, moving[1], at, light):
+                out.append(piece, style=ink)
 
         def human(login: str) -> None:
             if pic.mine(pull) and pic.acts_as(login, end.pull):     # the viewer, or a team or organization
@@ -1278,7 +1326,7 @@ class Board(Screen):
                 out.append("  " if i else "")
                 out.append(f"{pic.shown(agent.operator)} › {agent.name}", style=INK)
                 out.append(" reviewing" if agent.role == "review" and agent.working else
-                           " at work" if agent.working else f" {agent.state}", style=INK2)
+                           f" {said_of(agent)}", style=INK2)
             out.append("\n")
         else:
             out.append("branch   ", style=MUTED).append(pull.head, style=INK2)

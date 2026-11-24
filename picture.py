@@ -23,6 +23,13 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     idle one is "at its prompt" when its pull request waits on the human who runs it, and
     "waiting" when it waits on someone else: the farm cannot tell those apart, and only
     the first is something its human can get moving.
+  • WHAT MOVES. Before an agent at work a wheel turns, green, and a green light passes
+    through its name and its state's word. An idle one that waits on a command it started
+    (the farm's "shell": a test run, a watch on the checks) has the same in white, and
+    "command" for its word (`Agent.command`). That is how it is drawn and nothing more:
+    it is idle still, wherever idle is asked about, since a command left running would
+    otherwise read as work for ever. Copilot, while it reviews, is drawn as an agent at
+    work is. `inks` says the colors; where the wheel and the light stand is the board's.
   • TEAMS. A review can be asked of a GitHub team ("team/org/slug", see pulls.py). A team
     the viewer is on is the viewer's to act for (`acts_as`): its request is drawn as
     "● you" is, under the team's name, and the team has a card of its own. One request is
@@ -59,12 +66,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, NamedTuple, Protocol
 
-from canvas import Segments, cell_len, cut, seg_len
+from canvas import Lit, Segments, cell_len, cut, seg_len
 from pulls import PullRequest, RepoPulls, Review, Step, is_team, known_as, reviews_at_once, team_slug
 from standing import Standing, settle
-from theme import AXIS, CRIT, GOOD, INK, INK2, MUTED, SERIOUS, WAITING, WARN
+from theme import (AXIS, CRIT, GOOD, INK, INK2, LIGHT_AT_WORK, LIGHT_ON_COMMAND, MUTED, SERIOUS, WAITING,
+                   WARN)
 
-SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"            # the dots that turn where an agent is at work, or Copilot is reviewing
+# The wheel that turns where an agent is at work or waits on a command it started, and where
+# Copilot is reviewing: seven of a cell's eight dots, and the gap goes round.
+SPIN = "⣾⣽⣻⢿⡿⣟⣯⣷"
 Key = tuple[str, int]             # a pull request: (repository in lower case, number)
 
 REVIEW_MARK = {"approved": ("✓", GOOD), "changes": ("✗", SERIOUS), "commented": ("◆", GOOD),
@@ -95,6 +105,7 @@ class Agent:
     note: str = ""                # what it is doing, in its human's words: what its name goes on to say
     ident: str = ""               # what tells it from its human's other agents here, from one report to
                                   # the next: its session's name. Its serial is only its place among them
+    command: bool = False         # idle, and a command it started still runs: its wheel turns, in white
 
     @property
     def name(self) -> str:
@@ -124,31 +135,54 @@ class Agent:
 @dataclass(frozen=True)
 class Look:
     """How one state of an agent is drawn, wherever it is drawn."""
-    mark: str                     # before its name; "" for the dots that turn while it works (SPIN)
+    mark: str                     # before its name; "" for the wheel that turns (SPIN)
     word: str                     # in the state column
     order: int                    # on its human's card: the ones at a prompt first, then at work, ...
+    said: str                     # in the drawer, after its name; "" for the state's own word (`said_of`)
 
 
 # The one place that says how each state is drawn: the row, the card, the drawer and the order
 # on a card all read it. The colors are theirs, since they differ by where it is and whose it is.
 LOOKS = {
-    "at its prompt": Look("▷", "at prompt", 0),
-    "working": Look("", "working", 1),
-    "waiting": Look("·", "waiting", 2),
-    "unknown": Look("?", "unknown", 3),
+    "at its prompt": Look("▷", "at prompt", 0, "at its prompt"),
+    "working": Look("", "working", 1, "at work"),
+    "waiting": Look("·", "waiting", 3, "waiting"),
+    "unknown": Look("?", "unknown", 4, ""),
 }
+# An idle agent that waits on a command it started, whichever of the idle states it is in.
+ON_COMMAND = Look("", "command", 2, "waiting on a command")
 
 
 def look(agent: Agent) -> Look:
-    """How this agent's state is drawn. A state that has no look of its own is drawn as
-    unknown: a drawing that fails is swallowed where the screen is drawn, and the board
-    would stand still with nothing to say why."""
-    return LOOKS.get(agent.state, LOOKS["unknown"])
+    """How this agent is drawn: by its state, or, when it waits on a command it started,
+    as that. A state that has no look of its own is drawn as unknown: a drawing that
+    fails is swallowed where the screen is drawn, and the board would stand still with
+    nothing to say why."""
+    return ON_COMMAND if agent.command else LOOKS.get(agent.state, LOOKS["unknown"])
 
 
 def mark_of(agent: Agent, spin: str = SPIN[0]) -> str:
-    """The mark before an agent's name: its state's, or the turning dots while it works."""
+    """The mark before an agent's name: its state's, or the turning wheel while it works
+    or waits on a command."""
     return look(agent).mark or spin
+
+
+def said_of(agent: Agent) -> str:
+    """What an agent is doing, in the drawer's words. A state that has no look of its own
+    is said as it is: its word is all there is to say of it."""
+    return look(agent).said or agent.state
+
+
+def inks(agent: Agent) -> tuple[str, Lit, Lit] | None:
+    """The colors of an agent whose wheel turns: of the wheel, of its name and of its
+    state's word. The words are `Lit`: a light passes through them, green at work and
+    white on a command, over an ink faint enough for the light to show. None for an
+    agent that is still, which is inked by where it is drawn and whose it is."""
+    if agent.working:
+        return GOOD, Lit(INK, LIGHT_AT_WORK), Lit(INK2, LIGHT_AT_WORK)
+    if agent.command:
+        return INK, Lit(INK2, LIGHT_ON_COMMAND), Lit(MUTED, LIGHT_ON_COMMAND)
+    return None
 
 
 class Report(Protocol):
@@ -172,6 +206,7 @@ AT_WORK = frozenset({"busy"})
 ASKING = frozenset({"waiting"})   # it asked its human something, and stops until it is answered
 IDLE = frozenset({"idle", "shell"})   # done for now, or waiting on a command it started: a command
                                   # left running would otherwise read as work for ever
+COMMAND = frozenset({"shell"})    # the idle ones that wait on a command: drawn so (`Agent.command`)
 GONE = frozenset({"dead"})        # the session has ended: it is on no pull request any more
 
 
@@ -446,8 +481,9 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
             else:
                 number, role = pull.number, "author" if one.owner.lower() == pull.author.lower() else "review"
                 state = doing(picture, one, pull, role)
+            # A farm gone quiet said "shell" some time ago: whether the command still runs is not known.
             out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", repo, number, role, state,
-                                                 note, ident))
+                                                 note, ident, one.state in COMMAND and not one.stale))
     if numbers is not None:
         for gone in [crew for crew in numbers if crew not in crews]:
             del numbers[gone]
@@ -754,13 +790,13 @@ def human_cell(picture: Picture, login: str, yours_to_act: bool, pull: PullReque
     """A human, a team, or an organization standing as maintainer: a two-cell mark, then
     the name. The mark is the yellow dot when the move is the viewer's: this is the viewer,
     or a team or an organization they act for. `pull` is the one whose move it is. On a
-    program that is reviewing it (`at_work`), the mark is the dots that turn, as on an
-    agent at work."""
+    program that is reviewing it (`at_work`), the mark is the wheel that turns and a light
+    passes through the name, as on an agent at work."""
     name = picture.shown(login, pull)
     if yours_to_act:
         return [("● ", WAITING), (name, f"bold {INK}")]
     if pull is not None and at_work(pull, login):
-        return [(spin + " ", INK), (name, INK)]
+        return [(spin + " ", GOOD), (name, Lit(INK, LIGHT_AT_WORK))]
     return [("  ", MUTED), (name, INK if picture.yours(login) else INK2)]
 
 
@@ -771,8 +807,12 @@ def onlooker_cell(picture: Picture, login: str, pull: PullRequest | None = None)
 
 
 def agent_cell(picture: Picture, agent: Agent, spin: str = SPIN[0]) -> Segments:
-    """An agent, beneath its human. The mark turns while it works; ▷ is an agent at its
-    prompt, · one that waits. It is never yellow: the yellow dot is on the human above."""
+    """An agent, beneath its human. The mark turns while it works, and while it waits on
+    a command it started (`inks`); ▷ is an agent at its prompt, · one that waits. It is
+    never yellow: the yellow dot is on the human above."""
+    moving = inks(agent)
+    if moving is not None:
+        return [("  └ ", AXIS), (mark_of(agent, spin) + " ", moving[0]), (agent.name, moving[1])]
     yours = picture.is_viewer(agent.operator)
     yours_to_answer = yours and agent.state == "at its prompt"
     style = INK if agent.working or yours_to_answer else MUTED
@@ -781,6 +821,9 @@ def agent_cell(picture: Picture, agent: Agent, spin: str = SPIN[0]) -> Segments:
 
 
 def agent_state(picture: Picture, agent: Agent) -> Segments:
+    moving = inks(agent)
+    if moving is not None:
+        return [(look(agent).word, moving[2])]
     yours = picture.is_viewer(agent.operator)
     if agent.state == "at its prompt":
         style = INK if yours else INK2
@@ -936,7 +979,7 @@ def reviewers(picture: Picture, pull: PullRequest,
     """Everyone with a say in the review, as drawn: (marks, name, words). Those who have
     reviewed come first, oldest word first; then those asked and not yet answered, whose
     trail (when they reviewed before) ends in ◔. A program that is reviewing it now
-    (`at_work`) has the dots that turn in ◔'s place, and is said to be reviewing."""
+    (`at_work`) has the wheel that turns in ◔'s place, and is said to be reviewing."""
     out = [(review_marks(r), picture.shown(r.who), review_said(r)) for r in pull.reviews if r.who not in pull.asked]
     for who in pull.asked:
         before = next((r for r in pull.reviews if r.who == who), None)
@@ -977,7 +1020,7 @@ def fit(names: list[str], letters: int) -> list[str] | None:
 def review_cell(picture: Picture, pull: PullRequest, names: bool, room: int, spin: str = SPIN[0]) -> Segments:
     """Each reviewer's trail of marks and their name, then who is still asked, then ◇ the
     comments to resolve. Names that do not fit are cut to fit; only when even that fails
-    are the marks left alone. `spin` is where the turning dots stand now (`reviewers`)."""
+    are the marks left alone. `spin` is where the turning wheel stands now (`reviewers`)."""
     tail: Segments = [("◇", MUTED), (str(pull.comments_open), INK)] if pull.comments_open else []
     found = reviewers(picture, pull, spin)
     if not found and not tail:
