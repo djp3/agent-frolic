@@ -491,6 +491,9 @@ class Frolic(App):
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
         self.name_asked: tuple[str, float] | None = None  # the agent's name c last copied, and when
+        self.copy_run = 0                         # bumped by every name c asks for: of the copies under way, only
+                                                  # the last asked for is left on the clipboard and spoken of
+        self.copy_lock = threading.Lock()         # and they take turns at the clipboard (see `copy_name`)
         self.news: tuple[float, str] | None = None        # the last thing that happened on GitHub, for the
                                                           # board's ticker (set by `happened` alone)
         self.notice: tuple[float, str] | None = None      # words in the ticker's place, and until when (announce)
@@ -1965,25 +1968,43 @@ class Frolic(App):
         (picture.agent_name), to paste where the agent's session is named. `ref` is how the
         board names the pull request, for the ticker. As with o, the key repeats when it
         is held down: c again for the same name, sooner than OPEN_AGAIN_S after the last,
-        copies nothing more."""
+        copies nothing more.
+
+        Each copy is made on a thread of its own, so that a clipboard slow to answer does not
+        hold the board, and two asked for close together could end in either order: the
+        slower would be what the clipboard was left with, and what the ticker said, though
+        it was asked for first. So each is numbered (copy_run) and they take turns
+        (copy_lock). One whose turn comes after a later name was asked for copies nothing,
+        and one that ends after a later name was asked for says nothing: the later one's
+        own copy, and its own word, follow."""
         name, now = agent_name(pull), time.time()
         repeat = (self.name_asked is not None and self.name_asked[0] == name
                   and now - self.name_asked[1] < self.OPEN_AGAIN_S)
         self.name_asked = (name, now)
         if not repeat:
-            self.take_name_copy(name, ref)
+            self.copy_run += 1
+            self.take_name_copy(self.copy_run, name, ref)
 
     @work(thread=True, group="copies")
-    def take_name_copy(self, name: str, ref: str) -> None:
-        try:
-            copy_text(name)
-        except Exception as e:                             # as for a page: it must not close the board
-            log.warning("could not copy %s: %r", name, e)
-            self.later(self.name_not_copied, name, ref)
-        else:
-            self.later(self.announce, f"{ref} · copied {name}, the name for an agent on it", self.NOTICE_S)
+    def take_name_copy(self, run: int, name: str, ref: str) -> None:
+        with self.copy_lock:                               # one at a time: the last to write is what is kept,
+            if run != self.copy_run:                       # and that is never one a later name has overtaken
+                return
+            try:
+                copy_text(name)
+                copied = True
+            except Exception as e:                         # as for a page: it must not close the board
+                log.warning("could not copy %s: %r", name, e)
+                copied = False
+        self.later(self.name_copied, run, name, ref, copied)
 
-    def name_not_copied(self, name: str, ref: str) -> None:
+    def name_copied(self, run: int, name: str, ref: str, copied: bool) -> None:
+        """A copy has ended, and whether it was made. Said only of the last name asked for:
+        an earlier one that ends late is no longer what the user is waiting on."""
+        if run != self.copy_run:
+            return
+        if copied:
+            return self.announce(f"{ref} · copied {name}, the name for an agent on it", self.NOTICE_S)
         text = f"{ref} · {name} was not copied: the clipboard could not be reached"
         self.name_asked = None                             # c may be pressed again at once
         self.say(text, INK)                                # kept in the setup's log: the notice passes

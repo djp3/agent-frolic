@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import subprocess
+import threading
 import time
 import urllib.request
 import webbrowser
@@ -23,7 +24,7 @@ from settings import Settings
 from githubapi import Team
 from grange import Reported
 from standins import (AUTHTOKEN, TOKEN, FakeBrowser, FakeClipboard, FakeGitHub, FakePulls, age, drive, screen,
-                      settle)
+                      settle, until)
 from test_pulls import node, review
 from textual._xterm_parser import XTermParser
 from textual.events import MouseEvent, MouseScrollDown, MouseScrollUp
@@ -1243,6 +1244,65 @@ async def test_holding_c_down_copies_the_name_once_and_a_copy_that_fails_is_said
         await pilot.press("c")                                                # one that failed: again at once
         await settle(app, pilot)
         assert len(FakeClipboard.copied) == 3
+
+
+def a_slow_copy(monkeypatch, fails=False):
+    """The clipboard, slow to take the first name it is handed, and failing at it when told
+    to: `started` is set once that copy is under way, and it ends only when `held` is set."""
+    held, started = threading.Event(), threading.Event()
+
+    def copy(text):
+        if not started.is_set():
+            started.set()
+            held.wait(5)
+            if fails:
+                raise OSError("no clipboard")
+        FakeClipboard.copy(text)
+
+    monkeypatch.setattr(main, "copy_text", copy)
+    return held, started
+
+
+@drive
+async def test_a_copy_slow_to_end_does_not_replace_the_name_asked_for_after_it(isolated, monkeypatch):
+    """Each c starts a copy on a thread of its own, and nothing made them end in the order
+    they were asked for: the slower one was what the clipboard was left with, and what the
+    ticker said, though it was asked for first."""
+    a_board()
+    app = main.Frolic()
+    held, started = a_slow_copy(monkeypatch)
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("c")                                                # the name for #12
+        await until(pilot, started.is_set)
+        await pilot.press("down", "c", "down", "c")                           # before it ends: #13's, then #9's
+        await pilot.pause(0.2)
+        assert app.name_asked[0] == "djp3-agent-frolic-pr-9"                  # all three have been asked for,
+        assert FakeClipboard.copied == []                                     # and the later two wait their turn
+        held.set()                                                            # the first one ends only now
+        await settle(app, pilot)
+        assert FakeClipboard.copied == ["djp3-agent-frolic-pr-12",            # it was already being written;
+                                        "djp3-agent-frolic-pr-9"]             # the last asked for is what is left
+        assert "agent-frolic#9 · copied djp3-agent-frolic-pr-9, the name for an agent on it" in screen(app)
+
+
+@drive
+async def test_a_copy_that_fails_after_a_later_name_was_asked_for_says_nothing(isolated, monkeypatch):
+    a_board()
+    app = main.Frolic()
+    held, started = a_slow_copy(monkeypatch, fails=True)
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("c")                                                # the name for #12: it will fail
+        await until(pilot, started.is_set)
+        await pilot.press("down", "down", "c")                                # before it does, #9's is asked for
+        await pilot.pause(0.2)
+        held.set()
+        await settle(app, pilot)
+        assert FakeClipboard.copied == ["djp3-agent-frolic-pr-9"]
+        assert "agent-frolic#9 · copied djp3-agent-frolic-pr-9, the name for an agent on it" in screen(app)
+        assert not any("was not copied" in said for _, said, _ in app.lines)  # the one that failed is not what
+        assert app.name_asked[0] == "djp3-agent-frolic-pr-9"                  # the user is waiting on: no word of it
 
 
 @drive
