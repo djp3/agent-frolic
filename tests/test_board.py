@@ -1988,7 +1988,7 @@ async def test_a_wheel_and_a_light_show_an_agent_at_work_in_green_and_one_on_a_c
         app.reported = (Reported("djp3", "djp3-agent-frolic-pr-12 fix", "busy"),        # #12 waits on bob
                         Reported("djp3", "djp3-agent-frolic-pr-13 watch", "shell"))     # #13 is queued behind it
         monkeypatch.setattr(app.board, "spin", lambda offset=0: "⡿")
-        at_work, on_command = "└ ⡿ agent 01   working", "└ ⡿ agent 01   command"
+        at_work, on_command = "└ ⡿ agent 01   working", "└ ⡿ agent 02   command"
         # In the list an agent's name starts at cell 7: a light on cell 9 is on both names.
         there = await inks(at_work, 9.0)
         assert {green, lit_green} <= there and white not in there                       # the wheel, and the light
@@ -2005,9 +2005,9 @@ async def test_a_wheel_and_a_light_show_an_agent_at_work_in_green_and_one_on_a_c
         await pilot.press("down")
         await pilot.pause()
         assert app.board.sel == ("djp3/agent-frolic", 13)
-        assert "owner    you › ⡿ agent 01 waiting on a command" in screen(app)
-        assert "agents   you › agent 01 waiting on a command" in screen(app)
-        assert white in await inks("owner    you › ⡿ agent 01 waiting on a command", 2.0)
+        assert "owner    you › ⡿ agent 02 waiting on a command" in screen(app)
+        assert "agents   you › agent 02 waiting on a command" in screen(app)
+        assert white in await inks("owner    you › ⡿ agent 02 waiting on a command", 2.0)
         # A command is not work: #13 is no further along for it.
         pic = app.board.pic
         assert [board.progress(pic, pic.find(("djp3/agent-frolic", number)))[0] for number in (12, 13)] == [
