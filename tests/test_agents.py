@@ -351,6 +351,25 @@ def test_an_agent_with_none_yet_is_a_stop_of_the_focus_and_in_focus_with_its_hum
     assert not any(pictures.in_focus(pic, pull, stop) for pull in pic.all())              # it is on no pull request
 
 
+def test_a_pull_request_is_newly_opened_only_when_it_was_created_since_the_reading_before():
+    """One that was not in the reading before may have been open all along: a repository with
+    many open is read only as far as its most recent, and an older one comes into that when
+    another closes."""
+    before = Picture(["o/web"], {"o/web": read("o/web", web_nodes())}, "djp3")       # taken at NOW: the 14th, 16:00
+
+    def opened(created):
+        nodes = web_nodes() + [node(31, "hotfix", author={"login": "djp3"}, createdAt=created)]
+        change, = pictures.changes(before, Picture(["o/web"], {"o/web": read("o/web", nodes)}, "djp3"), "o/web")
+        return change.opened
+
+    assert opened("2026-11-14T16:05:00Z")                    # since that reading was taken
+    assert opened("2026-11-14T15:58:30Z")                    # a moment before it, by a clock that disagrees a little:
+    assert not opened("2026-11-14T15:57:00Z")                # it was not in that reading, so it is new all the same
+    assert not opened("2026-01-05T09:00:00Z")                # open all along
+    assert not opened(None)                                  # GitHub did not say when: not taken for new
+    assert pictures.CLOCKS_APART.total_seconds() == 120
+
+
 # ---- who it works for, and its number ---------------------------------------------------
 
 def test_the_authors_agent_works_for_them_and_anyone_elses_reviews():
@@ -838,14 +857,27 @@ async def test_the_ticker_names_the_pull_request_the_viewer_opened_where_their_a
         FakeGrange.answers.put(team(("djp3", "o-web hotfix", "busy"), ("bob", "o-app", "busy")))
         await until(pilot, lambda: app.reported)
         was = app.board.sel
-        FakePulls.open_["o/web"] = web_nodes() + [node(31, "hotfix", author={"login": "djp3"}, baseRefOid=TIP)]
-        FakePulls.open_["o/app"] = app_nodes() + [node(32, "more", author={"login": "djp3"}, baseRefOid=TIP)]
+        just_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        FakePulls.open_["o/app"] = app_nodes() + [node(32, "more", author={"login": "djp3"}, baseRefOid=TIP,
+                                                       createdAt=just_now)]
         age(app, only=["o/app"])
         app.tick()
         await settle(app, pilot)
         await pilot.pause(0.3)
         assert "app · #32 opened by you" in screen(app) and app.board.sel == was          # no agent of theirs there:
-        age(app, only=["o/web"])                                                          # said as any other is
+        # One of theirs that was open all along and has only now come into what is read  # said as any other is
+        # (created on the 10th): it is not the one their agent has just opened.
+        FakePulls.open_["o/web"] = web_nodes() + [node(30, "old-work", author={"login": "djp3"}, baseRefOid=TIP)]
+        age(app, only=["o/web"])
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+        assert "web · #30 opened by you" in screen(app) and app.board.sel == was
+        assert not any("rename" in text for _, text, _ in app.lines)
+        FakePulls.open_["o/web"] = FakePulls.open_["o/web"] + [
+            node(31, "hotfix", author={"login": "djp3"}, baseRefOid=TIP,
+                 createdAt=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))]
+        age(app, only=["o/web"])
         app.tick()
         await settle(app, pilot)
         await pilot.pause(0.3)

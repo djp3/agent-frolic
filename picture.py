@@ -56,7 +56,7 @@ import itertools
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, NamedTuple, Protocol
 
 from canvas import Segments, cell_len, cut, seg_len
@@ -1297,12 +1297,24 @@ class Change:
     key: Key
     said: str                     # one line: "#12 bob approved · waits on you to merge"
     pull: PullRequest | None      # None when it is no longer open
-    opened: bool = False          # it was not there at the reading before
+    opened: bool = False          # it was opened since the reading before: not one open all along
+                                  # that has only now come into what is read
+
+
+CLOCKS_APART = timedelta(minutes=2)    # how far this Mac's clock and GitHub's are allowed to disagree
 
 
 def changes(before: Picture | None, after: Picture, repo: str) -> list[Change]:
     """What changed in one repository between two readings: new pull requests, ones no
-    longer open, and ones whose facts on screen changed, each with a line to say."""
+    longer open, and ones whose facts on screen changed, each with a line to say.
+
+    A pull request that was not in the reading before is not always one just opened
+    (`Change.opened`). A repository with many open is read only as far as its most recent,
+    and an older one comes into that when another closes; and one that was never held may
+    be read on its own, when a webhook names it. So it is newly opened only when GitHub
+    says it was created since the reading before was taken, less CLOCKS_APART. That
+    allowance errs the safe way: one created within it and missing from that reading was
+    opened since all the same. When GitHub does not say when, it is not taken for new."""
     if before is None:
         return []
     low = repo.lower()
@@ -1311,10 +1323,12 @@ def changes(before: Picture | None, after: Picture, repo: str) -> list[Change]:
     if low not in before.pulls:                   # the first reading: everything is new, nothing changed
         return []
     out: list[Change] = []
+    since = before.pulls[low].at - CLOCKS_APART
     for key, pull in new.items():
         if key not in old:
             out.append(Change(key, f"#{pull.number} opened by {after.shown(pull.author)} · "
-                                   f"{waits_words(after, pull)}", pull, True))
+                                   f"{waits_words(after, pull)}", pull,
+                              pull.created is not None and pull.created >= since))
         elif fingerprint(before, old[key]) != fingerprint(after, pull):
             out.append(Change(key, f"#{pull.number} {_difference(before, old[key], after, pull)}", pull))
     for key, pull in old.items():
