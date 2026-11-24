@@ -58,8 +58,9 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     through a team or an organization they act for.
   • WHAT NEEDS EFFORT, `needs_effort()`: every pull request that waits on a human, most
     urgent first: idle agents because of it, then how long it has been quiet.
-  • THE HUMANS for the cards, `humans()`: the viewer, the viewer's teams, then everyone
-    something waits on.
+  • THE HUMANS for the cards, `humans()`: the viewer, everyone else who has agents, then
+    the ones with none: the viewer's teams, and whoever holds up something of the
+    viewer's. Anyone else something waits on is in the list, and has no card.
   • FOCUS, `focuses()` / `in_focus()`: everyone, a human with their agents (a crew), the
     human alone, one agent.
   • WHAT CHANGED, `changes()`: between two readings of a repository, which pull requests
@@ -1294,15 +1295,33 @@ class Person:
                                   # have rights in
     dot: bool = False             # something here is the viewer's to act on
     at_work: bool = False         # a program that is reviewing something now (`at_work`)
+    holds: bool = False           # something of the viewer's waits on them: a pull request the viewer
+                                  # wrote or has an agent on, or one queued behind what waits on them
+
+    @property
+    def bare(self) -> bool:
+        """A name and nothing under it: not the viewer, and no agents. The bare ones share
+        a card, their names one under another (board.lay_cards)."""
+        return not self.viewer and not self.agents
 
 
 def humans(picture: Picture) -> list[Person]:
-    """The viewer first, then the viewer's teams that something waits on (with the
-    organizations they have rights in), then everyone else something waits on; within each,
-    the one waited on longest first. Someone nothing waits on has no card: on a real
-    repository that is every stranger who ever left a review. A team has a card as a human
-    has; what waits on it is on its card alone, not on its members'. A team that is still
-    undecided has none."""
+    """Who has a place among the cards, in the order they stand there.
+
+    The viewer first. Then everyone else who has agents, each with a card of their own.
+    Then the ones with none, who are a name and no more (`Person.bare`): the viewer's teams
+    that something waits on (with the organizations they have rights in), and whoever
+    holds up something of the viewer's (`Person.holds`). Within each, the one waited on
+    longest first.
+
+    Someone with no agents whose wait is no business of the viewer's has no place: on a
+    repository with many contributors that is every author whose own pull request waits
+    on them, and they would crowd out the viewer's own agents. They are in the list, and
+    in what needs effort, as before. Someone nothing waits on has none either: on a real
+    repository that is every stranger who ever left a review.
+
+    A team has a place as a human has; what waits on it is on its name alone, not on its
+    members'. A team that is still undecided has none."""
     found: dict[str, Person] = {}
     if picture.viewer:
         found[picture.viewer.lower()] = Person(picture.viewer, "you", viewer=True, yours=True)
@@ -1311,7 +1330,12 @@ def humans(picture: Picture) -> list[Person]:
         kind = "team" if is_team(who) else "org" if picture.is_org(who) else "human"
         return found.setdefault(who.lower(), Person(who, picture.shown(who), yours=picture.yours(who), kind=kind))
 
+    def of_viewer(pull: PullRequest) -> bool:
+        """The viewer wrote it, or has an agent on it."""
+        return picture.is_viewer(pull.author) or any(picture.is_viewer(a.operator) for a in picture.on(pull))
+
     for effort in needs_effort(picture):
+        held = any(of_viewer(pull) for pull in [effort.pull, *effort.behind])
         for who in effort.standing.who:
             if picture.undecided(who):
                 continue
@@ -1319,6 +1343,7 @@ def humans(picture: Picture) -> list[Person]:
             person.to_act.append(effort.pull)
             person.dot = person.dot or picture.acts_as(who, effort.pull)
             person.at_work = person.at_work or at_work(effort.pull, who)
+            person.holds = person.holds or held
     for agents in picture.agents.values():
         for agent in agents:
             card(agent.operator).agents.append(agent)
@@ -1333,10 +1358,10 @@ def humans(picture: Picture) -> list[Person]:
         return person.kind in ("team", "org") and person.yours
 
     viewer = [p for p in found.values() if p.viewer]
-    teams = sorted((p for p in found.values() if own_team(p) and p.to_act), key=longest)
-    others = sorted((p for p in found.values() if not p.viewer and not own_team(p) and (p.to_act or p.agents)),
-                    key=longest)
-    return viewer + teams + others
+    crews = sorted((p for p in found.values() if not p.viewer and p.agents), key=longest)
+    teams = sorted((p for p in found.values() if p.bare and own_team(p) and p.to_act), key=longest)
+    others = sorted((p for p in found.values() if p.bare and not own_team(p) and p.holds), key=longest)
+    return viewer + crews + teams + others
 
 
 # ---- focus -----------------------------------------------------------------------------
@@ -1349,9 +1374,9 @@ class Focus:
 
 
 def focuses(picture: Picture) -> list[Focus]:
-    """The steps of the focus key: everyone; then, per card, the human with their agents
-    (a crew), and when they have agents, the human alone and each agent. A team's card is
-    one step: what waits on that team."""
+    """The steps of the focus key: everyone; then, for each of `humans`, the human with
+    their agents (a crew), and when they have agents, the human alone and each agent. One
+    with no agents, a team among them, is one step: what waits on them."""
     out = [Focus()]
     for person in humans(picture):
         out.append(Focus("crew", person.login.lower()))
