@@ -207,30 +207,70 @@ def test_an_organization_that_stands_as_maintainer_is_the_viewers_where_their_ri
     read = org_picture("read")                                    # may do neither: it is the others'
     assert text(cells(read, pull(read, 40, "acme/app"))) == ["  dependabot | waiting |   acme"]
     assert not any(read.mine(p) for p in read.all()) and counts(read, "acme/app") == (0, 1)
-    assert [(p.name, p.yours, p.dot) for p in humans(read)] == [("you", True, False), ("acme", False, False)]
+    assert [(p.name, p.yours, p.dot) for p in humans(read)] == [("you", True, False)]    # and nothing of theirs
+    held = Picture(read.names, read.pulls, "djp3",                # waits on acme: with an agent on #40, it does
+                   {("acme/app", 40): [Agent("djp3", "01", "acme/app", 40, "review", "waiting")]})
+    assert [(p.name, p.yours, p.dot) for p in humans(held)] == [("you", True, False), ("acme", False, False)]
 
 
 def test_a_person_who_owns_a_repository_is_never_the_viewer_by_rights_alone():
     pic = org_picture("admin", org=False)                         # acme is a person: the viewer is not them
     assert text(cells(pic, pull(pic, 40, "acme/app"))) == ["  dependabot | waiting |   acme"]
     assert counts(pic, "acme/app") == (0, 1)
-    assert [(p.name, p.kind, p.yours) for p in humans(pic)] == [("you", "human", True), ("acme", "human", False)]
+    assert [(p.name, p.kind, p.yours) for p in humans(pic)] == [("you", "human", True)]
+    held = Picture(pic.names, pic.pulls, "djp3",                  # among the cards once something of the viewer's
+                   {("acme/app", 40): [Agent("djp3", "01", "acme/app", 40, "review", "waiting")]})    # waits on them
+    assert [(p.name, p.kind, p.yours) for p in humans(held)] == [("you", "human", True), ("acme", "human", False)]
     owner = org_picture("admin", org=False, viewer="acme")        # unless they are the one looking
     assert counts(owner, "acme/app") == (2, 0)
 
 
-def test_the_humans_are_the_viewer_and_then_whoever_is_waited_on_longest():
+def test_the_humans_are_the_viewer_and_whoever_holds_up_something_of_theirs():
+    """Everyone something waited on had a card: on a repository with many contributors,
+    every author whose own pull request waited on them, a name with nothing under it.
+    They left no room for the agents on the viewer's own card."""
     people = humans(picture())
-    assert [(p.name, [x.number for x in p.to_act]) for p in people] == [
-        ("you", [9, 20, 15]), ("tobias", [16]), ("kenji", [9]), ("bob", [12])]
-    assert "mira" not in [p.name for p in people]                 # nothing waits on mira: no card
+    assert [(p.name, [x.number for x in p.to_act]) for p in people] == [("you", [9, 20, 15]), ("bob", [12])]
+    assert people[1].holds and people[1].bare                     # #12 is the viewer's, and waits on bob
+    names = [p.name for p in people]
+    assert "tobias" not in names                                  # #16 is his own, and waits on him
+    assert "kenji" not in names                                   # #9 is mira's: his review of it is not the viewer's wait
+    assert "mira" not in names                                    # nothing waits on mira
+    assert counts(picture(), "o/app") == (3, 3)                   # they are counted as before, and in the list
+    assert [e.who for e in needs_effort(picture())][:1] == ["tobias"]
+
+
+def test_someone_holds_up_the_viewer_through_an_agent_of_theirs_or_from_further_up_a_stack():
+    # The viewer has an agent on mira's #9: what it waits on is the viewer's business now.
+    reviewing = picture({("o/app", 9): [Agent("djp3", "01", "o/app", 9, "review", "waiting")]})
+    assert [(p.name, p.holds) for p in humans(reviewing)[1:]] == [("kenji", True), ("bob", True)]
+    # Someone else's agent there changes nothing for the viewer. Its human has agents: a card of their own.
+    theirs = picture({("o/app", 9): [Agent("mira", "01", "o/app", 9, "author", "waiting")]})
+    assert [(p.name, p.bare, p.holds) for p in humans(theirs)[1:]] == [("mira", False, False), ("bob", True, True)]
+    # The viewer's pull request is queued behind tobias's, which waits on kenji: kenji holds it up.
+    nodes = [node(30, "base", author={"login": "tobias"}, baseRefOid=TIP, reviewRequests=ASK("kenji")),
+             node(31, "next", base="base", author={"login": "djp3"}, reviewDecision="APPROVED",
+                  latestOpinionatedReviews=APPROVED("bob")),
+             node(32, "other", author={"login": "tobias"}, baseRefOid=TIP, reviewRequests=ASK("wen"))]
+    stacked = picture(nodes=nodes)
+    assert [(p.name, [x.number for x in p.to_act]) for p in humans(stacked)] == [
+        ("you", []), ("kenji", [30])]                             # and wen, on #32, holds up nothing of theirs
+    assert [p.name for p in humans(picture(nodes=nodes, viewer="tobias"))] == ["you", "kenji", "wen"]
+
+
+def test_those_with_agents_come_before_the_bare_names_and_the_viewers_teams_lead_those():
+    agents = {("o/app", 16): [Agent("tobias", "01", "o/app", 16, "author", "working")],
+              ("o/app", 9): [Agent("mira", "01", "o/app", 9, "author", "waiting")]}
+    people = humans(picture(agents))
+    assert [(p.name, p.bare, len(p.agents)) for p in people] == [
+        ("you", False, 0), ("tobias", False, 1), ("mira", False, 1), ("bob", True, 0)]
+    assert [f.human for f in focuses(picture(agents)) if f.kind == "crew"] == ["djp3", "tobias", "mira", "bob"]
 
 
 def test_focus_steps_through_the_humans_and_dims_what_is_not_theirs():
     pic = picture()
     steps = focuses(pic)
-    assert steps == [Focus(), Focus("crew", "djp3"), Focus("crew", "tobias"), Focus("crew", "kenji"),
-                     Focus("crew", "bob")]
+    assert steps == [Focus(), Focus("crew", "djp3"), Focus("crew", "bob")]    # who has a place among the cards
 
     def lit(focus):
         return [p.number for p in pic.all() if in_focus(pic, p, focus)]
@@ -601,7 +641,7 @@ def test_until_the_viewers_teams_are_known_a_teams_request_is_nobodys():
     assert focuses(pic) == [Focus(), Focus("crew", "djp3")]
     let_go = team_picture(teams={})                                        # the read failed: anyone else's
     assert counts(let_go, "Acme/app") == (1, 2)
-    assert [p.name for p in humans(let_go)] == ["you", "team/platform", "team/docs"]
+    assert [p.name for p in humans(let_go)] == ["you", "team/platform"]    # it holds up their own #42; docs nothing
 
 
 def test_a_teams_name_in_a_wide_script_is_fitted_by_the_cells_it_takes():
@@ -630,7 +670,7 @@ def test_a_request_to_a_team_and_a_person_is_held_whole_until_the_teams_are_know
     effort, = needs_effort(held, NOW)
     assert (effort.mine, effort.undecided) == (False, True)                # no mark yet, either way
     assert counts(held, "Acme/app") == (0, 1)                              # bob is one of the others, whatever comes
-    assert [p.name for p in humans(held)] == ["you", "bob"]
+    assert [p.name for p in humans(held)] == ["you"]                       # mira's: no wait of the viewer's
     known = team_picture(nodes)                                            # the viewer is on Platform
     effort, = needs_effort(known, NOW)
     assert (effort.mine, effort.undecided) == (True, False) and counts(known, "Acme/app") == (1, 1)
@@ -676,24 +716,30 @@ def test_a_stacked_pull_request_that_waits_through_the_one_below_on_the_viewers_
     assert not other.mine(at(other, 51)) and not other.mine(at(other, 50))
 
 
-def test_a_team_has_a_card_of_its_own_right_after_the_viewers():
+def test_a_team_the_viewer_is_on_has_a_place_of_its_own_first_among_the_bare_names():
     people = humans(team_picture())
     assert [(p.name, p.kind, p.viewer, p.yours, p.dot, [x.number for x in p.to_act]) for p in people] == [
         ("you", "human", True, True, True, [43]),
-        ("Platform", "team", False, True, True, [40, 42, 43]),             # once, here: not on the viewer's card
-        ("team/docs", "team", False, False, False, [41])]
+        ("Platform", "team", False, True, True, [40, 42, 43])]             # once, here: not on the viewer's card
+    assert "team/docs" not in [p.name for p in people]                     # a bot's #41 waits on it: not theirs
     own = humans(team_picture([team_nodes()[2]]))                          # only the viewer's own pull request
     assert [(p.name, p.yours, p.dot) for p in own] == [("you", True, False), ("Platform", True, False)]
-    late = [node(60, "old", author={"login": "mira"}, baseRefOid=TIP, reviewRequests=ASK("kenji"),
-                 updatedAt="2026-11-01T16:00:00Z")] + team_nodes()
-    assert [p.name for p in humans(team_picture(late))] == ["you", "Platform", "kenji", "team/docs"]
+    # The viewer's team comes before the others, however long those have been waited on; among
+    # the others, the one waited on longest. And before them all, whoever has agents.
+    late = [node(60, "old", author={"login": "djp3"}, baseRefOid=TIP, reviewRequests=ASK("kenji"),
+                 updatedAt="2026-11-01T16:00:00Z"),
+            node(61, "older", author={"login": "djp3"}, baseRefOid=TIP, reviewRequests=ASK("bob"),
+                 updatedAt="2026-10-01T16:00:00Z")] + team_nodes()
+    assert [p.name for p in humans(team_picture(late))] == ["you", "Platform", "bob", "kenji"]
+    crew = {("acme/app", 43): [Agent("mira", "01", "Acme/app", 43, "author", "waiting")]}
+    assert [p.name for p in humans(team_picture(late, agents=crew))] == ["you", "mira", "Platform", "bob", "kenji"]
     named_you = humans(team_picture(teams={PLATFORM: "you"}))              # a team may be called anything
     assert [(p.name, p.viewer, p.kind) for p in named_you[:2]] == [("you", True, "human"), ("you", False, "team")]
 
 
 def test_a_teams_card_is_one_step_of_the_focus_and_lights_what_waits_on_the_team():
     pic = team_picture()
-    assert focuses(pic) == [Focus(), Focus("crew", "djp3"), Focus("crew", PLATFORM), Focus("crew", "team/acme/docs")]
+    assert focuses(pic) == [Focus(), Focus("crew", "djp3"), Focus("crew", PLATFORM)]
 
     def lit(focus):
         return [p.number for p in pic.all() if in_focus(pic, p, focus)]
@@ -729,7 +775,7 @@ def test_two_teams_that_would_read_alike_each_say_which_organization_they_are_of
 
     on_neither = two({})
     assert waits(on_neither) == ["team/Acme/platform", "team/Other/platform"]
-    assert [p.name for p in humans(on_neither)] == ["you", "team/Acme/platform", "team/Other/platform"]
+    assert [p.name for p in humans(on_neither)] == ["you"]                 # a bot's, on teams not theirs
     on_both = two({PLATFORM: "Platform", "team/other/platform": "Platform"})
     assert waits(on_both) == ["● Acme/Platform", "● Other/Platform"]
     assert [p.name for p in humans(on_both)] == ["you", "Acme/Platform", "Other/Platform"]

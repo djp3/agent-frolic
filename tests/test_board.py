@@ -4,6 +4,7 @@
 pull requests the app has read, and what its keys do."""
 import asyncio
 import json
+import random
 import re
 import subprocess
 import threading
@@ -115,10 +116,10 @@ async def test_the_board_is_the_first_screen_once_there_is_a_token_and_draws_wha
         assert line(app, "#16 Transcript").split("│")[0].split() == ["tobias", "to", "act"]
         assert "merge once #12 lands" in shown                           # the extra line of a queued one
         assert "◔ bob" in line(app, "#12 GraphQL") and "◔ you" in line(app, "#9 Jira")
-        # the cards: you, then whoever is waited on longest
+        # the cards: you, then whoever holds up something of yours. tobias's #16 is his own to fix: no card
         cards = shown.splitlines()[2]
         assert cards.split("│")[0].split() == ["●", "you"]
-        assert [part.strip() for part in cards.split("│")[1:]] == ["tobias", "bob"]
+        assert [part.strip() for part in cards.split("│")[1:]] == ["bob"]
         # what needs effort, most urgent first, and the drawer for the selected one
         efforts = [shown.index(text) for text in ("#16 tobias · resolve the conflict", "#9  you · review",
                                                   "#143 you · review", "#12 bob · review · holds up #13")]
@@ -369,7 +370,7 @@ async def test_focus_dims_what_is_not_theirs_and_escape_brings_everyone_back(iso
         await pilot.press("f", "F")                                           # not f: on the setup it forgets
         await pilot.pause()                                                   # the token
         assert app.board.focus == board.Focus()
-        await pilot.press("tab", "tab", "tab")                                # everyone → you → tobias → bob
+        await pilot.press("tab", "tab")                                       # everyone → you → bob
         await pilot.pause()
         assert app.board.focus == board.Focus("crew", "bob")
         # not bob's: dimmed, but for the rule, and what is left of its age's bar, darker than that already
@@ -379,7 +380,7 @@ async def test_focus_dims_what_is_not_theirs_and_escape_brings_everyone_back(iso
         assert dim not in {ink for ink, _ in colors(app, "#13 Review")}       # queued behind what waits on bob
         await pilot.press("shift+tab")
         await pilot.pause()
-        assert app.board.focus == board.Focus("crew", "tobias")
+        assert app.board.focus == board.Focus("crew", "djp3")
         await pilot.press("escape")
         await pilot.pause()
         assert app.board.focus == board.Focus() and dim not in {ink for ink, _ in colors(app, "#16 Transcript")}
@@ -1389,7 +1390,7 @@ def who(app, needle):
 
 
 @drive
-async def test_a_request_to_a_team_the_viewer_is_on_is_drawn_as_theirs_and_the_team_has_a_card(isolated):
+async def test_a_request_to_a_team_the_viewer_is_on_is_drawn_as_theirs_and_the_team_is_named_among_the_cards(isolated):
     a_team_board()
     app = main.Frolic()
     async with app.run_test(size=(150, 46)) as pilot:
@@ -1401,8 +1402,9 @@ async def test_a_request_to_a_team_the_viewer_is_on_is_drawn_as_theirs_and_the_t
         assert yellow not in {ink for ink, _ in colors(app, "#202 Bump b")}
         assert [m for m, _, _ in marks(app.board.top_line())] == ["●1", "○2"]             # theirs; team/docs, bob
         cards = line(app, "Platform")                                                     # the strip is the first
-        assert cards.index("you") < cards.index("● Platform") < cards.index("team/docs") < cards.index("bob")
-        assert yellow in {ink for ink, _ in colors(app, "team/docs")}                     # the dot on the team's card
+        assert cards.index("you") < cards.index("● Platform")
+        assert "team/docs" not in cards and "bob" not in cards                            # no wait of the viewer's
+        assert yellow in {ink for ink, _ in colors(app, "● Platform")}                    # the dot on the team's name
         assert app.board.sel == ("acme/web-console", 201)
         assert "waits on ● Platform to review" in screen(app)                             # the drawer
         assert line(app, "Platform · review").split()[0] == "●"                           # what needs effort
@@ -1824,7 +1826,7 @@ async def test_an_ages_bar_and_a_repositorys_timer_are_not_one_color(isolated):
 
         assert bars("#12 GraphQL") == {age} and bars("#16 Transcript") == {age}
         assert bars("╪ djp3/agent-frolic") == {timer_} and bars("╪ acme/web-console") == {timer_}
-        await pilot.press("tab", "tab", "tab")                               # bob's: the others dim, their bars too
+        await pilot.press("tab", "tab")                                      # bob's: the others dim, their bars too
         await pilot.pause()
         assert bars("#16 Transcript") == {board.DIM.lower()} and bars("╪ djp3/agent-frolic") == {timer_}
 
@@ -2028,11 +2030,268 @@ async def test_a_card_whose_name_looks_like_the_turning_wheel_keeps_its_name(iso
         app.draw()
         await pilot.pause()
         assert who(app, "#201 Bump a") == ["dependabot", "waiting", "●", "⣾x"]
-        cards = line(app, "team/docs")                                                    # the strip is the first
-        assert "● ⣾x" in cards and "⡿" not in cards                                       # its name, and no wheel
+        cards = line(app, "⣾x")                                                           # the strip is the first
+        assert "● ⣾x" in cards and "you" in cards and "⡿" not in cards                    # its name, and no wheel
         await pilot.press("tab", "tab")                                                   # → you → the team
         await pilot.pause()
         assert app.board.focus == board.Focus("crew", "team/acme/platform")
-        strip = next(s for s in app.screen._compositor.render_strips() if "team/docs" in s.text)
+        strip = next(s for s in app.screen._compositor.render_strips() if "⣾x" in s.text)
         under = {part.text.strip(): bool(part.style and part.style.underline) for part in strip if part.text.strip()}
-        assert under["⣾x"] and not under["●"]                                             # the name, not its mark
+        assert under["⣾x"] and not under["●"] and not under["you"]                        # the name, not its mark
+
+
+# ---- the strip: the names with no agents share a card ---------------------------------------
+
+NAMES = ("bob", "elif", "farid", "greta", "hugo", "ines", "jonas", "kira", "luca", "mona", "nils", "omar")
+
+
+def you_with(agents):
+    """The viewer, with this many agents: four to a column of their card."""
+    return board.Person("djp3", "you", viewer=True, yours=True, agents=[
+        board.Agent("djp3", f"{n:02d}", "o/app", n, "author", "working") for n in range(1, agents + 1)])
+
+
+def bare(*names):
+    return [board.Person(name, name, holds=True) for name in names]
+
+
+def laid(people, room, keep=""):
+    """The cards as `lay_cards` makes them: (whose, its columns as text) for each, and
+    whether names are left out with no line to say so."""
+    cards, unseen = board.lay_cards(people, room, keep)
+    return [(card.human, [[board.plain(said).strip() for said, _ in col] for col in card.cols]) for card in cards], unseen
+
+
+def test_the_names_with_no_agents_share_one_card_five_to_a_column():
+    """Each was a card of its own: a name, and four empty rows under it."""
+    cards, unseen = board.lay_cards([you_with(11), *bare(*NAMES[:7])], 136)
+    yours, shared = cards
+    assert not unseen and (yours.human, shared.human) == ("djp3", "")
+    assert [len(col) for col in yours.cols] == [4, 4, 3] and yours.rows == 5      # all eleven: nothing is folded
+    assert [[board.plain(said).strip() for said, _ in col] for col in shared.cols] == [
+        ["bob", "elif", "farid", "greta", "hugo"], ["ines", "jonas"]]
+    assert [who for col in shared.cols for _, who in col] == list(NAMES[:7])      # each line knows whose it is
+    assert (shared.top, shared.rows, shared.head) == (0, 5, [])                   # from the first row: it has no name
+    assert shared.x == yours.width + 3 and shared.width == 16                     # "  farid" and "  jonas", two apart
+    # One with agents keeps a card of their own, between yours and the names.
+    mira = board.Person("mira", "mira", agents=[board.Agent("mira", "01", "o/app", 7, "author", "working")])
+    assert [who for who, _ in laid([you_with(11), mira, *bare("bob")], 136)[0]] == ["djp3", "mira", ""]
+
+
+def test_the_names_never_fold_the_viewers_card_and_are_the_first_to_go():
+    """Twelve names beside eleven agents folded the viewer's card to one column, three agents
+    and "8 more, folded", and the strip ran off the edge all the same."""
+    people = [you_with(11), *bare(*NAMES)]
+    whole = [["#1", "#2", "#3", "#4"], ["#5", "#6", "#7", "#8"], ["#9", "#10", "#11"]]
+
+    def agents(cards):
+        return [[said.split()[-1] for said in col] for col in cards[0][1]]
+
+    cards, unseen = laid(people, 44)                              # room for them all, three columns of names
+    assert agents(cards) == whole and not unseen
+    assert cards[1][1] == [list(NAMES[:5]), list(NAMES[5:10]), list(NAMES[10:])]
+    cards, unseen = laid(people, 43)                              # a cell short: nine, and a line for the rest
+    assert agents(cards) == whole and not unseen
+    assert cards[1][1] == [list(NAMES[:5]), [*NAMES[5:9], "3 more"]]
+    cards, unseen = laid(people, 36)                              # one column
+    assert agents(cards) == whole and cards[1][1] == [[*NAMES[:4], "8 more"]] and not unseen
+    cards, unseen = laid(people, 28)
+    assert agents(cards) == whole and cards[1][1] == [[*NAMES[:4], "8 more"]]
+    cards, unseen = laid(people, 27)                              # not even that: the caller marks the edge
+    assert agents(cards) == whole and len(cards) == 1 and unseen
+    assert not laid([you_with(11)], 28)[1]                        # with no names there is nothing to mark
+    # The line that says how many more is a note: it is nobody's, and no stop of the focus.
+    shared = board.lay_cards(people, 36)[0][1]
+    assert [who for _, who in shared.cols[0]] == [*NAMES[:4], None]
+
+
+def test_the_names_stand_as_tall_as_the_strip_is_and_taller_only_to_fit_them_all():
+    """The strip is as tall as the agents need. Names that fit beside one another in a row
+    do not take four more rows from the list to stand in a column."""
+    three = bare("bob", "kenji", "tobias")
+    assert laid([you_with(0), *three], 136)[0][1][1] == [["bob"], ["kenji"], ["tobias"]]      # nobody has agents: a row
+    assert laid([you_with(0), *three], 32)[0][1][1] == [["bob"], ["kenji"], ["tobias"]]
+    assert laid([you_with(0), *three], 31)[0][1][1] == [["bob", "kenji"], ["tobias"]]         # two rows fit them
+    assert laid([you_with(0), *three], 24)[0][1][1] == [["bob", "kenji", "tobias"]]           # three do
+    assert laid([you_with(0), *three], 16)[0][1][1] == [["bob", "kenji", "tobias"]]
+    assert laid([you_with(0), *three], 15) == ([("djp3", [])], True)                          # nothing does
+    # Two agents make the strip three rows: the names are three to a column, in the widest of windows.
+    assert laid([you_with(2), *bare(*NAMES[:7])], 136)[0][1][1] == [
+        ["bob", "elif", "farid"], ["greta", "hugo", "ines"], ["jonas"]]
+    assert board.lay_cards([you_with(2), *bare(*NAMES[:7])], 136)[0][1].rows == 3
+    # Never taller than five, the most the strip takes.
+    assert max(len(col) for col in laid([you_with(0), *bare(*NAMES)], 20)[0][1][1]) == board.STRIP
+
+
+def test_the_one_in_focus_keeps_a_place_among_the_names_that_fit():
+    """The focus is shown on the strip and nowhere else."""
+    people = [you_with(11), *bare(*NAMES)]
+    assert laid(people, 40)[0][1][1] == [list(NAMES[:5]), [*NAMES[5:9], "3 more"]]
+    assert laid(people, 40, keep="omar")[0][1][1] == [list(NAMES[:5]), [*NAMES[5:8], "omar", "3 more"]]
+    assert laid(people, 40, keep="elif")[0][1][1] == [list(NAMES[:5]), [*NAMES[5:9], "3 more"]]    # it has one already
+    assert laid(people, 40, keep="djp3")[0][1][1] == [list(NAMES[:5]), [*NAMES[5:9], "3 more"]]    # not one of them
+    assert laid(people, 36, keep="omar")[0][1][1] == [[*NAMES[:3], "omar", "8 more"]]
+
+
+def the_long_way(people, room, rows, keep=""):
+    """What `names_card` must answer, worked out by laying each way out whole and measuring
+    all of it: every height that might fit them all, then every shorter run of the names
+    with a line for the rest. Its columns as (text, whose), and its width; None for no card."""
+    lines = [(board.plain(board.head_line(person)), person.login.lower()) for person in people]
+
+    def made(entries, height):
+        cols = [entries[at:at + height] for at in range(0, len(entries), height)]
+        return cols, sum(max(len(said) for said, _ in col) for col in cols) + 2 * (len(cols) - 1)
+
+    for height in range(max(1, min(rows, board.STRIP)), board.STRIP + 1):
+        cols, width = made(lines, height)
+        if width <= room:
+            return cols, width
+    for count in range(len(lines) - 1, -1, -1):
+        shown = lines[:count]
+        if count and keep in [who for _, who in lines] and keep not in [who for _, who in shown]:
+            shown = shown[:-1] + [entry for entry in lines if entry[1] == keep]
+        cols, width = made(shown + [(f"  {len(lines) - count} more", None)], board.STRIP)
+        if width <= room:
+            return cols, width
+    return None
+
+
+def test_the_names_card_is_what_trying_every_shorter_run_of_names_would_give():
+    """It works a run's width out from the widths of the names, without laying the run out.
+    Two thousand boards, of none to twenty-three names of every length, in rooms from none
+    to wide, at every height, with one to keep or none: the same card each time."""
+    rng = random.Random(27)
+    for _ in range(2000):
+        people = bare(*(f"n{at}" + "x" * rng.randrange(0, 18) for at in range(rng.randrange(0, 24))))
+        room, rows = rng.randrange(0, 90), rng.randrange(1, 7)
+        keep = rng.choice(["", "nobody", *(person.login for person in people)])
+        card = board.names_card(people, room, rows, keep)
+        got = card and ([[(board.plain(said), who) for said, who in col] for col in card.cols], card.width)
+        assert got == the_long_way(people, room, rows, keep), (len(people), room, rows, keep)
+        assert card is None or card.widths == [max(len(board.plain(said)) for said, _ in col) for col in card.cols]
+
+
+def test_names_that_do_not_fit_are_each_measured_once(monkeypatch):
+    """Every shorter run of the names was laid out and measured again, to find the longest
+    that fits: 45,450 measurements for 300 names with no room, on every one of the eight
+    draws a second while a wheel turns."""
+    measured = []
+    seg_len = board.seg_len
+    monkeypatch.setattr(board, "seg_len", lambda line: measured.append(line) or seg_len(line))
+    for count in (50, 300, 600):
+        people = bare(*(f"user{n}" for n in range(count)))
+        measured.clear()
+        assert board.names_card(people, 0, 5) is None                         # no room for any of it
+        assert len(measured) == 2 * count                                     # each name, and each line for the rest
+        measured.clear()
+        card = board.names_card(people, 40, 5)                                # room for some
+        assert [who for col in card.cols for _, who in col][-2:] == ["user18", None] and count <= len(measured) < 2 * count
+        measured.clear()
+        assert board.names_card(people, 10 * count, 5).width <= 10 * count and len(measured) == count     # and for all
+
+
+def a_crowded_board():
+    """a_board, with more people on it: six whose review the viewer's own pull requests
+    wait on, and three strangers whose own drafts wait on themselves."""
+    a_board()
+    FakePulls.open_["djp3/agent-frolic"] += [
+        node(300 + i, f"mine-{i}", author={"login": "djp3"}, baseRefOid=TIP, title=f"Mine {i}",
+             reviewRequests=ask(name), updatedAt=f"2026-11-0{i + 1}T16:00:00Z")
+        for i, name in enumerate(NAMES[1:7])]
+    FakePulls.open_["djp3/agent-frolic"] += [
+        node(200 + i, f"theirs-{i}", author={"login": name}, baseRefOid=TIP, title=f"Theirs {i}", isDraft=True)
+        for i, name in enumerate(("aiko", "bruno", "chidi"))]
+
+
+CROWD = (*(Reported("djp3", f"djp3-agent-frolic task {n}", "busy") for n in range(11)),
+         Reported("mira", "djp3-agent-frolic-pr-9 docs", "busy"))
+
+
+def strip_rows(app):
+    """The rows of the strip, as text: they follow the top line and the rule under it."""
+    return screen(app).splitlines()[2:2 + app.board.strip_rows]
+
+
+async def steps_of(app, pilot):
+    """Every stop of the focus key, from everyone round to everyone again."""
+    assert app.board.focus == board.Focus()
+    stops = []
+    for _ in range(60):
+        await pilot.press("tab")
+        await pilot.pause()
+        if app.board.focus == board.Focus():
+            return stops
+        stops.append(app.board.focus)
+    raise AssertionError("the focus never came round")
+
+
+@drive
+async def test_on_the_board_the_names_stand_in_columns_beside_the_cards_of_those_with_agents(isolated):
+    """A card for every one of them, eleven wide, and the viewer's own folded to make room."""
+    a_crowded_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        app.reported = CROWD
+        app.draw()
+        await pilot.pause(0.3)
+        rows = strip_rows(app)
+        assert len(rows) == 5 and "folded" not in "\n".join(rows) and "more" not in "\n".join(rows)
+        yours, miras, names = (part for part in zip(*(row.split("│") for row in rows)))
+        assert yours[0].split() == ["●", "you"] and sum(part.count("agent-frolic") for part in yours[1:]) == 11
+        assert miras[0].split() == ["mira"] and "#9" in miras[1]
+        # elif has been waited on longest and bob least: five to a column, then the next.
+        assert [part.split() for part in names] == [["elif", "jonas"], ["farid", "bob"], ["greta"], ["hugo"], ["ines"]]
+        shown = "\n".join(rows)
+        assert all(name not in shown for name in ("tobias", "aiko", "bruno", "chidi"))     # their own to fix: no place
+        assert "tobias · resolve the conflict" in screen(app)                            # and in what needs effort still
+        # The focus key stops at you, at mira, and at each name: at nobody the strip has no place for.
+        stops = await steps_of(app, pilot)
+        assert [f.human for f in stops if f.kind == "crew"] == ["djp3", "mira", *sorted(NAMES[1:7]), "bob"]
+        assert len([f for f in stops if f.kind == "agent"]) == 12 and len(stops) == 2 + 11 + 2 + 1 + 7
+        # On a name, that name is underlined, and it alone: no card is raised around it.
+        for _ in range(stops.index(board.Focus("crew", "greta")) + 1):
+            await pilot.press("tab")
+        await pilot.pause()
+        assert app.board.focus == board.Focus("crew", "greta")
+        strips = [s for s in app.screen._compositor.render_strips()][2:7]
+        under = {part.text.strip() for strip in strips for part in strip if part.style and part.style.underline}
+        assert under == {"greta"}
+        assert board.DIM.lower() in {ink for ink, _ in colors(app, "Mine 0")}              # #300 waits on elif
+        assert board.DIM.lower() not in {ink for ink, _ in colors(app, "Mine 2")}          # #302 waits on greta
+
+
+@drive
+async def test_on_a_narrow_board_names_drop_out_the_viewers_agents_stay_and_the_focus_keeps_to_what_shows(isolated):
+    a_crowded_board()
+    app = main.Frolic()
+    async with app.run_test(size=(76, 46)) as pilot:
+        await settle(app, pilot)
+        app.reported = CROWD
+        app.draw()
+        await pilot.pause(0.3)
+        rows = strip_rows(app)
+        assert sum(row.split("│")[0].count("agent-frolic") for row in rows[1:]) == 11 and "folded" not in "\n".join(rows)
+        names = [part.strip() for part in (row.split("│")[2] for row in rows)]
+        assert names == ["elif", "farid", "greta", "hugo", "3 more"]
+        assert app.board.on_strip == {"djp3", "mira", "elif", "farid", "greta", "hugo"}
+        stops = await steps_of(app, pilot)
+        assert [f.human for f in stops if f.kind == "crew"] == ["djp3", "mira", "elif", "farid", "greta", "hugo"]
+        # In a wider window the focus goes to jonas. Narrowed again, jonas keeps a place for as long as it is on him.
+        await pilot.resize_terminal(150, 46)
+        await pilot.pause(0.3)
+        await pilot.press("shift+tab", "shift+tab")                                      # everyone → bob → jonas
+        await pilot.pause()
+        assert app.board.focus == board.Focus("crew", "jonas")
+        await pilot.resize_terminal(76, 46)
+        await pilot.pause(0.3)
+        names = [part.strip() for part in (row.split("│")[2] for row in strip_rows(app))]
+        assert names == ["elif", "farid", "greta", "jonas", "3 more"] and app.board.focus == board.Focus("crew", "jonas")
+        # With no room for any name, the focus on one is let go, and the edge says there is more.
+        await pilot.resize_terminal(62, 46)
+        await pilot.pause(0.3)
+        rows = strip_rows(app)
+        assert app.board.focus == board.Focus() and app.board.on_strip == {"djp3", "mira"}
+        assert rows[0].rstrip().endswith("…") and "jonas" not in "\n".join(rows)
+        assert sum(row.split("│")[0].count("agent-frolic") for row in rows[1:]) == 11     # and still not folded

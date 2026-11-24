@@ -141,8 +141,17 @@ From top to bottom:
 - **The top line**: every repository in your list, the ones on screen underlined, each with
   `●n` (what you can get moving there) and `○n` (other people and teams something there waits
   on).
-- **The cards**: you, then the teams you are on, then everyone else something waits on, the
-  longest wait first. A yellow dot on a card means something on it is yours to act on.
+- **The cards**: you first, then everyone else who has agents, each with their agents beneath
+  their name. After them come the names of those who have no agents, one under another: the
+  teams you are on that something waits on, then whoever holds up a pull request you wrote or
+  have an agent on, the longest wait first. A yellow dot means something there is yours to act
+  on.
+  - Someone with no agents whose wait is not yours to chase has no place there. That is the
+    author whose own pull request waits on them, and the reviewer of somebody else's. They are
+    still in the list, in what needs effort, and in the `○n` counts.
+  - The names never take room from your agents. They stand as tall as the cards already are,
+    five to a column at the most. When the window is too narrow for them all, the last ones
+    give way and a line says how many (`3 more`).
 - **The list**, in two columns. On the left, who: owner, state, and who it waits on. On the
   right, the tree: repository, base branch, commit, then the pull requests in stack order, each
   with its reviews, checks, progress and age. Each repository's line ends in its own timer:
@@ -167,7 +176,7 @@ Control and the window switcher show how many the board is keeping an eye on.
 | c | copy the name that puts an agent on it (see [agents](#made-to-work-with-agent-farm-and-agent-grange)) |
 | page up / page down, home / end | scroll the list (the wheel does too) |
 | n | jump to the next thing that needs effort |
-| tab / shift+tab | step the focus through the cards; what is not theirs dims |
+| tab / shift+tab | step the focus through the cards and the names beside them; what is not theirs dims |
 | esc | back to everyone |
 | m | the repository menu (space shows or hides one) |
 | u | read GitHub now |
@@ -207,9 +216,10 @@ The **review** column shows each reviewer's trail, oldest first, then their name
 
 Copilot sets to work the moment it is asked, so while its review is awaited its mark turns, as
 an agent's does while it works: in this column, before its name where the pull request waits
-on it, on its card at the top, and in the drawer, which says "reviewing". Where the pull
-request waits on it and on its card the wheel is green and a green light runs through its
-name, as for an agent at work. GitHub says only that Copilot was asked, not how far along it
+on it, by its name among the cards at the top, and in the drawer, which says "reviewing". Where
+the pull request waits on it and among the cards the wheel is green and a green light runs
+through its name, as for an agent at work. (It is named among the cards while it reviews a
+pull request you wrote or have an agent on.) GitHub says only that Copilot was asked, not how far along it
 is: the wheel turns until its review arrives.
 
 The **ci** column is `✓` when the checks pass, `✗` when they fail, `…` while they run, `·`
@@ -233,8 +243,8 @@ one color: an age is violet, a repository's timer white.
 ### Teams
 
 A review asked of a team you are on is yours to give, so it is drawn as yours, under the
-team's name, and the team has a card of its own right after yours. It is on the team's card
-and on nobody else's: one request is one job. A team you are not on reads `team/slug` and is
+team's name, and the team is named among the cards, first of the names that have no agents. It
+is under the team's name there and under nobody else's: one request is one job. A team you are not on reads `team/slug` and is
 someone else's. So is a request to your own team on a pull request you wrote, since GitHub
 does not let you review your own.
 

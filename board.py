@@ -249,16 +249,31 @@ def thumb(rows: int, top: int, total: int) -> tuple[int, int]:
     return start, size
 
 
-# ---- the strip: one card per human, their agents beneath -------------------------------
+# ---- the strip: a card for each human with agents, and one the bare names share ---------
 
 @dataclass
 class Card:
-    human: str                                   # the login, lower case
-    head: Segments                               # the name line
-    cols: list[list[tuple[Segments, tuple | None]]]   # columns of (agent line, the agent's key)
+    """A card of the strip. A human's own: their name, and their agents beneath it in
+    columns. Or the one the humans with no agents share (`names_card`): no name of its
+    own, and their names in columns from the first row down."""
+    human: str                                   # the login, lower case; "" for the one the bare names share
+    head: Segments                               # the name line; none on the one the bare names share
+    cols: list[list[tuple[Segments, tuple | str | None]]]   # columns of lines, each with what it is:
+                                                 # under a human, an agent's key; among the bare names, a
+                                                 # human's login in lower case; None for a line that is a note
     widths: list[int]
     width: int
     x: int = 0
+
+    @property
+    def top(self) -> int:
+        """The row its columns start on: under its name, or the first when it has none."""
+        return 1 if self.head else 0
+
+    @property
+    def rows(self) -> int:
+        """The rows it takes."""
+        return self.top + max((len(col) for col in self.cols), default=0)
 
 
 def agent_line(agent: Agent, yours: bool) -> Segments:
@@ -308,6 +323,14 @@ def head_line(person: Person) -> Segments:
     return [("  ", MUTED), (person.name, INK if person.yours else INK2)]
 
 
+def underlined(line: Segments) -> Segments:
+    """A name line with its name underlined, for the one in focus. The name is all that
+    follows the mark, told by where it stands in the line, not by what it is made of. A
+    name the light runs through keeps its light: a program at work is at work in focus too."""
+    under = f"bold underline {INK}"
+    return line[:1] + [(text, Lit(under, style.shine) if isinstance(style, Lit) else under) for text, style in line[1:]]
+
+
 def turned(line: Segments, spin: str) -> Segments:
     """A line with its wheel where it stands now: it was laid out with it at rest. The
     wheel is the line's mark, which is its first piece and nothing after it. What follows is
@@ -337,28 +360,100 @@ def make_card(person: Person, max_cols: int) -> Card:
                 max(seg_len(head), sum(widths) + 2 * max(0, len(cols) - 1)))
 
 
-def lay_cards(people: list[Person], room: int) -> list[Card]:
-    """Lay the cards out so the strip fits, folding your card to fewer columns when it does
-    not."""
+def names_card(people: list[Person], room: int, rows: int, keep: str = "") -> Card | None:
+    """The humans who have no agents, on the one card they share: their names in columns,
+    in the order given. None when `room` has no place for any of it.
+
+    A name alone used to be a card of its own, as wide as the name and as tall as the
+    strip, with nothing under it. Many of them left no room for the agents of the ones
+    who have some. One under another, they take the rows the strip has anyway.
+
+    The columns are as tall as the other cards make the strip (`rows`), and taller, up to
+    STRIP, when that is what it takes for every name to fit: the strip is not made taller
+    for names that fit as it is. When they do not all fit at STRIP to a column, the ones
+    that fit are shown, from the first, and the last line says how many are not ("9
+    more"). `keep` is the login of one to show whatever happens, the one in focus: it
+    takes the last place when it would have none."""
+    lines: list[tuple[Segments, str | None]] = [(head_line(person), person.login.lower()) for person in people]
+    # Each name is measured once, here, however many ways of laying them out are tried: the
+    # strip is drawn eight times a second while a wheel turns. Every way tried is worked out
+    # from these widths, and one card is made, for the way that fits.
+    sizes = [seg_len(line) for line, _ in lines]
+
+    def columns(wide: list[int], height: int) -> list[int]:
+        """How wide each column is, of lines this wide, `height` of them to a column."""
+        return [max(wide[at:at + height]) for at in range(0, len(wide), height)]
+
+    def card(entries: list[tuple[Segments, str | None]], wide: list[int], height: int) -> Card:
+        widths = columns(wide, height)
+        return Card("", [], [entries[at:at + height] for at in range(0, len(entries), height)], widths,
+                    sum(widths) + 2 * (len(widths) - 1))
+
+    for height in range(max(1, min(rows, STRIP)), STRIP + 1):
+        widths = columns(sizes, height)
+        if sum(widths) + 2 * (len(widths) - 1) <= room:
+            return card(lines, sizes, height)
+    # They do not all fit: the longest run of them that does, from the first, and a line for
+    # the rest. A run's columns of names are as wide as they are in any other run that has
+    # them whole (`whole`, added up in `before`). Only its last one or two differ, where the
+    # line for the rest stands, and the one to keep: those alone are worked out for each run.
+    whole = columns(sizes, STRIP)
+    before = [0]
+    for wide in whole:
+        before.append(before[-1] + wide)
+    kept = next((at for at, (_, who) in enumerate(lines) if who == keep), None)
+    for count in range(len(lines) - 1, -1, -1):
+        note: tuple[Segments, str | None] = ([("  ", MUTED), (f"{len(lines) - count} more", MUTED)], None)
+        last = kept is not None and count > 0 and kept >= count      # the one to keep has no place: it takes the last
+        full = (count - 1) // STRIP if count else 0                  # the columns no note or kept name is in
+        tail = sizes[full * STRIP:count] + [seg_len(note[0])]
+        if last:
+            tail[-2] = sizes[kept]
+        ends = columns(tail, STRIP)
+        if before[full] + sum(ends) + 2 * (full + len(ends) - 1) <= room:
+            shown, wide = lines[:count], sizes[:count]
+            if last:
+                shown[-1], wide[-1] = lines[kept], sizes[kept]
+            return card(shown + [note], wide + [tail[-1]], STRIP)
+    return None
+
+
+def lay_cards(people: list[Person], room: int, keep: str = "") -> tuple[list[Card], bool]:
+    """Lay the cards out so the strip fits: yours, then the others who have agents, then
+    the one the bare names share (`names_card`). With them, whether some of the bare names
+    have no place at all, and no line to say so: the caller marks the edge.
+
+    Yours folds to fewer columns when the cards of those with agents do not fit beside
+    it. The bare names take the room that is left, and never any of yours: they are the
+    first to go. `keep` is the login of the one in focus, shown among them while any is."""
+    solo = [person for person in people if not person.bare]
+    bare = [person for person in people if person.bare]
+
     def need(person: Person) -> int:
         return max(1, -(-len(person.agents) // PER_COL))
 
     def build(yours: int) -> list[Card]:
-        return [make_card(p, min(need(p), yours) if p.viewer else 1) for p in people]
+        return [make_card(p, min(need(p), yours) if p.viewer else 1) for p in solo]
 
     def span(cards: list[Card]) -> int:
         return sum(card.width for card in cards) + 3 * max(0, len(cards) - 1)
 
-    most = max([need(p) for p in people if p.viewer] or [1])
+    most = max([need(p) for p in solo if p.viewer] or [1])
     tries = list(range(most, 0, -1))
     cards = next((made for made in map(build, tries) if span(made) <= room), None)
     if cards is None:                            # nothing fits: the narrowest, folding as little as it can
         cards = build(min(tries, key=lambda n: (span(build(n)), -n)))
+    names = None
+    if bare:
+        left = room - span(cards) - (3 if cards else 0)
+        names = names_card(bare, left, max((card.rows for card in cards), default=1), keep)
+        if names is not None:
+            cards.append(names)
     x = 0
     for card in cards:
         card.x = x
         x += card.width + 3
-    return cards
+    return cards, bool(bare) and names is None
 
 
 @dataclass
@@ -518,6 +613,8 @@ class Board(Screen):
         self.strip_rows = 1                       # rows the strip takes now: the names, and the agents beneath
         self.card_sig: dict[str, str] = {}        # what each card's name line said at the last look
         self.card_flash: dict[str, float] = {}    # a card whose name line just changed
+        self.on_strip: set[str] | None = None     # the humans the strip has a place for, once it is laid
+                                                  # out: the focus key steps through no others
         self.effort_seen: set[Key] | None = None  # what needed effort at the last look
         self.entered: dict[Key, float] = {}       # what just joined the needs-effort list
 
@@ -726,50 +823,60 @@ class Board(Screen):
         return out
 
     def strip(self) -> Text:
-        """Humans across the top, each with the agents they operate beneath them. What is in
+        """Humans across the top: each who has agents with them beneath, and then the ones
+        who have none, their names one under another on the card they share. What is in
         focus has the raised background, and that is the only place the focus is shown:
         every card when everyone is in focus; one human's whole card for that human with
-        their agents; only the name for the human alone; only its own line for one agent."""
+        their agents; only the name for the human alone, and for one who has no agents;
+        only its own line for one agent."""
         strip = self.query_one("#strip", Static)
         width = max(40, strip.size.width or self.size.width - 2)
         people = humans(self.pic)
-        cards = lay_cards(people, width - 2) if people else []
-        rows = 1 + max((len(col) for card in cards for col in card.cols), default=0)
-        if rows != self.strip_rows:                            # the strip is only as tall as the agents need
+        keep = self.focus.human if self.focus.kind != "all" else ""
+        cards, unseen = lay_cards(people, width - 2, keep) if people else ([], False)
+        self.on_strip = ({card.human for card in cards if card.human}
+                         | {who for card in cards if not card.human for col in card.cols for _, who in col if who})
+        if keep and keep not in self.on_strip:                 # no room is left for the one in focus: the
+            self.focus = Focus()                               # focus is shown nowhere else, so it is let go
+        rows = max((card.rows for card in cards), default=1)
+        if rows != self.strip_rows:                            # the strip is only as tall as it needs to be
             self.strip_rows = rows
             strip.styles.height = rows
             self.call_after_refresh(self.draw)
         canvas = Canvas(width, rows)
         if not people:
             self.card_lines = []
-            canvas.put(1, 0, "nobody yet: the people something waits on show here", MUTED)
+            canvas.put(1, 0, "nobody yet: who has agents shows here, and who your pull requests wait on", MUTED)
             return canvas.text()
         kind = self.focus.kind
         now = time.monotonic()
         turn = 0
         for card in cards:
             x = 1 + card.x
-            picked = kind in ("crew", "human") and self.focus.human == card.human
+            shared = not card.human                                # the card the bare names share
+            picked = not shared and kind in ("crew", "human") and self.focus.human == card.human
             whole = kind == "all" or (kind == "crew" and picked)   # the whole card is in focus
-            turn += 3
-            head = turned(card.head, self.spin(turn))              # a reviewing program's wheel turns too
-            if picked:                                             # the name: all that follows the mark,
-                # told by where it stands in the line, not by what it is made of. A name the light
-                # runs through keeps its light: a program at work is at work in focus too.
-                under = f"bold underline {INK}"
-                head = head[:1] + [(text, Lit(under, style.shine) if isinstance(style, Lit) else under)
-                                   for text, style in head[1:]]
-            write(canvas, x, 0, head, max(0, width - x), light=self.light(turn))
-            lines: list[tuple[int, int, int, bool, float]] = [
-                (0, x, card.width, picked, now - self.card_flash.get(card.human, -999.0))]
+            lines: list[tuple[int, int, int, bool, float]] = []
+            if not shared:
+                turn += 3
+                head = turned(card.head, self.spin(turn))          # a reviewing program's wheel turns too
+                write(canvas, x, 0, underlined(head) if picked else head, max(0, width - x), light=self.light(turn))
+                lines.append((0, x, card.width, picked, now - self.card_flash.get(card.human, -999.0)))
             cx = x
             for col, col_w in zip(card.cols, card.widths):
                 for i, (line, key) in enumerate(col):
-                    turn += 3                                      # each agent's wheel turns on its own
-                    write(canvas, cx, 1 + i, turned(line, self.spin(turn)), max(0, width - cx),
-                          light=self.light(turn))
-                    lines.append((1 + i, cx, col_w, kind == "agent" and key is not None
-                                  and self.focus.agent == key, 999.0))
+                    turn += 3                                      # each wheel turns on its own
+                    y, line = card.top + i, turned(line, self.spin(turn))
+                    if shared:                                     # a name: in focus as a card's name is
+                        named = key is not None and kind in ("crew", "human") and self.focus.human == key
+                        write(canvas, cx, y, underlined(line) if named else line, max(0, width - cx),
+                              light=self.light(turn))
+                        lines.append((y, cx, col_w, named,
+                                      now - self.card_flash.get(key, -999.0) if key is not None else 999.0))
+                    else:
+                        write(canvas, cx, y, line, max(0, width - cx), light=self.light(turn))
+                        lines.append((y, cx, col_w, kind == "agent" and key is not None
+                                      and self.focus.agent == key, 999.0))
                 cx += col_w + 2
             if whole:                                              # backgrounds go on after the words
                 for y in range(rows):
@@ -784,8 +891,8 @@ class Board(Screen):
         for x in self.card_lines:                              # a line between one human and the next
             for y in range(rows):
                 canvas.put(x, y, "│", DIVIDER)
-        if cards and 1 + cards[-1].x + cards[-1].width > width:
-            canvas.put(width - 1, 0, "…", MUTED)
+        if unseen or (cards and 1 + cards[-1].x + cards[-1].width > width):   # more than is shown, and
+            canvas.put(width - 1, 0, "…", MUTED)                              # nowhere else that says so
         return canvas.text()
 
     def card_rule(self, widget: str, joint: str, column_rule: int | None = None) -> Text:
@@ -1505,7 +1612,9 @@ class Board(Screen):
         """Step the focus: everyone, a human with all their agents, the human alone, each agent."""
         if self.menu_open:
             return
-        steps = focuses(self.pic)
+        # Only through who the strip has a place for: the focus is shown there and nowhere else.
+        steps = [step for step in focuses(self.pic)
+                 if step.kind == "all" or self.on_strip is None or step.human in self.on_strip]
         at = steps.index(self.focus) if self.focus in steps else 0
         self.focus = steps[(at + step) % len(steps)]
         self.draw()
