@@ -482,8 +482,8 @@ class Frolic(App):
         self.early = 0                            # how many are at work in a shown repository and on none,
         self.lost: tuple[Astray, ...] = ()        # and the ones whose names tried to say where and are nowhere
         self.tied_said: frozenset = frozenset()   # the ties among those that the log has been told of
-        self.agent_numbers: dict = {}             # the number of each human's agents on the board ("agent 07"),
-                                                  # so that one report's are worked out from the last's (picture.numbered)
+        self.agent_numbers: dict = {}             # the number each agent on the board has ("agent 02"), so
+                                                  # that it keeps it from one report to the next (picture.placed)
         self.grange_state = "asking" if ask_grange else "off"     # "asking" | "ok" | "down" | "stale" |
                                                   # "trouble", or "off" when it is not to be asked
         self.grange_wrong: GrangeError | None = None  # what is wrong, unless it is "asking" or "ok"

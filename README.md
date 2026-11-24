@@ -350,23 +350,6 @@ open.
 - Until a repository has been read at all, nothing is known of its pull requests, and an agent
   named for one of them is not drawn yet.
 
-**Each agent has a number**, shown beside it: `agent 07`. Each person's agents are numbered
-together across the whole board, whichever pull request or repository each is on. Yours run
-from 01 to however many you have on the board, with none left out, and so do a teammate's.
-"you · answer agent 07" means one session of yours.
-
-- A new agent takes the next number.
-- When an agent leaves the board, the one with the highest number takes the number it left, so
-  no number is ever missing. Every other agent keeps its own.
-- An agent keeps its number when it moves: onto its pull request when that opens, and back
-  under its repository when that has merged.
-- A session you rename keeps its number, when the board draws it under both names: the new name
-  takes the number the old one left.
-- An agent that is not drawn has no number. One whose repository you hide gives its number up,
-  and takes the next one when it is back.
-- The numbers are this board's own. A teammate's board may number the same agents differently,
-  and the numbers start again when agent-frolic does.
-
 An agent whose name says neither a pull request nor a repository is not drawn, and nothing is
 wrong with it. One whose name has `-pr-<number>` in it and is still drawn nowhere is listed in
 part 4 of the setup, with why: the repository is not on your list, or the name leaves out

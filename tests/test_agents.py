@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The team's agents, from what the agent-grange reports to where they are drawn: which
 pull request an agent is on, what it is doing there, and how the app keeps asking."""
-import random
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -294,7 +293,7 @@ def test_an_agent_with_none_yet_is_kept_under_its_repository_and_the_number_noug
         ("djp3", "02", 0, "author", "at its prompt", "reflow fix", True)]
     assert [(a.serial, a.state, a.note) for a in pic.early("o/web")] == [
         ("01", "unknown", ""), ("02", "at its prompt", "deploy")]
-    assert [(a.serial, a.early) for a in pic.agents[("o/app", 98)]] == [("03", False)]    # numbered on with those
+    assert [(a.serial, a.early) for a in pic.agents[("o/app", 98)]] == [("01", False)]    # numbered on its own there
     assert pic.on(pic.find(("o/app", 98))) == pic.agents[("o/app", 98)]                   # and no pull request's agents
 
 
@@ -305,7 +304,7 @@ def test_an_idle_agent_with_none_yet_is_at_its_prompt_since_it_waits_on_nobody_e
     assert [a.state for a in picture(Reported("bob", "o-app", word, stale)).early("o/app")] == [state]
 
 
-def test_an_agent_with_none_yet_is_numbered_as_the_others_are():
+def test_an_agent_with_none_yet_keeps_its_number_as_the_others_do():
     numbers = {}
 
     def numbered_in(*names):
@@ -313,9 +312,8 @@ def test_an_agent_with_none_yet_is_numbered_as_the_others_are():
                       reported=tuple(Reported("djp3", f"o-app {name}", "busy") for name in names))
         return {agent.note: agent.serial for agent in pic.early("o/app")}
 
-    assert numbered_in("a", "b", "c") == {"a": "01", "b": "02", "c": "03"}
-    assert numbered_in("b", "c") == {"b": "02", "c": "01"}                        # a has ended: the last takes its number
-    assert numbers == {"djp3": {"o-app b": 2, "o-app c": 1}}
+    assert numbered_in("a", "b") == {"a": "01", "b": "02"}
+    assert numbered_in("b") == {"b": "02"} and list(numbers) == [(("o/app", 0), "djp3")]  # a has ended: b keeps its own
     assert numbered_in() == {} and numbers == {}
 
 
@@ -459,32 +457,11 @@ def test_one_named_ahead_of_its_pull_request_moves_onto_it_when_a_reading_has_it
         return {key: [(a.number, a.named, a.role, a.note) for a in agents] for key, agents in pic.agents.items()}
 
     assert drawn(web_nodes()) == {("o/web", 0): [(0, 31, "author", "hotfix")]}
-    assert numbers == {"djp3": {"o-web-pr-31 hotfix": 1}}
+    assert list(numbers) == [(("o/web", 0), "djp3")]
     opened = web_nodes() + [node(31, "hotfix", author={"login": "djp3"}, baseRefOid=TIP)]
     assert drawn(opened) == {("o/web", 31): [(31, 0, "author", "hotfix")]}
-    assert numbers == {"djp3": {"o-web-pr-31 hotfix": 1}}                     # its number goes with it
+    assert list(numbers) == [(("o/web", 31), "djp3")]                         # its number under the repository is free
     assert drawn(web_nodes()) == {("o/web", 0): [(0, 31, "author", "hotfix")]}            # merged: it is not gone
-    assert numbers == {"djp3": {"o-web-pr-31 hotfix": 1}}
-
-
-def test_an_agent_keeps_its_number_onto_its_pull_request_and_back_under_its_repository():
-    """Its number was its place on one pull request, or among those on none in one
-    repository: named ahead of its pull request, it was numbered again when that opened,
-    and again when it merged. Here it stands above the one on #98 until its own opens,
-    and below it then: its number is not where it stands."""
-    numbers = {}
-
-    def serials(nodes, *names):
-        pic = Picture(["o/web"], {"o/web": read("o/web", nodes)}, "djp3", numbers=numbers,
-                      reported=tuple(Reported("djp3", name, "busy") for name in names))
-        return {a.ident: (a.number, a.serial) for agents in pic.agents.values() for a in agents}
-
-    opened = web_nodes() + [node(120, "hotfix", author={"login": "djp3"}, baseRefOid=TIP)]
-    assert serials(web_nodes(), "o-web-pr-120", "o-web-pr-98") == {"o-web-pr-120": (0, "01"), "o-web-pr-98": (98, "02")}
-    assert serials(opened, "o-web-pr-120", "o-web-pr-98") == {
-        "o-web-pr-120": (120, "01"), "o-web-pr-98": (98, "02")}                           # #120 opens: on it, agent 01 still
-    assert serials(web_nodes(), "o-web-pr-120", "o-web-pr-98") == {
-        "o-web-pr-120": (0, "01"), "o-web-pr-98": (98, "02")}                             # and merges
 
 
 def test_a_pull_request_is_newly_opened_only_when_it_was_created_since_the_reading_before():
@@ -571,172 +548,28 @@ def numbered(numbers, *names):
     return {agent.note: agent.serial for agent in pic.agents.get(("o/app", 98), [])}
 
 
-def test_a_humans_numbers_run_from_01_with_none_left_out_whoever_comes_and_goes():
-    """An agent kept its number for as long as its session was reported, and one that ended
-    left a number out: an agent 02 and an agent 03 on the board, and no agent 01."""
+def test_an_agent_keeps_its_number_for_as_long_as_its_session_is_reported():
+    """Numbered by place alone, agent 02 became agent 01 the moment the one before it ended."""
     numbers = {}
     assert numbered(numbers, "a", "b", "c") == {"a": "01", "b": "02", "c": "03"}
-    assert numbered(numbers, "b", "c") == {"b": "02", "c": "01"}                  # a has ended: the last takes its number
-    assert numbered(numbers, "c", "b") == {"b": "02", "c": "01"}                  # in whatever order they come
-    assert numbered(numbers, "aa", "b", "c") == {"aa": "03", "b": "02", "c": "01"}    # a new one takes the next
-    assert numbered(numbers, "aa", "c", "d") == {"aa": "03", "c": "01", "d": "02"}    # one comes as one goes: its number
-    assert numbered(numbers, "c") == {"c": "01"}
-    assert numbered(numbers, "a", "c") == {"a": "02", "c": "01"}                  # a is back: as a new one is
+    assert numbered(numbers, "b", "c") == {"b": "02", "c": "03"}                  # a has ended: nothing moves
+    assert numbered(numbers, "c", "b") == {"b": "02", "c": "03"}                  # in whatever order they come
+    assert numbered(numbers, "aa", "b", "c") == {"aa": "01", "b": "02", "c": "03"}    # a new one takes what is free
+    assert numbered(numbers, "aa", "c", "d") == {"aa": "01", "c": "03", "d": "02"}
+    assert numbered(numbers, "c") == {"c": "03"}
+    assert numbered(numbers, "a", "c") == {"a": "01", "c": "03"}                  # a is back: as a new one is
 
 
 def test_numbers_are_forgotten_with_the_agents_that_had_them():
     numbers = {}
     numbered(numbers, "a", "b")
-    assert numbers == {"djp3": {"o-app-pr-98 a": 1, "o-app-pr-98 b": 2}}
-    assert numbered(numbers, "b") == {"b": "01"} and numbers == {"djp3": {"o-app-pr-98 b": 1}}
+    assert list(numbers) == [(("o/app", 98), "djp3")]
+    assert numbered(numbers, "b") == {"b": "02"} and numbers[(("o/app", 98), "djp3")] == {"o-app-pr-98 b": 2}
     Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", numbers=numbers,
-            reported=(Reported("mira", "o-app-pr-7", "busy"),))              # djp3 has none on the board any more
-    assert numbers == {"mira": {"o-app-pr-7": 1}}
-    assert numbered(numbers, "b") == {"b": "01"} and list(numbers) == ["djp3"]
+            reported=(Reported("mira", "o-app-pr-7", "busy"),))              # djp3 has none on #98 any more
+    assert list(numbers) == [(("o/app", 7), "mira")]
+    assert numbered(numbers, "b") == {"b": "01"}                                  # so b is numbered afresh
 
-
-def across(numbers, *reported, names=("o/app", "o/web"), viewer="djp3"):
-    """The picture of these reports on the board of two repositories, built with `numbers`,
-    and {the agent's name as its session has it: its number} for everyone's agents on it."""
-    pulls = {"o/app": read("o/app", app_nodes()), "o/web": read("o/web", web_nodes())}
-    pic = Picture(list(names), pulls, viewer, numbers=numbers, listed=("o/app", "o/web"),
-                  reported=tuple(Reported(*one) if isinstance(one, tuple) else Reported("djp3", one, "busy")
-                                 for one in reported))
-    return pic, {agent.ident: agent.serial for agents in pic.agents.values() for agent in agents}
-
-
-def test_a_humans_agents_are_numbered_across_the_whole_board():
-    """Numbered on each pull request alone, every agent that had one to itself was "agent
-    01": eleven sessions, eleven of them. "you · answer agent 01" said none of them."""
-    mine = ["o-web-pr-98 deploy", "o-app-pr-102", "o-app-pr-7 review", "o-app reflow", "o-app-pr-98 a",
-            "o-web", "o-app-pr-99", "o-app-pr-98 b", "o-app-pr-40", "o-web spike", "o-app tidy"]
-    pic, serials = across(None, *mine, ("bob", "o-app-pr-98 review", "busy"), ("bob", "o-web-pr-98", "idle"),
-                          ("mira", "o-app-pr-7", "busy"))
-    yours = [agent for agents in pic.agents.values() for agent in agents if agent.operator == "djp3"]
-    assert sorted(agent.serial for agent in yours) == [f"{n:02d}" for n in range(1, 12)]     # agent 01 to agent 11
-    # Down the board: a repository's with no pull request yet, then by its pull requests' numbers.
-    assert [name for name, _ in sorted(serials.items(), key=lambda one: one[1]) if name in mine] == [
-        "o-app reflow", "o-app tidy", "o-app-pr-7 review", "o-app-pr-40", "o-app-pr-98 a", "o-app-pr-98 b",
-        "o-app-pr-99", "o-app-pr-102", "o-web", "o-web spike", "o-web-pr-98 deploy"]
-    # Everyone's are numbered on their own: two people may each have an agent 01, never one person.
-    assert (serials["o-app-pr-98 review"], serials["o-web-pr-98"], serials["o-app-pr-7"]) == ("01", "02", "01")
-    # On a pull request the author's come first, in their numbers, and then the others'.
-    assert [(a.operator, a.serial) for a in pic.agents[("o/app", 98)]] == [("djp3", "05"), ("djp3", "06"), ("bob", "01")]
-    assert [(a.operator, a.serial) for a in pic.agents[("o/app", 7)]] == [("mira", "01"), ("djp3", "03")]
-    assert [a.serial for a in pic.early("o/app")] == ["01", "02"] and [a.serial for a in pic.early("o/web")] == ["09", "10"]
-
-
-def test_the_line_that_says_which_agent_to_answer_says_one_session():
-    """ "you · answer agent 01", on a board where the viewer had an agent 01 on every pull
-    request: the line named them all."""
-    pic, _ = across(None, ("djp3", "o-app-pr-98", "busy"), ("djp3", "o-app-pr-99", "busy"),
-                    ("djp3", "o-web hotfix", "idle"), ("djp3", "o-app tidy", "waiting"))
-    waiting = asking(pic)
-    assert [(agent.name, agent.note) for agent in waiting] == [("agent 01", "tidy"), ("agent 04", "hotfix")]
-    for agent in waiting:
-        assert [a.ident for agents in pic.agents.values() for a in agents if a.name == agent.name] == [agent.ident]
-
-
-def test_one_that_goes_costs_one_other_its_number_and_no_more():
-    numbers = {}
-    _, serials = across(numbers, "o-app-pr-98", "o-app-pr-99", "o-web-pr-98", "o-web late")
-    assert serials == {"o-app-pr-98": "01", "o-app-pr-99": "02", "o-web late": "03", "o-web-pr-98": "04"}
-    _, serials = across(numbers, "o-app-pr-99", "o-web-pr-98", "o-web late")      # the one on o/app #98 has ended
-    assert serials == {"o-web-pr-98": "01", "o-app-pr-99": "02", "o-web late": "03"}      # agent 04 is agent 01 now
-    _, serials = across(numbers, "o-app-pr-99", "o-web-pr-98", "o-web late", "o-app-pr-7", "o-app spike")
-    assert serials == {"o-web-pr-98": "01", "o-app-pr-99": "02", "o-web late": "03",
-                       "o-app spike": "04", "o-app-pr-7": "05"}                   # new ones take the next, down the board
-    _, serials = across(numbers, "o-web-pr-98", "o-app-pr-7", "o-app spike", ("bob", "o-app-pr-99", "busy"))
-    assert serials == {"o-web-pr-98": "01", "o-app spike": "02", "o-app-pr-7": "03",
-                       "o-app-pr-99": "01"}                                       # bob's, with a name djp3's had
-    assert numbers == {"djp3": {"o-web-pr-98": 1, "o-app spike": 2, "o-app-pr-7": 3}, "bob": {"o-app-pr-99": 1}}
-
-
-def test_an_agent_that_is_not_on_the_board_has_no_number_so_none_is_left_out():
-    """A number was kept for a session that was reported and not drawn, its repository
-    hidden: the board showed an agent 03 and an agent 04, and no agent 01 or 02."""
-    numbers = {}
-    mine = ["o-app-pr-98", "o-web-pr-98", "o-app-pr-99"]
-    assert across(numbers, *mine)[1] == {"o-app-pr-98": "01", "o-app-pr-99": "02", "o-web-pr-98": "03"}
-    _, serials = across(numbers, *mine, "o-web late", names=("o/web",))           # o/app is hidden
-    assert serials == {"o-web late": "01", "o-web-pr-98": "02"} and set(numbers["djp3"]) == set(serials)
-    _, serials = across(numbers, *mine, "o-web late")                             # shown again: they take the next
-    assert serials == {"o-web late": "01", "o-web-pr-98": "02", "o-app-pr-98": "03", "o-app-pr-99": "04"}
-    # One that was never drawn takes none.
-    _, serials = across(numbers, *mine, "o-web late", "scratch", "x-y-pr-5")
-    assert sorted(serials.values()) == ["01", "02", "03", "04"] and set(numbers["djp3"]) == set(serials)
-    # A session that has ended is reported as dead for a while: its number is given up at once.
-    _, serials = across(numbers, ("djp3", "o-web late", "dead"), *mine)
-    assert serials == {"o-app-pr-99": "01", "o-web-pr-98": "02", "o-app-pr-98": "03"}
-
-
-def test_a_session_that_is_renamed_keeps_its_number():
-    """The grange reports names, and a session with a new name is a new one for all the
-    board can tell: one name goes and one comes, in one report. The one that comes takes
-    the number the other left."""
-    numbers = {}
-    assert across(numbers, "o-app-pr-98", "o-app spike", "o-web-pr-98")[1] == {
-        "o-app spike": "01", "o-app-pr-98": "02", "o-web-pr-98": "03"}
-    assert across(numbers, "o-app-pr-98", "o-app-pr-99 spike", "o-web-pr-98")[1] == {
-        "o-app-pr-99 spike": "01", "o-app-pr-98": "02", "o-web-pr-98": "03"}          # named for the pull request it opened
-    # Two renamed at once take the two numbers left, down the board.
-    assert across(numbers, "o-app-pr-98", "o-app-pr-7", "o-web")[1] == {
-        "o-app-pr-7": "01", "o-app-pr-98": "02", "o-web": "03"}
-    # Renamed to a name the board does not draw, it has no number: the last takes the one it
-    # left. Drawn again, it is a new one, and takes the next.
-    assert across(numbers, "o-app-pr-98", "lunch", "o-web")[1] == {"o-web": "01", "o-app-pr-98": "02"}
-    assert across(numbers, "o-app-pr-98", "o-app-pr-7 back", "o-web")[1] == {
-        "o-web": "01", "o-app-pr-98": "02", "o-app-pr-7 back": "03"}
-
-
-def test_two_sessions_with_one_name_have_two_numbers_among_the_rest():
-    numbers = {}
-    twice = ("djp3", "o-app-pr-99", "busy")
-    pic, serials = across(numbers, "o-app-pr-98", twice, twice, "o-web-pr-98")
-    assert serials == {"o-app-pr-98": "01", "o-app-pr-99": "02", "o-app-pr-99\x002": "03", "o-web-pr-98": "04"}
-    assert len({agent.key for agents in pic.agents.values() for agent in agents}) == 4
-    _, serials = across(numbers, "o-app-pr-98", twice, "o-web-pr-98")                 # one of the two has ended
-    assert serials == {"o-app-pr-98": "01", "o-app-pr-99": "02", "o-web-pr-98": "03"}
-
-
-def test_a_hundred_agents_of_one_human_are_in_the_order_of_their_numbers():
-    """Sorted as words, agent 100 came before agent 11."""
-    pic, _ = across(None, *(f"o-app-pr-98 {n:03d}" for n in range(1, 121)))
-    assert [agent.serial for agent in pic.agents[("o/app", 98)]] == [f"{n:02d}" for n in range(1, 121)]
-    assert pic.agents[("o/app", 98)][99].name == "agent 100"
-
-
-def test_numbers_are_worked_out_from_what_they_were_and_who_is_on_the_board():
-    assert pictures.numbered(["a", "b"], {}) == {"a": 1, "b": 2}
-    assert pictures.numbered(["b"], {"a": 1, "b": 2}) == {"b": 1}                              # a has gone: b takes 1
-    assert pictures.numbered(["a", "c"], {"a": 1, "b": 2, "c": 3}) == {"a": 1, "c": 2}         # past the count: it moves down
-    assert pictures.numbered(["a", "b", "c"], {"a": 1, "b": 2}) == {"a": 1, "b": 2, "c": 3}    # a new one takes the next
-    assert pictures.numbered(["a", "c", "d"], {"a": 1, "b": 2, "c": 3}) == {"a": 1, "c": 3, "d": 2}   # d comes as b goes
-    assert pictures.numbered(["e", "d", "c"], {"a": 1, "b": 2, "c": 3, "d": 4, "f": 5}) == {"c": 3, "e": 1, "d": 2}
-    assert pictures.numbered([], {"a": 1}) == {}
-    # Whatever it is given, the answer is 1 to the count, each once.
-    assert pictures.numbered(["a", "b", "c"], {"a": 2, "b": 2, "c": 0}) == {"a": 2, "c": 1, "b": 3}
-
-
-def test_however_agents_come_and_go_the_numbers_are_01_to_the_count_and_few_change():
-    """Three hundred reports, each with some of these sessions, in any order, with o/app
-    shown or hidden. After every one: a human's numbers are 01 to however many agents
-    they have on the board, each once; and an agent that was there before, whose number
-    the count still reaches, has the number it had."""
-    names = ["o-app tidy", "o-app-pr-7", "o-app-pr-98 a", "o-app-pr-98 b", "o-app-pr-99", "o-app-pr-102",
-             "o-web", "o-web-pr-98", "o-web-pr-31 ahead", "scratch"]
-    rng = random.Random(24)
-    numbers, last, most = {}, {}, 0
-    for _ in range(300):
-        now = [name for name in names if rng.random() < 0.6]
-        rng.shuffle(now)
-        twice = [("djp3", "o-app-pr-99", "idle")] if "o-app-pr-99" in now and rng.random() < 0.3 else []
-        _, serials = across(numbers, *now, *twice, names=("o/app", "o/web") if rng.random() < 0.8 else ("o/web",))
-        count = len(serials)
-        assert sorted(serials.values()) == [f"{n:02d}" for n in range(1, count + 1)], (now, serials)
-        assert all(serials[ident] == had for ident, had in last.items() if ident in serials and int(had) <= count)
-        last, most = serials, max(most, count)
-    assert most == 10                                             # every one of them on the board at once, some time
 
 def test_when_nobody_is_reported_every_number_is_free_again():
     """The numbers were brought up to date only when there was someone to place: with
@@ -903,7 +736,7 @@ def test_an_idle_agent_that_waits_on_a_command_it_started_is_drawn_so():
                   Reported("djp3", "o-app-pr-99", "shell"), Reported("mira", "o-app-pr-7", "shell", True))
     assert said(pic, "o/app", 98) == ["  you |  |   bob", f"  └ {SPIN[0]} agent 01 | command |",
                                       "  └ · agent 02 | waiting |"]
-    assert said(pic, "o/app", 99) == ["● you |  |", f"  └ {SPIN[0]} agent 03 | command |"]   # the move is theirs still
+    assert said(pic, "o/app", 99) == ["● you |  |", f"  └ {SPIN[0]} agent 01 | command |"]   # the move is theirs still
     on, idle = pic.agents[("o/app", 98)]
     assert on.command and not idle.command and look(on) is ON_COMMAND and said_of(on) == "waiting on a command"
     assert LOOKS["working"].order < ON_COMMAND.order < LOOKS["waiting"].order
@@ -1085,52 +918,23 @@ async def test_a_new_answer_replaces_the_last_whole(isolated):
 
 
 @drive
-async def test_on_the_board_when_an_agent_ends_the_last_takes_its_number_and_the_rest_keep_theirs(isolated):
+async def test_on_the_board_an_agent_keeps_its_number_when_the_one_before_it_ends(isolated):
     a_board()
     app = main.Frolic()
-    mine = [("djp3", f"o-app-pr-98 {letter}", "busy") for letter in "abc"]
+    mine = [("djp3", "o-app-pr-98 a", "busy"), ("djp3", "o-app-pr-98 b", "busy")]
     async with app.run_test(size=(150, 40)) as pilot:
         await settle(app, pilot)
         FakeGrange.answers.put(team(*mine, cursor=4))
-        await until(pilot, lambda: len(app.reported) == 3)
-        await pilot.pause(0.3)
-        assert [(a.note, a.serial) for a in app.board.pic.agents[("o/app", 98)]] == [("a", "01"), ("b", "02"), ("c", "03")]
-        FakeGrange.answers.put(team(*mine[1:], cursor=5))        # a has ended
         await until(pilot, lambda: len(app.reported) == 2)
         await pilot.pause(0.3)
-        assert [(a.note, a.serial) for a in app.board.pic.agents[("o/app", 98)]] == [("c", "01"), ("b", "02")]
-        shown = screen(app)
-        assert "agent 01" in shown and "agent 02" in shown and "agent 03" not in shown    # none is left out
+        assert [(a.note, a.serial) for a in app.board.pic.agents[("o/app", 98)]] == [("a", "01"), ("b", "02")]
+        FakeGrange.answers.put(team(mine[1], cursor=5))          # a has ended
+        await until(pilot, lambda: len(app.reported) == 1)
+        await pilot.pause(0.3)
+        assert [(a.note, a.serial) for a in app.board.pic.agents[("o/app", 98)]] == [("b", "02")]
+        assert "agent 02" in screen(app) and "agent 01" not in screen(app)
         app.forget_agents()                                      # the grange gone for good: nothing is kept
         assert app.agent_numbers == {}
-
-
-@drive
-async def test_on_the_board_each_of_your_agents_has_a_number_of_its_own(isolated):
-    """One agent to a pull request, and each was drawn as "agent 01": the line that asks
-    you to answer agent 01 could mean any of them."""
-    a_board()
-    app = main.Frolic()
-    mine = [("djp3", "o-app-pr-98 fix", "busy"), ("djp3", "o-app-pr-99 limits", "busy"),
-            ("djp3", "o-web-pr-98 deploy", "busy"), ("djp3", "o-web hotfix", "idle")]
-    async with app.run_test(size=(150, 40)) as pilot:
-        await settle(app, pilot)
-        FakeGrange.answers.put(team(*mine, ("bob", "o-app-pr-98 review", "busy"), cursor=4))
-        await until(pilot, lambda: len(app.reported) == 5)
-        await pilot.pause(0.3)
-        named = {a.ident: a.name for agents in app.board.pic.agents.values() for a in agents if a.operator == "djp3"}
-        assert named == {"o-app-pr-98 fix": "agent 01", "o-app-pr-99 limits": "agent 02",
-                         "o-web hotfix": "agent 03", "o-web-pr-98 deploy": "agent 04"}
-        lines = screen(app).splitlines()
-        # Each is drawn once, where it is; agent 03 once more, where it asks to be answered.
-        assert {n: sum(f"agent {n}" in line for line in lines) for n in ("02", "03", "04")} == {"02": 1, "03": 2, "04": 1}
-        assert any(line.count("agent 01") == 2 for line in lines)    # bob's on #98 is his agent 01, beside yours
-        assert "you · answer agent 03 · hotfix" in screen(app) and any("agent 03  hotfix" in line for line in lines)
-        FakeGrange.answers.put(team(*mine[1:], cursor=5))        # the one on #98 has ended: the last takes its number
-        await until(pilot, lambda: len(app.reported) == 3)
-        await pilot.pause(0.3)
-        assert app.agent_numbers == {"djp3": {"o-web-pr-98 deploy": 1, "o-app-pr-99 limits": 2, "o-web hotfix": 3}}
-        assert "you · answer agent 03 · hotfix" in screen(app) and "agent 04" not in screen(app)
 
 
 def a_board_of_two_alike():
