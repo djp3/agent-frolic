@@ -24,8 +24,9 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     repository alone, once that repository has been read (`early`, `Agent.named`). It
     moves onto the pull request when a reading has it.
   • AN AGENT'S NUMBER, "agent 07", counts among all the agents its human has on the board,
-    whichever pull request or repository each is on: it says one session of theirs. An
-    agent keeps it for as long as its session is reported (`numbered`).
+    whichever pull request or repository each is on: it says one session of theirs. A
+    human's numbers run from 01 to however many agents they have there, with none left
+    out (`numbered`).
   • WHAT AN AGENT IS DOING is the farm's word, turned into one of four (`Agent.state`). An
     idle one is "at its prompt" when its pull request waits on the human who runs it, and
     "waiting" when it waits on someone else: the farm cannot tell those apart, and only
@@ -66,7 +67,6 @@ request. Nothing here touches the screen or the network, so all of it is tested 
 """
 from __future__ import annotations
 
-import itertools
 import math
 import re
 from dataclasses import dataclass, field
@@ -468,8 +468,8 @@ def astray(reported: Iterable[Report], names: Iterable[str], pulls: Mapping[str,
     return out
 
 
-Numbers = dict[str, dict[str, int]]    # a human, in lower case -> the number each of their agents
-                                       # holds, by `Agent.ident` (`numbered`)
+Numbers = dict[str, dict[str, int]]    # a human, in lower case -> the number of each of their agents
+                                       # on the board, by `Agent.ident` (`numbered`)
 
 
 def _ident(name: str, nth: int) -> str:
@@ -480,29 +480,34 @@ def _ident(name: str, nth: int) -> str:
     return name if nth == 1 else f"{name}\x00{nth}"
 
 
-def numbered(idents: Iterable[str], before: Mapping[str, int], reported: Iterable[str]) -> dict[str, int]:
-    """The numbers one human's agents hold, by what each is known by (`Agent.ident`).
+def numbered(idents: Iterable[str], before: Mapping[str, int]) -> dict[str, int]:
+    """The numbers of one human's agents on the board, by what each is known by
+    (`Agent.ident`): 1 to however many there are, each once and none left out. That comes
+    first. An agent's number is its own only as far as that allows.
 
     `idents` are their agents on the board, in the order to number new ones in. `before`
-    is what this answered for them last time. `reported` is every session of theirs that
-    is still reported, on the board or not.
+    is what this answered for them last time.
 
-    An agent keeps its number for as long as its session is reported. That holds when it
-    moves, onto its pull request or back under its repository, and while it is off the
-    board, its repository hidden: the number is its own when it is back. A number is free
-    again when its session is reported no more.
+    An agent keeps its number while that is no higher than the count of them. A new one
+    takes the lowest number that is free: the next one up, or the one an agent has just
+    left. A session that was renamed cannot be told from one that ended as another began;
+    this way it keeps its number through the new name. When agents have gone and left
+    numbers free below, the ones whose numbers are now too high take those, so one that
+    goes costs one other its number and no more.
 
-    A new agent takes a number freed in this very report, the lowest first, and the lowest
-    that is free when there is none. A session that was renamed cannot be told from one
-    that ended as another began; this way it keeps its number through the new name."""
-    still = {*reported, *idents}
-    held = {ident: n for ident, n in before.items() if ident in still}
-    freed = sorted(n for ident, n in before.items() if ident not in still)
-    used = set(before.values())
-    free = itertools.chain(freed, (n for n in itertools.count(1) if n not in used))
+    An agent that is not on the board has no number, whatever is reported of it: a number
+    kept for it would be one the board does not show."""
+    idents = list(idents)
+    held: dict[str, int] = {}
     for ident in idents:
-        if ident not in held:
-            held[ident] = next(free)
+        n = before.get(ident, 0)
+        if 1 <= n <= len(idents) and n not in held.values():
+            held[ident] = n
+    free = (n for n in range(1, len(idents) + 1) if n not in set(held.values()))
+    new = [ident for ident in idents if ident not in before]
+    high = sorted((ident for ident in idents if ident in before and ident not in held), key=lambda ident: before[ident])
+    for ident in [*new, *high]:
+        held[ident] = next(free)
     return held
 
 
@@ -519,18 +524,18 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
 
     Each is numbered among all the agents the same human has on the board, whichever pull
     request or repository each is on: "agent 07" is one session of theirs, and no other.
-    What an agent is known by from one report to the next is its name (`Agent.ident`), so
-    a focus on it stays on it. Its number is for the eye. Given `numbers`, the numbers
-    held before, an agent keeps its own for as long as its session is reported
-    (`numbered`). `numbers` is brought up to date here, for the next report; it is the
+    A human's numbers run from 01 to however many agents they have on the board, with
+    none left out (`numbered`). What an agent is known by from one report to the next is
+    its name (`Agent.ident`), so a focus on it stays on it. Its number is for the eye.
+    Given `numbers`, the numbers from before, an agent keeps its own as far as leaving
+    none out allows. `numbers` is brought up to date here, for the next report; it is the
     caller's to keep. (With nobody reported this is not asked at all, and the picture
-    frees every number itself.) Without it every agent is new each time. New ones are
+    forgets every number itself.) Without it every agent is new each time. New ones are
     numbered down the board: by repository as shown, in each the ones on no pull request
     and then by the pull request's number, and by name on one pull request.
 
     Two sessions with one name cannot be told apart: they are numbered by what they are
     doing, so nothing moves on screen when they trade."""
-    reported = list(reported)
     seats: list[tuple[Key, Report, PullRequest | None, str, str, int]] = []
     for one, pull in located_in(reported, picture.names, picture.pulls):
         seats.append((key_of(pull), one, pull, pull.repo, words(one.name, pull), 0))
@@ -539,20 +544,10 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
     crews: dict[str, list[int]] = {}                         # each human's seats, by where each is in `seats`
     for at, seat in enumerate(seats):
         crews.setdefault(seat[1].owner.lower(), []).append(at)
-    # Every session still reported, by human: the ones off the board hold their numbers too.
-    # A name says where its session is, so all of one name are on the board or none is, and
-    # the nth of them here is the nth of them on it.
-    still: dict[str, set[str]] = {}
-    count: dict[tuple[str, str], int] = {}
-    for one in reported:
-        if one.state not in GONE:
-            owner = one.owner.lower()
-            count[(owner, one.name)] = nth = count.get((owner, one.name), 0) + 1
-            still.setdefault(owner, set()).add(_ident(one.name, nth))
     down = {name.lower(): at for at, name in enumerate(picture.names)}
     known: dict[int, tuple[str, int]] = {}                   # a seat -> what its agent is known by, and its number
-    for owner in [*crews, *(who for who in numbers or () if who not in crews)]:
-        crew = sorted(crews.get(owner, []), key=lambda at: (
+    for owner, crew in crews.items():
+        crew.sort(key=lambda at: (
             down.get(seats[at][0][0], len(down)), seats[at][0][1], seats[at][1].name, seats[at][1].state))
         seen: dict[str, int] = {}
         idents = []
@@ -560,14 +555,14 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
             name = seats[at][1].name
             seen[name] = seen.get(name, 0) + 1
             idents.append(_ident(name, seen[name]))
-        held = numbered(idents, numbers.get(owner, {}) if numbers is not None else {}, still.get(owner, ()))
+        held = numbered(idents, numbers.get(owner, {}) if numbers is not None else {})
         if numbers is not None:
-            if held:
-                numbers[owner] = held
-            else:                                            # none of theirs is reported any more
-                del numbers[owner]
+            numbers[owner] = held
         for at, ident in zip(crew, idents):
             known[at] = (ident, held[ident])
+    if numbers is not None:
+        for gone in [who for who in numbers if who not in crews]:    # none of theirs is on the board now
+            del numbers[gone]
     out: dict[Key, list[tuple[int, Agent]]] = {}
     for at, (key, one, pull, repo, note, named) in enumerate(seats):
         if pull is None:                                     # on no pull request: it works for its human
