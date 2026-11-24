@@ -1192,12 +1192,17 @@ class Board(Screen):
         now = time.monotonic()
         for y, (e, ref) in enumerate(zip(entries[:shown], refs), start=1):
             if isinstance(e, Agent):                   # no pull request to go to: n and a click pass it by
-                urgency = on_none(self.pic, e)
-                x_urgency = width - len(urgency)
                 canvas.put(0, y, "●", WAITING)
                 canvas.put(2, y, ref, f"bold {INK}")
-                what = f"you · answer {e.name}" + (f" · {e.note}" if e.note else "")
-                canvas.put(3 + key_w, y, cut(what, x_urgency - key_w - 5), INK)
+                act = f"you · answer {e.name}"
+                what = act + (f" · {e.note}" if e.note else "")
+                # What to do comes before why it has no pull request: in a pane with no room for
+                # both, the words at the row's end are left out. The agent's own line has them.
+                urgency = on_none(self.pic, e)
+                x_what, x_urgency = 3 + key_w, width - len(urgency)
+                if x_urgency - 2 - x_what < len(act):
+                    urgency, x_urgency = "", width + 2
+                canvas.put(x_what, y, cut(what, x_urgency - 2 - x_what), INK)
                 canvas.put(x_urgency, y, urgency, MUTED)
                 continue
             if not e.undecided:                        # else whose it is is not known yet: no mark

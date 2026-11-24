@@ -1050,6 +1050,30 @@ async def test_the_board_draws_an_agent_named_for_a_pull_request_that_is_not_ope
         assert "not shown" not in screen(app)
 
 
+@pytest.mark.parametrize("columns, more, why", [
+    (120, 400, "#12345 is not among those shown"), (100, 400, None), (80, 400, None), (66, 400, None),
+    (100, 0, "#12345 is not open"), (80, 0, None)])
+@drive
+async def test_what_to_do_about_an_agent_comes_before_why_it_is_on_no_pull_request(isolated, columns, more, why):
+    """The words at the row's end were written at its right edge whatever their length, and
+    what to do had the room that was left. In a narrow pane "you · answer agent 01" was cut
+    away, and the longest of those words ran back over the repository's name and the dot."""
+    a_board()
+    FakePulls.more = {"o/app": more}                         # more open than are read: the longer words
+    app = main.Frolic()
+    async with app.run_test(size=(columns, 40)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "o-app-pr-12345", "idle")))
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        row = str(app.board.effort()).splitlines()[1].rstrip()
+        assert row.startswith("● app    you · answer agent 01"), row                      # whole, in every pane
+        if why is None:
+            assert row == "● app    you · answer agent 01", row                           # no room for both: it alone
+        else:
+            assert row.endswith("  " + why) and len(row) == app.board.query_one("#effort").content_size.width, row
+
+
 @drive
 async def test_what_did_not_fit_among_what_needs_effort_is_said_with_what_n_reaches(isolated):
     """The last row said "n steps through them all" of whatever did not fit. n steps through
