@@ -4,6 +4,7 @@
 pull requests the app has read, and what its keys do."""
 import asyncio
 import json
+import random
 import re
 import subprocess
 import threading
@@ -2130,6 +2131,64 @@ def test_the_one_in_focus_keeps_a_place_among_the_names_that_fit():
     assert laid(people, 40, keep="elif")[0][1][1] == [list(NAMES[:5]), [*NAMES[5:9], "3 more"]]    # it has one already
     assert laid(people, 40, keep="djp3")[0][1][1] == [list(NAMES[:5]), [*NAMES[5:9], "3 more"]]    # not one of them
     assert laid(people, 36, keep="omar")[0][1][1] == [[*NAMES[:3], "omar", "8 more"]]
+
+
+def the_long_way(people, room, rows, keep=""):
+    """What `names_card` must answer, worked out by laying each way out whole and measuring
+    all of it: every height that might fit them all, then every shorter run of the names
+    with a line for the rest. Its columns as (text, whose), and its width; None for no card."""
+    lines = [(board.plain(board.head_line(person)), person.login.lower()) for person in people]
+
+    def made(entries, height):
+        cols = [entries[at:at + height] for at in range(0, len(entries), height)]
+        return cols, sum(max(len(said) for said, _ in col) for col in cols) + 2 * (len(cols) - 1)
+
+    for height in range(max(1, min(rows, board.STRIP)), board.STRIP + 1):
+        cols, width = made(lines, height)
+        if width <= room:
+            return cols, width
+    for count in range(len(lines) - 1, -1, -1):
+        shown = lines[:count]
+        if count and keep in [who for _, who in lines] and keep not in [who for _, who in shown]:
+            shown = shown[:-1] + [entry for entry in lines if entry[1] == keep]
+        cols, width = made(shown + [(f"  {len(lines) - count} more", None)], board.STRIP)
+        if width <= room:
+            return cols, width
+    return None
+
+
+def test_the_names_card_is_what_trying_every_shorter_run_of_names_would_give():
+    """It works a run's width out from the widths of the names, without laying the run out.
+    Two thousand boards, of none to twenty-three names of every length, in rooms from none
+    to wide, at every height, with one to keep or none: the same card each time."""
+    rng = random.Random(27)
+    for _ in range(2000):
+        people = bare(*(f"n{at}" + "x" * rng.randrange(0, 18) for at in range(rng.randrange(0, 24))))
+        room, rows = rng.randrange(0, 90), rng.randrange(1, 7)
+        keep = rng.choice(["", "nobody", *(person.login for person in people)])
+        card = board.names_card(people, room, rows, keep)
+        got = card and ([[(board.plain(said), who) for said, who in col] for col in card.cols], card.width)
+        assert got == the_long_way(people, room, rows, keep), (len(people), room, rows, keep)
+        assert card is None or card.widths == [max(len(board.plain(said)) for said, _ in col) for col in card.cols]
+
+
+def test_names_that_do_not_fit_are_each_measured_once(monkeypatch):
+    """Every shorter run of the names was laid out and measured again, to find the longest
+    that fits: 45,450 measurements for 300 names with no room, on every one of the eight
+    draws a second while a wheel turns."""
+    measured = []
+    seg_len = board.seg_len
+    monkeypatch.setattr(board, "seg_len", lambda line: measured.append(line) or seg_len(line))
+    for count in (50, 300, 600):
+        people = bare(*(f"user{n}" for n in range(count)))
+        measured.clear()
+        assert board.names_card(people, 0, 5) is None                         # no room for any of it
+        assert len(measured) == 2 * count                                     # each name, and each line for the rest
+        measured.clear()
+        card = board.names_card(people, 40, 5)                                # room for some
+        assert [who for col in card.cols for _, who in col][-2:] == ["user18", None] and count <= len(measured) < 2 * count
+        measured.clear()
+        assert board.names_card(people, 10 * count, 5).width <= 10 * count and len(measured) == count     # and for all
 
 
 def a_crowded_board():

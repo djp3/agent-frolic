@@ -375,24 +375,46 @@ def names_card(people: list[Person], room: int, rows: int, keep: str = "") -> Ca
     more"). `keep` is the login of one to show whatever happens, the one in focus: it
     takes the last place when it would have none."""
     lines: list[tuple[Segments, str | None]] = [(head_line(person), person.login.lower()) for person in people]
+    # Each name is measured once, here, however many ways of laying them out are tried: the
+    # strip is drawn eight times a second while a wheel turns. Every way tried is worked out
+    # from these widths, and one card is made, for the way that fits.
+    sizes = [seg_len(line) for line, _ in lines]
 
-    def card(entries: list[tuple[Segments, str | None]], height: int) -> Card:
-        cols = [entries[at:at + height] for at in range(0, len(entries), height)]
-        widths = [max(seg_len(line) for line, _ in col) for col in cols]
-        return Card("", [], cols, widths, sum(widths) + 2 * (len(cols) - 1))
+    def columns(wide: list[int], height: int) -> list[int]:
+        """How wide each column is, of lines this wide, `height` of them to a column."""
+        return [max(wide[at:at + height]) for at in range(0, len(wide), height)]
+
+    def card(entries: list[tuple[Segments, str | None]], wide: list[int], height: int) -> Card:
+        widths = columns(wide, height)
+        return Card("", [], [entries[at:at + height] for at in range(0, len(entries), height)], widths,
+                    sum(widths) + 2 * (len(widths) - 1))
 
     for height in range(max(1, min(rows, STRIP)), STRIP + 1):
-        whole = card(lines, height)
-        if whole.width <= room:
-            return whole
-    kept = [entry for entry in lines if entry[1] == keep]
+        widths = columns(sizes, height)
+        if sum(widths) + 2 * (len(widths) - 1) <= room:
+            return card(lines, sizes, height)
+    # They do not all fit: the longest run of them that does, from the first, and a line for
+    # the rest. A run's columns of names are as wide as they are in any other run that has
+    # them whole (`whole`, added up in `before`). Only its last one or two differ, where the
+    # line for the rest stands, and the one to keep: those alone are worked out for each run.
+    whole = columns(sizes, STRIP)
+    before = [0]
+    for wide in whole:
+        before.append(before[-1] + wide)
+    kept = next((at for at, (_, who) in enumerate(lines) if who == keep), None)
     for count in range(len(lines) - 1, -1, -1):
-        shown = lines[:count]
-        if kept and count and kept[0] not in shown:
-            shown = shown[:-1] + kept
-        cut = card(shown + [([("  ", MUTED), (f"{len(lines) - count} more", MUTED)], None)], STRIP)
-        if cut.width <= room:
-            return cut
+        note: tuple[Segments, str | None] = ([("  ", MUTED), (f"{len(lines) - count} more", MUTED)], None)
+        last = kept is not None and count > 0 and kept >= count      # the one to keep has no place: it takes the last
+        full = (count - 1) // STRIP if count else 0                  # the columns no note or kept name is in
+        tail = sizes[full * STRIP:count] + [seg_len(note[0])]
+        if last:
+            tail[-2] = sizes[kept]
+        ends = columns(tail, STRIP)
+        if before[full] + sum(ends) + 2 * (full + len(ends) - 1) <= room:
+            shown, wide = lines[:count], sizes[:count]
+            if last:
+                shown[-1], wide[-1] = lines[kept], sizes[kept]
+            return card(shown + [note], wide + [tail[-1]], STRIP)
     return None
 
 
