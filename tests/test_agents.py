@@ -16,11 +16,12 @@ from canvas import plain
 from grange import GrangeError, Reported, out_of_date
 import picture as pictures
 from picture import (LOOKS, Agent, Focus, Person, Picture, agent_cell, agent_name, agent_state, astray, cells, doing,
-                     focuses, line_agents, located, located_in, look, needs_effort, placed, progress, words)
+                     early, focuses, line_agents, located, located_in, look, needs_effort, placed, progress, words)
 from pulls import RepoPulls, parse_pull, stack
 from repos import RepoStore
 from settings import Settings
-from standins import TOKEN, FakeGrange, FakePulls, drive, screen, settle, team, to_setup, until
+from standins import (TOKEN, FakeClipboard, FakeGrange, FakePulls, age, drive, screen, settle, team, to_setup,
+                      until)
 from test_pulls import node, review
 from theme import MUTED
 
@@ -206,8 +207,9 @@ def test_a_repository_not_read_yet_may_have_the_pull_request_for_all_that_is_kno
 def test_a_name_that_fits_two_pull_requests_is_a_tie_and_says_which():
     both, one = alike(), [Reported("djp3", "acme-web-api-pr-5", "busy")]
     assert [(got.why, got.tie) for got in astray(one, list(both), both, list(both))] == [
-        ("fits acme/web-api #5 and acme-web/api #5", True)]
-    assert [got.tie for got in astray(one, ["acme/web-api"], both, list(both))] == [True]     # hiding one settles nothing
+        ("fits acme/web-api #5 and acme-web/api #5", "pull requests")]
+    hidden = astray(one, ["acme/web-api"], both, list(both))                      # hiding one settles nothing
+    assert [got.tie for got in hidden] == ["pull requests"]
     assert astray(one, [], both, list(both)) == []                                # both hidden: it is hidden with them
 
 
@@ -225,6 +227,147 @@ def test_every_agent_whose_name_tries_is_placed_or_astray_and_never_both():
     off = [one.one.name for one in astray(reported, ["o/app", "o/web"], pulls)]
     assert sorted(on + off) == sorted(one.name for one in reported if pictures.said(one.name))
     assert not set(on) & set(off)
+
+
+# ---- an agent that has no pull request yet -------------------------------------------------
+
+def early_in(*reported, shown=("o/app", "o/web"), listed=("o/app", "o/web", "o/docs")):
+    """(name, repository, what the name goes on to say) for each agent at work with no pull
+    request yet. o/docs is on the list too, and hidden."""
+    return [(one.name, repo, one.name[end:]) for one, repo, end in early(reported, shown, listed)]
+
+
+def test_an_agent_with_no_pull_request_yet_says_its_repository_as_a_word_of_its_own():
+    names = ("o-app reflow fix", "O-App", "notes on o-web deploy", "o-app o-web")
+    assert early_in(*(Reported("djp3", name, "busy") for name in names)) == [
+        ("o-app reflow fix", "o/app", " reflow fix"), ("O-App", "o/app", ""),
+        ("notes on o-web deploy", "o/web", " deploy"), ("o-app o-web", "o/app", " o-web")]    # the first such word
+
+
+def test_a_repository_run_on_with_other_words_is_not_read_as_one():
+    """Where the repository's name ends in "o-app-reflow-fix" cannot be told without a guess."""
+    names = ("o-app-reflow-fix", "my-o-app", "app", "o-app:", "o/app", "scratch", "")
+    assert early_in(*(Reported("djp3", name, "busy") for name in names)) == []
+
+
+def test_a_name_that_says_a_pull_request_is_read_that_way_alone():
+    """"o-app o-app-pr-5" says pull request 5, which is not open: the agent is not at work in
+    o/app with none, it is astray."""
+    said = (Reported("djp3", "o-app o-app-pr-5", "busy"), Reported("djp3", "o-app-pr-98", "busy"))
+    assert early_in(*said) == []
+    assert [(a.number, a.early) for agents in picture(*said).agents.values() for a in agents] == [(98, False)]
+    assert lost("o-app o-app-pr-5") == [("o-app o-app-pr-5", "o/app has no open pull request 5")]
+
+
+def test_an_agent_with_none_yet_is_put_only_in_a_repository_that_is_shown():
+    assert early_in(Reported("djp3", "o-app", "busy"), shown=("o/web",)) == []            # hidden with it
+    assert early_in(Reported("djp3", "o-docs", "busy")) == []                             # on the list, and hidden
+    assert early_in(Reported("djp3", "o-tools", "busy")) == []                            # not on the list at all
+    assert early_in(Reported("djp3", "o-app", "dead")) == []                              # its session has ended
+    assert lost("o-app", "o-docs", "o-tools", shown=("o/web",)) == []                     # and none of them is astray
+
+
+def test_an_agent_is_not_put_in_one_of_two_repositories_written_alike_and_is_said_to_fit_both():
+    both, one = alike(), [Reported("djp3", "acme-web-api reflow", "busy")]
+    for shown in (list(both), ["acme/web-api"], ["acme-web/api"]):
+        assert early(one, shown, list(both)) == [], shown                                 # hiding one does not say which
+        assert [(got.why, got.tie) for got in astray(one, shown, both, list(both))] == [
+            ("fits acme/web-api and acme-web/api", "repositories")], shown
+    assert astray(one, [], both, list(both)) == []                                        # both hidden: hidden with them
+    assert Picture(list(both), both, "djp3", reported=tuple(one)).agents == {}
+    # The other may be hidden and never read: the picture knows of it from the list.
+    only = {"acme/web-api": both["acme/web-api"]}
+    assert Picture(["acme/web-api"], only, "djp3", reported=tuple(one), listed=tuple(both)).agents == {}
+    assert list(Picture(["acme/web-api"], only, "djp3", reported=tuple(one)).agents) == [("acme/web-api", 0)]
+
+
+def test_an_agent_with_none_yet_is_kept_under_its_repository_and_the_number_nought():
+    pic = picture(Reported("djp3", "o-app reflow fix", "idle"), Reported("djp3", "o-app", "busy"),
+                  Reported("bob", "o-web deploy", "waiting"), Reported("bob", "o-web", "idle", True),
+                  Reported("djp3", "o-app-pr-98", "busy"))
+    assert [(a.operator, a.serial, a.number, a.role, a.state, a.note, a.early) for a in pic.early("O/App")] == [
+        ("djp3", "01", 0, "author", "working", "", True),
+        ("djp3", "02", 0, "author", "at its prompt", "reflow fix", True)]
+    assert [(a.serial, a.state, a.note) for a in pic.early("o/web")] == [
+        ("01", "unknown", ""), ("02", "at its prompt", "deploy")]
+    assert [(a.serial, a.early) for a in pic.agents[("o/app", 98)]] == [("01", False)]    # numbered on its own there
+    assert pic.on(pic.find(("o/app", 98))) == pic.agents[("o/app", 98)]                   # and no pull request's agents
+
+
+@pytest.mark.parametrize("word, stale, state", [
+    ("busy", False, "working"), ("waiting", False, "at its prompt"), ("idle", False, "at its prompt"),
+    ("shell", False, "at its prompt"), ("dozing", False, "unknown"), ("busy", True, "unknown"), ("idle", True, "unknown")])
+def test_an_idle_agent_with_none_yet_is_at_its_prompt_since_it_waits_on_nobody_else(word, stale, state):
+    assert [a.state for a in picture(Reported("bob", "o-app", word, stale)).early("o/app")] == [state]
+
+
+def test_an_agent_with_none_yet_keeps_its_number_as_the_others_do():
+    numbers = {}
+
+    def numbered_in(*names):
+        pic = Picture(["o/app"], {"o/app": read("o/app", app_nodes())}, "djp3", numbers=numbers,
+                      reported=tuple(Reported("djp3", f"o-app {name}", "busy") for name in names))
+        return {agent.note: agent.serial for agent in pic.early("o/app")}
+
+    assert numbered_in("a", "b") == {"a": "01", "b": "02"}
+    assert numbered_in("b") == {"b": "02"} and list(numbers) == [(("o/app", 0), "djp3")]  # a has ended: b keeps its own
+    assert numbered_in() == {} and numbers == {}
+
+
+def test_an_agent_with_none_yet_has_a_row_under_its_repository_before_its_branches():
+    pic = picture(Reported("djp3", "o-app reflow", "busy"), Reported("bob", "o-web", "busy"))
+    kinds = [(row.kind, row.repo) for row in pictures.tree(pic)]
+    assert kinds[:3] == [("repo", "o/app"), ("agent", "o/app"), ("base", "o/app")]
+    assert kinds[kinds.index(("repo", "o/web")) + 1] == ("agent", "o/web")
+    assert [row.agent.note for row in pictures.tree(pic) if row.kind == "agent"] == ["reflow", ""]
+    unread = Picture(["o/docs"], {}, "djp3", reported=(Reported("djp3", "o-docs", "busy"),))
+    assert [row.kind for row in pictures.tree(unread)] == ["repo", "note", "agent"]       # a repository not read yet
+    assert [row.kind for row in pictures.tree(picture())].count("agent") == 0
+
+
+def test_the_viewers_own_agent_with_none_yet_at_its_prompt_is_theirs_to_get_moving():
+    reported = (Reported("djp3", "o-web hotfix", "idle"), Reported("bob", "o-web deploy", "idle"),
+                Reported("djp3", "o-web", "busy"))
+    before, pic = picture(), picture(*reported)
+    assert [(a.operator, a.note) for a in pictures.asking(pic)] == [("djp3", "hotfix")]   # not bob's, nor one at work
+    yours, others = pictures.counts(before, "o/web")
+    assert pictures.counts(pic, "o/web") == (yours + 1, others)                           # counted as theirs there,
+    assert pictures.counts(pic, "o/app") == pictures.counts(before, "o/app")              # and nowhere else
+    assert [key for key in map(lambda e: (e.pull.repo, e.pull.number), needs_effort(pic))] == [
+        (e.pull.repo, e.pull.number) for e in needs_effort(before)]                       # which are pull requests
+    only = {"o/web": read("o/web", web_nodes())}                                          # nothing there waits on them
+    assert not pictures.humans(Picture(["o/web"], only, "djp3"))[0].dot
+    assert pictures.humans(Picture(["o/web"], only, "djp3", reported=reported))[0].dot    # but their agent does
+
+
+def test_an_agent_with_none_yet_is_a_stop_of_the_focus_and_in_focus_with_its_human():
+    pic = picture(Reported("bob", "o-web deploy", "busy"))
+    agent, = pic.early("o/web")
+    stop = Focus("agent", "bob", agent.key)
+    assert stop in focuses(pic)
+    assert all(pictures.agent_in_focus(agent, focus) for focus in (Focus(), Focus("crew", "bob"), stop))
+    assert not any(pictures.agent_in_focus(agent, focus) for focus in (
+        Focus("human", "bob"), Focus("crew", "djp3"), Focus("agent", "bob", ("bob", "o/web", 0, "another"))))
+    assert not any(pictures.in_focus(pic, pull, stop) for pull in pic.all())              # it is on no pull request
+
+
+def test_a_pull_request_is_newly_opened_only_when_it_was_created_since_the_reading_before():
+    """One that was not in the reading before may have been open all along: a repository with
+    many open is read only as far as its most recent, and an older one comes into that when
+    another closes."""
+    before = Picture(["o/web"], {"o/web": read("o/web", web_nodes())}, "djp3")       # taken at NOW: the 14th, 16:00
+
+    def opened(created):
+        nodes = web_nodes() + [node(31, "hotfix", author={"login": "djp3"}, createdAt=created)]
+        change, = pictures.changes(before, Picture(["o/web"], {"o/web": read("o/web", nodes)}, "djp3"), "o/web")
+        return change.opened
+
+    assert opened("2026-11-14T16:05:00Z")                    # since that reading was taken
+    assert opened("2026-11-14T15:58:30Z")                    # a moment before it, by a clock that disagrees a little:
+    assert not opened("2026-11-14T15:57:00Z")                # it was not in that reading, so it is new all the same
+    assert not opened("2026-01-05T09:00:00Z")                # open all along
+    assert not opened(None)                                  # GitHub did not say when: not taken for new
+    assert pictures.CLOCKS_APART.total_seconds() == 120
 
 
 # ---- who it works for, and its number ---------------------------------------------------
@@ -668,6 +811,177 @@ async def test_a_repository_that_is_removed_takes_its_reading_with_it_and_settle
         await pilot.pause(0.3)
         assert list(app.board.pic.agents) == [("acme/web-api", 5)]     # removed: the tie is settled
         assert app.agents_tied() == ""
+
+
+@drive
+async def test_the_board_draws_an_agent_with_no_pull_request_yet_under_its_repository(isolated):
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        yours, others = pictures.counts(app.board.pic, "o/app")
+        FakeGrange.answers.put(team(("djp3", "o-app reflow fix", "idle"), ("bob", "O-WEB deploy", "busy"),
+                                    ("bob", "o-app-reflow", "busy")))
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        rows = screen(app).splitlines()
+        mine = rows[next(i for i, row in enumerate(rows) if "╪ o/app" in row) + 1]       # the line under the repository's
+        assert mine.split("│")[0].split() == ["●", "you", "at", "prompt"]                # theirs to answer: the dot
+        assert "▷ agent 01  reflow fix" in mine and mine.rstrip().endswith("no pull request yet")
+        bobs = rows[next(i for i, row in enumerate(rows) if "╪ o/web" in row) + 1]
+        assert bobs.split("│")[0].split() == ["bob", "working"] and "agent 01  deploy" in bobs
+        assert "o-app-reflow" not in screen(app) and len(app.board.pic.agents) == 2      # run on: it is nowhere
+        assert pictures.counts(app.board.pic, "o/app") == (yours + 1, others)
+        assert "▷ app" in screen(app) and "web" in rows[3]                               # on the cards: where each is at work
+        asked = next(row for row in rows if "you · answer agent 01 · reflow fix" in row)  # among what needs effort,
+        assert asked.split()[:2] == ["●", "app"] and "no pull request yet" in asked       # first, and theirs
+        assert app.board.effort_rows[0] is None                                           # a click on it goes nowhere
+        # It is not a pull request: the arrows and n pass it by, and the drawer is the selected pull request's.
+        assert all(number for _, number in app.board.keys())
+        for key in ("down", "up", "n", "n", "n", "n"):
+            await pilot.press(key)
+            assert app.board.sel in app.board.keys(), key
+        await to_setup(app, pilot)
+        assert "3 reported · 0 on the pull requests shown here · 2 with no pull request yet" in screen(app)
+        assert "not shown" not in screen(app)
+
+
+@drive
+async def test_what_did_not_fit_among_what_needs_effort_is_said_with_what_n_reaches(isolated):
+    """The last row said "n steps through them all" of whatever did not fit. n steps through
+    pull requests, and an agent with no pull request yet has none to go to."""
+    a_board()
+    app = main.Frolic()
+
+    def last():
+        return next(row.split("  ")[0] for row in map(str.strip, screen(app).splitlines()) if row.startswith("and "))
+
+    async def with_agents(count, cursor):
+        FakeGrange.answers.put(team(*(("djp3", f"o-app task {n}", "idle") for n in range(count)), cursor=cursor))
+        await until(pilot, lambda: len(app.reported) == count)
+        await pilot.pause(0.3)
+
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        efforts = len(app.board.efforts)
+        assert efforts == 5 and "and " not in [row.strip()[:4] for row in screen(app).splitlines()]    # they all fit
+        await with_agents(5, cursor=2)                                    # ten in all: seven fit, the agents first
+        assert last() == "and 3 more: n steps through them all"           # so pull requests alone are left out
+        await with_agents(10, cursor=3)                                   # three of the agents do not fit either
+        assert last() == "and 8 more: n steps through the pull requests, and the list has the agents"
+        stops = set()
+        for _ in range(2 * efforts):
+            await pilot.press("n")
+            stops.add(app.board.sel)
+        assert len(stops) == efforts and all(number for _, number in stops)       # which is what n does
+        assert sum("no pull request yet" in row.split("│")[-1] for row in screen(app).splitlines()) >= 10   # the list
+        FakePulls.open_ = {"o/app": [], "o/web": []}                      # nothing open: agents alone
+        age(app)
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+        assert app.board.efforts == []
+        assert last() == "and 3 more of your agents: each is in the list, under its repository"
+
+
+@drive
+async def test_an_agent_of_the_viewers_is_counted_in_a_repository_that_could_not_be_read(isolated):
+    """The counts beside a repository's name were drawn only once it had been read. An agent
+    with no pull request yet is known of without any reading: its own line had the yellow
+    dot, and neither the top line nor the repository's heading counted it."""
+    a_board()
+    FakePulls.broken["o/web"] = "GitHub could not be reached."
+    app = main.Frolic()
+
+    def heading():
+        return next(row for row in screen(app).splitlines() if "╪ o/web" in row)
+
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        assert "o/web" not in app.pulls and "could not be read" in screen(app)
+        assert screen(app).splitlines()[0].split() == ["app", "●2", "○2", "web"]         # nothing is known of it:
+        assert "●" not in heading() and "open" not in heading()                           # no count, and no dot for none
+        FakeGrange.answers.put(team(("bob", "o-web deploy", "idle")))                     # someone else's: not theirs
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        assert screen(app).splitlines()[0].split() == ["app", "●2", "○2", "web"] and "●" not in heading()
+        FakeGrange.answers.put(team(("djp3", "o-web hotfix", "idle"), cursor=2))          # their own, at its prompt
+        await until(pilot, lambda: app.reported[0].owner == "djp3")
+        await pilot.pause(0.3)
+        assert screen(app).splitlines()[0].split() == ["app", "●2", "○2", "web", "●1"]
+        assert "╪ o/web  ●1 ═" in heading() and "open" not in heading()                   # the count, and no number open
+
+
+@drive
+async def test_the_ticker_names_the_pull_request_the_viewer_opened_where_their_agent_had_none(isolated):
+    """The agent shows on it only once its session is named for it: the ticker says the name,
+    and the board selects the pull request, so that the drawer shows that name and c copies it."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "o-web hotfix", "busy"), ("bob", "o-app", "busy")))
+        await until(pilot, lambda: app.reported)
+        was = app.board.sel
+        just_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        FakePulls.open_["o/app"] = app_nodes() + [node(32, "more", author={"login": "djp3"}, baseRefOid=TIP,
+                                                       createdAt=just_now)]
+        age(app, only=["o/app"])
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+        assert "app · #32 opened by you" in screen(app) and app.board.sel == was          # no agent of theirs there:
+        # One of theirs that was open all along and has only now come into what is read  # said as any other is
+        # (created on the 10th): it is not the one their agent has just opened.
+        FakePulls.open_["o/web"] = web_nodes() + [node(30, "old-work", author={"login": "djp3"}, baseRefOid=TIP)]
+        age(app, only=["o/web"])
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+        assert "web · #30 opened by you" in screen(app) and app.board.sel == was
+        assert not any("rename" in text for _, text, _ in app.lines)
+        FakePulls.open_["o/web"] = FakePulls.open_["o/web"] + [
+            node(31, "hotfix", author={"login": "djp3"}, baseRefOid=TIP,
+                 createdAt=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))]
+        age(app, only=["o/web"])
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+        said = "you opened #31 · rename your agent there to o-web-pr-31 · c copies it"
+        assert f"web · {said}" in screen(app) and app.board.sel == ("o/web", 31) != was
+        assert "name     o-web-pr-31 · c copies it" in screen(app)                        # the drawer: the same name
+        await pilot.press("c")
+        await settle(app, pilot)
+        assert FakeClipboard.copied == ["o-web-pr-31"]
+        assert [text for _, text, _ in app.lines].count(f"o/web · {said}") == 1           # and the log keeps it
+        FakePulls.open_["o/web"] = FakePulls.open_["o/web"] + [node(33, "deploy", author={"login": "bob"}, baseRefOid=TIP)]
+        age(app, only=["o/web"])
+        app.tick()
+        await settle(app, pilot)
+        await pilot.pause(0.3)
+        assert "web · #33 opened by bob" in screen(app) and app.board.sel == ("o/web", 31)    # someone else's: as ever
+
+
+@drive
+async def test_a_name_that_fits_two_repositories_is_said_quietly_too(isolated):
+    a_board_of_two_alike()
+    app = main.Frolic()
+    async with app.run_test(size=(170, 46)) as pilot:
+        await settle(app, pilot)
+        FakeGrange.answers.put(team(("djp3", "acme-web-api reflow", "busy")))
+        await until(pilot, lambda: app.reported)
+        await pilot.pause(0.3)
+        assert app.board.pic.agents == {}
+        assert app.agents_tied() == "1 agent not shown: its name fits two repositories · s says which"
+        assert app.board.ticker().plain.endswith(app.agents_tied())
+        FakeGrange.answers.put(team(("djp3", "acme-web-api reflow", "busy"), ("djp3", "acme-web-api-pr-5", "busy"),
+                                    cursor=2))
+        await until(pilot, lambda: len(app.reported) == 2)
+        await pilot.pause(0.3)
+        assert app.agents_tied() == ("2 agents not shown: each name fits two pull requests or repositories"
+                                     " · s says which")
+        await to_setup(app, pilot)
+        assert "djp3 › acme-web-api reflow   fits acme/web-api and acme-web/api" in screen(app)
 
 
 TIED = "1 agent not shown: its name fits two pull requests · s says which"
