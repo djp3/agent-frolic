@@ -333,6 +333,19 @@ it is not read: where the repository's name ends could only be guessed.)
   the name to rename its session to, and the board selects the new pull request, so `c` copies
   that name. The agent moves onto the pull request once its session has the new name.
 
+**Each agent has a number**, shown beside it: `agent 07`. Each person's agents are numbered
+together across the whole board, whichever pull request or repository each is on. Yours run
+from 01 up, and so do a teammate's, so "you · answer agent 07" means one session of yours.
+
+- An agent keeps its number for as long as its session is reported, whatever starts or ends
+  around it. It also keeps it while it is off the board, when its pull request has merged or
+  its repository is hidden.
+- A new agent takes the lowest number that is free.
+- A session you rename keeps its number. The board sees one name go and another come, and gives
+  the new one the number just freed.
+- The numbers are this board's own. A teammate's board may number the same agents differently,
+  and the numbers start again when agent-frolic does.
+
 An agent whose name says no pull request is not drawn, and nothing is wrong with it. One whose
 name has `-pr-<number>` in it and still leads to no pull request on your board is listed in
 part 4 of the setup, with why: the repository is not on your list, it has no open pull request
