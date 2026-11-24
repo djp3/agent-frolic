@@ -41,10 +41,11 @@ branch and the commit they stand on. One that is ready but waits for the one ben
 ### What needs effort, most urgent first
 
 Below the list, everything that waits on a person or a team, the longest quiet first, with
-what it holds up. An agent of yours that has no pull request yet and is at its prompt comes
+what it holds up. An agent of yours that is on no pull request and is at its prompt comes
 before them. Beside it, a drawer for the selected pull request: owner, who it waits on,
 each reviewer's latest word, comments to resolve, checks, branch, the name that puts an agent
-on it, and its address. `o` opens it on GitHub, and `c` copies the name.
+on it, and its address. `o` opens it on GitHub, `c` copies the name, and `C` copies it as a
+`/rename` command for Claude Code.
 
 ### Changes arrive as they happen
 
@@ -318,7 +319,9 @@ the pull request's number: `<owner>-<repo>-pr-<number>`. An agent on pull reques
 - What the pull request's branch and title say plays no part.
 
 Nobody has to work the name out. The drawer shows it for the selected pull request, and `c`
-copies it, ready to paste where the session is named.
+copies it, ready to paste where the session is named. `C` copies the whole command that
+names a Claude Code session so, `/rename acme-web-pr-98`: paste it at the agent's prompt and
+press return.
 
 **Before there is a pull request**, an agent's name says the repository alone, as a word of
 its own: `acme-web`, or `acme-web reflow fix`. (Run on with more, as in `acme-web-reflow-fix`,
@@ -331,31 +334,46 @@ it is not read: where the repository's name ends could only be guessed.)
 - It is not a pull request, so the arrows and `n` pass it by.
 - When you open a pull request in a repository where you have such an agent, the ticker gives
   the name to rename its session to, and the board selects the new pull request, so `c` copies
-  that name. The agent moves onto the pull request once its session has the new name.
+  that name and `C` the `/rename` command with it. The agent moves onto the pull request once
+  its session has the new name. (When an agent of yours is on the new pull request already,
+  named ahead of it, there is nothing to rename, and the ticker says only that you opened it.)
+
+**A name that says a pull request that is not open** is read as its repository alone. That is
+an agent named ahead of the pull request it is about to open, or one still named for a pull
+request that has merged or closed: `acme-web-pr-98`, when `acme/web` has no pull request 98
+open.
+
+- The agent is drawn under the repository's heading, as one with no pull request yet is, and
+  all of the above goes for it too. The end of its line says which pull request is not open
+  (`#98 is not open`).
+- It moves onto the pull request as soon as GitHub has been read and the pull request is open.
+- Until a repository has been read at all, nothing is known of its pull requests, and an agent
+  named for one of them is not drawn yet.
 
 **Each agent has a number**, shown beside it: `agent 07`. Each person's agents are numbered
 together across the whole board, whichever pull request or repository each is on. Yours run
 from 01 up, and so do a teammate's, so "you · answer agent 07" means one session of yours.
 
 - An agent keeps its number for as long as its session is reported, whatever starts or ends
-  around it. It also keeps it while it is off the board, when its pull request has merged or
-  its repository is hidden.
+  around it. It keeps it when it moves: onto its pull request when that opens, and back under
+  its repository when that has merged. It also keeps it while it is off the board, as when its
+  repository is hidden.
 - A new agent takes the lowest number that is free.
 - A session you rename keeps its number. The board sees one name go and another come, and gives
   the new one the number just freed.
 - The numbers are this board's own. A teammate's board may number the same agents differently,
   and the numbers start again when agent-frolic does.
 
-An agent whose name says no pull request is not drawn, and nothing is wrong with it. One whose
-name has `-pr-<number>` in it and still leads to no pull request on your board is listed in
-part 4 of the setup, with why: the repository is not on your list, it has no open pull request
-of that number, or the name leaves out whose repository it is.
+An agent whose name says neither a pull request nor a repository is not drawn, and nothing is
+wrong with it. One whose name has `-pr-<number>` in it and is still drawn nowhere is listed in
+part 4 of the setup, with why: the repository is not on your list, or the name leaves out
+whose repository it is.
 
 Two repositories can be written the same way (`acme/web-api` and `acme-web/api` are both
 `acme-web-api`). If each has an open pull request of the same number, a name fits both. The
 agent is then drawn on neither, since the board does not guess. For as long as that lasts, the
 end of the ticker's line says an agent is not shown, and the setup says which two pull requests
-its name fits. The same goes for an agent with no pull request yet whose name fits two such
+its name fits. The same goes for an agent on no pull request whose name fits two such
 repositories.
 
 Nothing needs setting up in agent-frolic. It asks the agent-grange on your own Mac (at
@@ -374,7 +392,7 @@ as it lasts: without their agents, pull requests that agents are at work on look
 were on them.
 
 Part 4 also counts the agents reported, how many of them are on the pull requests shown and
-how many have no pull request yet, and lists the ones that are not shown though their names
+how many have no open pull request, and lists the ones that are not shown though their names
 say where they are.
 
 ## Files and logs

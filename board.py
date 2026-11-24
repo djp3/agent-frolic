@@ -42,9 +42,10 @@ Top to bottom:
     An agent at work in a repository with no pull request yet has a line of its own under
     the repository's: its human, what it is doing, and what its name goes on to say. It is
     not a pull request, so the arrows pass it by and the drawer has nothing to say of it.
+    So has one named for a pull request that is not open, and its line says which.
   • THE BAND. What needs effort, most urgent first, and a drawer for the selected pull
     request: owner and waits on first, then GitHub's facts, the name that puts an agent
-    on it, and its address. The viewer's own agents that have no pull request yet and are
+    on it, and its address. The viewer's own agents that are on no pull request and are
     at their prompt come before the pull requests that need effort.
   • THE TICKER. The last thing that happened: a webhook delivery, or what changed when
     GitHub was read again. A row that changed washes pale for a moment. A word about what
@@ -54,7 +55,8 @@ Top to bottom:
 
 Keys: up/down pick a pull request, and so does a click on one, on any of its lines in the
 list or on its line where it needs effort; o (or O) opens its page on GitHub in the browser,
-c (or C) copies the name that puts an agent on it, page
+c copies the name that puts an agent on it and C the command that names a Claude Code session
+so ("/rename " and the name), to paste at the agent's prompt, page
 up/down and home/end scroll the list (as the wheel does), n the next thing needing effort,
 tab / shift+tab step the focus (everyone, a human with their agents, the human alone, each
 agent; not f, which on the setup screen asks to forget the token),
@@ -89,8 +91,8 @@ from canvas import Canvas, Lit, Segments, cut, lit, plain, seg_len, wash, write
 from picture import (AGE_BAR, AGE_FIGURE, CHECK_MARK, CHECK_SAID, QUIET, SPIN, Agent, Effort, Focus, Key,
                      Person, Picture, Row, agent_in_focus, agent_name, agent_state, asking, at_work, cells, counts,
                      focuses, human_cell, humans, in_focus, inks, key_of, labels,
-                     age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, progress, quiet,
-                     review_cell, reviewers, reviewing, said_of, silence, tree)
+                     age_reach, age_said, line_agents, look, mark, mark_of, move_words, needs_effort, on_none,
+                     progress, quiet, review_cell, reviewers, reviewing, said_of, silence, tree)
 from pulls import PullRequest, span
 from theme import (AGE, AXIS, CRIT, DIVIDER, GOOD, INK, INK2, KEY, LIGHT_AT_WORK, MUTED, PLANE, RAISED, SURFACE,
                    WAITING, WARN, darker)
@@ -112,14 +114,15 @@ BAND = 11                        # rows of the bottom band: the list and the dra
 X_OWNER, X_STATE, X_WAITS, X_RULE, X_TREE = 1, 18, 33, 51, 53
 # The hints at the foot of the screen, each a key and a word or two for what it does. They
 # are drawn as agent-farm's footer is: the key lit, its words beside it (`hint_text`).
-HINTS = [("↑↓", "Pull request"), ("o", "Open on GitHub"), ("c", "Copy agent name"), ("PgUp PgDn", "Scroll"),
-         ("n", "Next needing effort"),
+HINTS = [("↑↓", "Pull request"), ("o", "Open on GitHub"), ("c", "Copy agent name"), ("C", "Copy as /rename"),
+         ("PgUp PgDn", "Scroll"), ("n", "Next needing effort"),
          ("tab", "Focus"), ("esc", "Everyone"), ("m", "Repos"), ("u", "Update"), ("d", "Drawer"),
          ("s", "Setup"), ("q", "Quit")]
 # When the window is too narrow for every hint, these are left out, the first first, by their
 # keys. The way back to the setup and out of the board always stay: they are what a lost
-# user looks for. (c goes early for a key so new: the drawer says it too, beside the name.)
-LEFT_OUT_FIRST = ["d", "u", "m", "esc", "c", "tab", "PgUp PgDn", "n", "o", "↑↓"]
+# user looks for. (c goes early for a key so new: the drawer says it too, beside the name.
+# C goes first of all: it is c's other way, and the drawer says both.)
+LEFT_OUT_FIRST = ["C", "d", "u", "m", "esc", "c", "tab", "PgUp PgDn", "n", "o", "↑↓"]
 HINT_GAP = "  "
 THUMB, TRACK_LINE = "┃", "│"     # the list's scroll bar: its thumb, and the track it runs in
 
@@ -477,7 +480,7 @@ class Board(Screen):
         Binding("home", "edge(-1)", show=False), Binding("end", "edge(1)", show=False),
         Binding("n", "next_effort", show=False),
         Binding("o", "open_pull", show=False), Binding("O", "open_pull", show=False),
-        Binding("c", "copy_name", show=False), Binding("C", "copy_name", show=False),
+        Binding("c", "copy_name", show=False), Binding("C", "copy_name(True)", show=False),
         # tab, not f: on the setup screen f asks to forget the GitHub token, and a key that
         # is harmless on one screen should not be the destructive one on the other
         Binding("tab", "focus(1)", show=False), Binding("shift+tab", "focus(-1)", show=False),
@@ -1056,7 +1059,7 @@ class Board(Screen):
         canvas.put(X_TREE + 4, y, cut(row.label, width - X_TREE - 5), INK if trouble else MUTED)
 
     def draw_agent(self, canvas: Canvas, y: int, line: Line, width: int) -> None:
-        """An agent at work in a repository with no pull request yet, on a line of its own
+        """An agent at work in a repository and on no pull request, on a line of its own
         under the repository's. Where a pull request has its owner and its state: the human
         who runs it, and what it is doing. Where a pull request has its number and title:
         the agent, and what its name goes on to say. The yellow dot is on its human when it
@@ -1077,7 +1080,7 @@ class Board(Screen):
                     (agent.name, f"bold {INK}" if yours else INK2)]
         if agent.note:
             said += [("  ", ""), (agent.note, INK2)]
-        x, end = X_TREE + 2, "no pull request yet"
+        x, end = X_TREE + 2, on_none(pic, agent)               # that it has none yet, or which one is not open
         room = width - 1 - x
         if room - seg_len(said) >= len(end) + 2:               # said when there is room after the agent's own words
             canvas.put(width - 1 - len(end), y, end, MUTED)
@@ -1168,7 +1171,7 @@ class Board(Screen):
             canvas.put(width - len(key_text) + 2, 0, "yours to fix", MUTED)
             canvas.put(width - 23, 0, "○ waits on someone else", MUTED)
         self.effort_rows = []
-        # The viewer's own agents that have no pull request yet and are at their prompt come
+        # The viewer's own agents that are on no pull request and are at their prompt come
         # first: an agent sits idle for want of them, which is what puts a pull request first too.
         entries: list[Agent | Effort] = [*asking(self.pic), *self.efforts]
         if not entries:
@@ -1189,12 +1192,17 @@ class Board(Screen):
         now = time.monotonic()
         for y, (e, ref) in enumerate(zip(entries[:shown], refs), start=1):
             if isinstance(e, Agent):                   # no pull request to go to: n and a click pass it by
-                urgency = "no pull request yet"
-                x_urgency = width - len(urgency)
                 canvas.put(0, y, "●", WAITING)
                 canvas.put(2, y, ref, f"bold {INK}")
-                what = f"you · answer {e.name}" + (f" · {e.note}" if e.note else "")
-                canvas.put(3 + key_w, y, cut(what, x_urgency - key_w - 5), INK)
+                act = f"you · answer {e.name}"
+                what = act + (f" · {e.note}" if e.note else "")
+                # What to do comes before why it has no pull request: in a pane with no room for
+                # both, the words at the row's end are left out. The agent's own line has them.
+                urgency = on_none(self.pic, e)
+                x_what, x_urgency = 3 + key_w, width - len(urgency)
+                if x_urgency - 2 - x_what < len(act):
+                    urgency, x_urgency = "", width + 2
+                canvas.put(x_what, y, cut(what, x_urgency - 2 - x_what), INK)
                 canvas.put(x_urgency, y, urgency, MUTED)
                 continue
             if not e.undecided:                        # else whose it is is not known yet: no mark
@@ -1337,7 +1345,7 @@ class Board(Screen):
         # What an agent's session is named to be shown on this pull request: nobody should
         # have to work it out, or type it.
         out.append("name     ", style=MUTED).append(agent_name(pull), style=INK2)
-        out.append(" · c copies it for an agent\n", style=MUTED)
+        out.append(" · c copies it, C as /rename\n", style=MUTED)
         return out.append(pull.page, style=MUTED)              # the address o opens
 
     def ticker(self) -> Text:
@@ -1484,12 +1492,14 @@ class Board(Screen):
             return
         self.app.open_pull(pull, self.ref(pull))
 
-    def action_copy_name(self) -> None:
-        """Copy the name that puts an agent on the selected pull request, to name a session with."""
+    def action_copy_name(self, command: bool = False) -> None:
+        """Copy the name that puts an agent on the selected pull request, to name a session
+        with (c); or, with `command`, the command that names a Claude Code session so, to
+        paste at the agent's prompt (C)."""
         pull = self.pic.find(self.sel)
         if self.menu_open or pull is None:
             return
-        self.app.copy_name(pull, self.ref(pull))
+        self.app.copy_name(pull, self.ref(pull), command)
 
     def action_focus(self, step: int) -> None:
         """Step the focus: everyone, a human with all their agents, the human alone, each agent."""

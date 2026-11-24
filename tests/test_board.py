@@ -642,6 +642,8 @@ def test_the_hints_leave_out_the_least_needed_first_and_keep_setup_and_quit():
     assert board.hint_line(cell_len(full)).plain == full
     assert board.hint_line(102).plain == ("↑↓ Pull request  o Open on GitHub  PgUp PgDn Scroll  "
                                           "n Next needing effort  tab Focus  s Setup  q Quit")
+    without = [hint for hint in every if hint != "C Copy as /rename"]              # c's other way goes first of all
+    assert len(without) == len(every) - 1 and board.hint_line(cell_len(full) - 1).plain == board.HINT_GAP.join(without)
     last = "s Setup  q Quit"
     for width in range(cell_len(last), cell_len(full) + 1):
         line = board.hint_line(width).plain
@@ -711,13 +713,13 @@ async def test_a_narrow_window_still_shows_how_to_reach_the_setup_and_quit(isola
         hints = screen(app).splitlines()[-1]
         assert "s Setup  q Quit" in hints and "…" not in hints
         assert "d Drawer" not in hints                                             # the least needed went first
-        await pilot.resize_terminal(170, 46)                                       # widened: all of them
+        await pilot.resize_terminal(190, 46)                                       # widened: all of them
         await settle(app, pilot)
         assert board.hint_line(9999).plain in screen(app).splitlines()[-1]
         foot = next(strip for strip in app.screen._compositor.render_strips() if "q Quit" in strip.text)
         lit = "".join(seg.text if seg.style and seg.style.bold and seg.style.color
                       and seg.style.color.get_truecolor().hex.lower() == board.KEY.lower() else " " for seg in foot)
-        assert lit.split() == "↑↓ o c PgUp PgDn n tab esc m u d s q".split()       # the keys, and only the keys
+        assert lit.split() == "↑↓ o c C PgUp PgDn n tab esc m u d s q".split()     # the keys, and only the keys
 
 
 @drive
@@ -1184,15 +1186,17 @@ async def test_holding_o_down_opens_the_page_once(isolated, monkeypatch):
 
 
 @drive
-async def test_the_drawer_gives_the_name_for_an_agent_and_c_copies_it(isolated):
-    """Nobody should have to work the name out, or type it."""
+async def test_the_drawer_gives_the_name_for_an_agent_and_c_copies_it_and_C_the_command(isolated):
+    """Nobody should have to work the name out, or type it. C copies the whole command that
+    gives a Claude Code session the name, to paste at the agent's prompt as it is."""
     a_board()
     app = main.Frolic()
     async with app.run_test(size=(150, 46)) as pilot:
         await settle(app, pilot)
         app.OPEN_AGAIN_S = 0                                                  # (a key held down has its own test)
         assert "c Copy agent name" in screen(app)
-        assert "name     djp3-agent-frolic-pr-12 · c copies it" in screen(app)       # the drawer, for the selected one
+        assert "name     djp3-agent-frolic-pr-12 · c copies it, C as /rename" in screen(app)   # the drawer, for the
+                                                                              # selected one
         await pilot.press("c")
         await settle(app, pilot)
         assert FakeClipboard.copied == ["djp3-agent-frolic-pr-12"]
@@ -1201,13 +1205,20 @@ async def test_the_drawer_gives_the_name_for_an_agent_and_c_copies_it(isolated):
         app.draw()
         await pilot.pause()
         assert [a.note for a in app.board.pic.agents[("djp3/agent-frolic", 12)]] == ["fix"]     # is on it
-        await pilot.press("down", "down", "C")                                # C does what c does
+        await pilot.press("down", "down", "C")                                # C: the command, with the name in it
         await settle(app, pilot)
-        assert FakeClipboard.copied[1:] == ["djp3-agent-frolic-pr-9"]
+        assert FakeClipboard.copied[1:] == ["/rename djp3-agent-frolic-pr-9"]  # and no new line: it is theirs to send
+        assert main.RENAME == "/rename "
+        assert ("agent-frolic#9 · copied /rename djp3-agent-frolic-pr-9, the command that names an agent's session "
+                "for it") in screen(app)
         assert "name     djp3-agent-frolic-pr-9 · c copies it" in screen(app)
+        await pilot.press("c")                                                # and c still the name alone
+        await settle(app, pilot)
+        assert FakeClipboard.copied[2:] == ["djp3-agent-frolic-pr-9"]
+        assert "agent-frolic#9 · copied djp3-agent-frolic-pr-9, the name for an agent on it" in screen(app)
         await pilot.press("m", "c", "C")                                      # not from under the menu
         await settle(app, pilot)
-        assert len(FakeClipboard.copied) == 2
+        assert len(FakeClipboard.copied) == 3
         assert FakeBrowser.opened == []                                       # and c opens nothing
 
 
@@ -1230,6 +1241,23 @@ async def test_holding_c_down_copies_the_name_once_and_a_copy_that_fails_is_said
         await pilot.press("c")
         await settle(app, pilot)
         assert len(FakeClipboard.copied) == 2
+        # The other key, at once: what it asks for is something else, so it is copied. Held, once.
+        for _ in range(30):
+            await pilot.press("C")
+            now[0] += 0.033
+        await settle(app, pilot)
+        assert FakeClipboard.copied[2:] == ["/rename djp3-agent-frolic-pr-12"]
+        await pilot.press("c")                                                # and back, at once
+        await settle(app, pilot)
+        assert FakeClipboard.copied[3:] == ["djp3-agent-frolic-pr-12"]
+        FakeClipboard.broken = OSError("no clipboard")
+        now[0] += app.OPEN_AGAIN_S + 0.1
+        await pilot.press("C")                                                # the command, when it fails, is said whole
+        await settle(app, pilot)
+        assert ("agent-frolic#12 · /rename djp3-agent-frolic-pr-12 was not copied: the clipboard could not be reached"
+                in screen(app))
+        FakeClipboard.broken = None
+        del FakeClipboard.copied[2:]                                          # (what follows counts from here)
         failed = "agent-frolic#12 · djp3-agent-frolic-pr-12 was not copied: the clipboard could not be reached"
         for trouble in (OSError("no clipboard"), subprocess.TimeoutExpired("pbcopy", 5),
                         RuntimeError("something nobody expected")):
