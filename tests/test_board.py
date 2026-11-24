@@ -22,7 +22,8 @@ from repos import RepoStore
 from settings import Settings
 from githubapi import Team
 from grange import Reported
-from standins import AUTHTOKEN, TOKEN, FakeBrowser, FakeGitHub, FakePulls, age, drive, screen, settle
+from standins import (AUTHTOKEN, TOKEN, FakeBrowser, FakeClipboard, FakeGitHub, FakePulls, age, drive, screen,
+                      settle)
 from test_pulls import node, review
 from textual._xterm_parser import XTermParser
 from textual.events import MouseEvent, MouseScrollDown, MouseScrollUp
@@ -715,7 +716,7 @@ async def test_a_narrow_window_still_shows_how_to_reach_the_setup_and_quit(isola
         foot = next(strip for strip in app.screen._compositor.render_strips() if "q Quit" in strip.text)
         lit = "".join(seg.text if seg.style and seg.style.bold and seg.style.color
                       and seg.style.color.get_truecolor().hex.lower() == board.KEY.lower() else " " for seg in foot)
-        assert lit.split() == "↑↓ o PgUp PgDn n tab esc m u d s q".split()         # the keys, and only the keys
+        assert lit.split() == "↑↓ o c PgUp PgDn n tab esc m u d s q".split()       # the keys, and only the keys
 
 
 @drive
@@ -1182,6 +1183,69 @@ async def test_holding_o_down_opens_the_page_once(isolated, monkeypatch):
 
 
 @drive
+async def test_the_drawer_gives_the_name_for_an_agent_and_c_copies_it(isolated):
+    """Nobody should have to work the name out, or type it."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        app.OPEN_AGAIN_S = 0                                                  # (a key held down has its own test)
+        assert "c Copy agent name" in screen(app)
+        assert "name     djp3-agent-frolic-pr-12 · c copies it" in screen(app)       # the drawer, for the selected one
+        await pilot.press("c")
+        await settle(app, pilot)
+        assert FakeClipboard.copied == ["djp3-agent-frolic-pr-12"]
+        assert "agent-frolic#12 · copied djp3-agent-frolic-pr-12, the name for an agent on it" in screen(app)
+        app.reported = (Reported("djp3", FakeClipboard.copied[0] + " fix", "busy"),)    # a session named so
+        app.draw()
+        await pilot.pause()
+        assert [a.note for a in app.board.pic.agents[("djp3/agent-frolic", 12)]] == ["fix"]     # is on it
+        await pilot.press("down", "down", "C")                                # C does what c does
+        await settle(app, pilot)
+        assert FakeClipboard.copied[1:] == ["djp3-agent-frolic-pr-9"]
+        assert "name     djp3-agent-frolic-pr-9 · c copies it" in screen(app)
+        await pilot.press("m", "c", "C")                                      # not from under the menu
+        await settle(app, pilot)
+        assert len(FakeClipboard.copied) == 2
+        assert FakeBrowser.opened == []                                       # and c opens nothing
+
+
+@drive
+async def test_holding_c_down_copies_the_name_once_and_a_copy_that_fails_is_said(isolated, monkeypatch):
+    """As for o: the key repeats while it is held, and a worker's uncaught error would end the app."""
+    a_board()
+    app = main.Frolic()
+    async with app.run_test(size=(150, 46)) as pilot:
+        await settle(app, pilot)
+        now = [time.time()]
+        monkeypatch.setattr(main, "time", SimpleNamespace(time=lambda: now[0], monotonic=time.monotonic,
+                                                          localtime=time.localtime, strftime=time.strftime))
+        for _ in range(30):                                                   # held for a second
+            await pilot.press("c")
+            now[0] += 0.033
+        await settle(app, pilot)
+        assert FakeClipboard.copied == ["djp3-agent-frolic-pr-12"]
+        now[0] += app.OPEN_AGAIN_S + 0.1                                      # let go, then asked for again
+        await pilot.press("c")
+        await settle(app, pilot)
+        assert len(FakeClipboard.copied) == 2
+        failed = "agent-frolic#12 · djp3-agent-frolic-pr-12 was not copied: the clipboard could not be reached"
+        for trouble in (OSError("no clipboard"), subprocess.TimeoutExpired("pbcopy", 5),
+                        RuntimeError("something nobody expected")):
+            FakeClipboard.broken = trouble
+            now[0] += app.OPEN_AGAIN_S + 0.1
+            await pilot.press("c")
+            await settle(app, pilot)
+            assert app.is_running and app.return_code is None, trouble         # it never closes the board
+            assert failed in screen(app), trouble
+        assert [said for _, said, _ in app.lines].count(failed) == 3          # the setup's log keeps it
+        FakeClipboard.broken = None
+        await pilot.press("c")                                                # one that failed: again at once
+        await settle(app, pilot)
+        assert len(FakeClipboard.copied) == 3
+
+
+@drive
 async def test_a_page_that_cannot_be_opened_never_closes_the_board(isolated):
     """A worker's uncaught error ends the app: whatever goes wrong starting the browser is
     said on the board instead."""
@@ -1262,7 +1326,7 @@ async def test_a_request_to_a_team_the_viewer_is_on_is_drawn_as_theirs_and_the_t
         assert dim not in {ink for ink, _ in colors(app, "#201 Bump a")}
         assert dim in {ink for ink, _ in colors(app, "#203 Dark theme")}
         await pilot.press("escape")
-        app.reported = (Reported("bob", "sec-4-pr-201 review", "idle"),)     # as the grange reports it
+        app.reported = (Reported("bob", "acme-web-console-pr-201 review", "idle"),)     # as the grange reports it
         app.draw()
         await pilot.pause()
         assert "● Platform › ▷ agent 01 at its prompt" in screen(app)                     # a teammate's agent

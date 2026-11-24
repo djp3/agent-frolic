@@ -91,7 +91,8 @@ from board import Board, fit_hints, remember_change
 from canvas import cut
 from githubapi import GitHub, GitHubError, Identity, RepoInfo, Team, ensure_hook, teams_above
 from grange import Grange, GrangeError, Reading, Reported, Watch
-from picture import AGE_FIGURE, CHECK_MARK, Picture, changes, labels, located_in, quiet, review_marks
+from picture import (AGE_FIGURE, CHECK_MARK, Astray, Picture, agent_name, astray, changes, labels, located_in,
+                     quiet, review_marks)
 from pulls import (PullRead, PullRequest, RepoPulls, fetch_pull, fetch_pulls, is_team, span, stack, team_of,
                    team_slug, with_pulls)
 from repos import Repo, RepoStore, parse
@@ -161,6 +162,23 @@ def open_page(url: str) -> None:
             raise subprocess.CalledProcessError(code, "open")
     elif not webbrowser.open(url):
         raise OSError("no browser could be started")
+
+COPY_WAIT_S = 5.0              # how long `pbcopy` is given to take what it is handed
+
+
+def copy_text(text: str) -> None:
+    """Put a line of text on the Mac's clipboard, for the user to paste elsewhere.
+
+    `pbcopy` is run by its full path and handed the text as its input: nothing goes through
+    a shell. What is copied here is a repository's name and a number, plain ASCII, which
+    `pbcopy` reads alike whatever the app's locale is. OSError or
+    subprocess.SubprocessError says it could not be done; off a Mac, where nothing here
+    promises a clipboard, it is OSError."""
+    if not ON_MAC:
+        raise OSError("no clipboard is known here")
+    subprocess.run(["/usr/bin/pbcopy"], input=text.encode("ascii"), stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=COPY_WAIT_S, check=True)
+
 
 TOKEN_HELP = [
     "It is checked with GitHub, then kept in your Mac's Keychain and nowhere else.",
@@ -346,6 +364,7 @@ class Frolic(App):
     GRANGE_STALE = "agent-grange is out of date: no agents shown · s to fix"     # kept short: they share
     GRANGE_STALE_YET = "agent-grange is out of date · s to fix"                 # the ticker's line. (YET:
     GRANGE_LOST = "agent-grange stopped answering: no agents shown"             # its last report still shows)
+    ASTRAY_SHOWN = 4              # rows the setup gives the agents that are not shown: the last says how many more
     CSS = f"""
     Screen {{ background: {PLANE}; color: {INK}; }}
     .line {{ height: 1; margin: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }}
@@ -456,8 +475,10 @@ class Frolic(App):
         self.tunnel_checking = False              # opened); and whether such a check is under way
         self.reported: tuple[Reported, ...] = ()  # the team's agents, as the agent-grange on this Mac last
                                                   # said: the picture puts each on its pull request
-        self.here_for: tuple | None = None        # what `agents_here` last counted from, and its count
-        self.here = 0
+        self.told_for: tuple | None = None        # what `agents_told` last worked from, and what it made of it:
+        self.here = 0                             # how many agents are on the pull requests shown,
+        self.lost: tuple[Astray, ...] = ()        # and the ones whose names tried to say one and are on none
+        self.tied_said: frozenset = frozenset()   # the ties among those that the log has been told of
         self.agent_numbers: dict = {}             # the number each agent on the board has ("agent 02"), so
                                                   # that it keeps it from one report to the next (picture.placed)
         self.grange_state = "asking" if ask_grange else "off"     # "asking" | "ok" | "down" | "stale" |
@@ -469,6 +490,7 @@ class Frolic(App):
         self.watch: Watch | None = None           # the thread that asks it, from mount to unmount
         self.flashes: dict[tuple[str, int], float] = {}   # a pull request that changed on a re-read, and when
         self.page_asked: tuple[tuple[str, int], float] | None = None   # the pull request o last asked for, and when
+        self.name_asked: tuple[str, float] | None = None  # the agent's name c last copied, and when
         self.news: tuple[float, str] | None = None        # the last thing that happened on GitHub, for the
                                                           # board's ticker (set by `happened` alone)
         self.notice: tuple[float, str] | None = None      # words in the ticker's place, and until when (announce)
@@ -656,22 +678,48 @@ class Frolic(App):
         self.grange_state, self.grange_wrong = wrong.kind, wrong
         self.draw()
 
-    def agents_here(self) -> int:
-        """How many of the reported agents are on a pull request the board shows. The setup
-        says it, and is drawn every second: it is worked out again only when the report, the
-        shown repositories or a reading has changed (a new reading is a new object).
+    def agents_told(self) -> tuple[int, tuple[Astray, ...]]:
+        """How many of the reported agents are on a pull request the board shows, and the
+        ones whose names tried to say a pull request and are on none, each with why
+        (picture.astray). The setup says both, and is drawn every second, and the board
+        asks at every draw: they are worked out again only when the report, the list of
+        repositories or a reading has changed (a new reading is a new object).
 
-        The readings it was counted from are kept, and known again by being the same
+        The readings they were worked out from are kept, and known again by being the same
         objects. Known by where they lie in memory alone, one that had been let go could be
-        taken for a later one that came to lie in its place, and the old count be said."""
-        names = tuple(repo.name for repo in self.store.shown())
+        taken for a later one that came to lie in its place, and the old answer be given.
+
+        A name that fits two pull requests is said in the log once, when it first does:
+        the board's notice of it is quiet, and gone when the name is put right."""
+        listed = tuple((repo.name, repo.shown) for repo in self.store.repos)
         readings = tuple(self.pulls.values())
-        last = self.here_for
-        if not (last is not None and last[0] == self.reported and last[1] == names
+        last = self.told_for
+        if not (last is not None and last[0] == self.reported and last[1] == listed
                 and len(last[2]) == len(readings) and all(was is now for was, now in zip(last[2], readings))):
-            self.here_for = (self.reported, names, readings)
+            self.told_for = (self.reported, listed, readings)
+            names = [name for name, shown in listed if shown]
             self.here = len(located_in(self.reported, names, self.pulls))
-        return self.here
+            self.lost = tuple(astray(self.reported, names, self.pulls, [name for name, _ in listed]))
+            tied = frozenset((one.one.owner, one.one.name, one.why) for one in self.lost if one.tie)
+            for owner, name, why in sorted(tied - self.tied_said):
+                self.say(f"{owner}'s agent {name} is not shown: its name {why}", INK)
+            self.tied_said = tied
+        return self.here, self.lost
+
+    def agents_here(self) -> int:
+        """How many of the reported agents are on a pull request the board shows."""
+        return self.agents_told()[0]
+
+    def agents_tied(self) -> str:
+        """What the board says, quietly and for as long as it is so, when an agent is not
+        shown because its name fits more than one pull request: none is guessed, and
+        without a word the agent would simply be missing. "" when there is none. The setup
+        names each, and what its name fits."""
+        tied = sum(one.tie for one in self.agents_told()[1])
+        if not tied:
+            return ""
+        return ("1 agent not shown: its name fits two pull requests · s says which" if tied == 1
+                else f"{tied} agents not shown: each name fits two pull requests · s says which")
 
     def agents_amiss(self) -> str:
         """What the board says, for as long as it is so, when the agents it would show are
@@ -1912,6 +1960,35 @@ class Frolic(App):
         self.say(text, INK)                                # kept in the setup's log: the notice passes
         self.announce(text, self.NOTICE_FAILED_S)
 
+    def copy_name(self, pull: PullRequest, ref: str) -> None:
+        """Put on the clipboard the name that puts an agent on this pull request
+        (picture.agent_name), to paste where the agent's session is named. `ref` is how the
+        board names the pull request, for the ticker. As with o, the key repeats when it
+        is held down: c again for the same name, sooner than OPEN_AGAIN_S after the last,
+        copies nothing more."""
+        name, now = agent_name(pull), time.time()
+        repeat = (self.name_asked is not None and self.name_asked[0] == name
+                  and now - self.name_asked[1] < self.OPEN_AGAIN_S)
+        self.name_asked = (name, now)
+        if not repeat:
+            self.take_name_copy(name, ref)
+
+    @work(thread=True, group="copies")
+    def take_name_copy(self, name: str, ref: str) -> None:
+        try:
+            copy_text(name)
+        except Exception as e:                             # as for a page: it must not close the board
+            log.warning("could not copy %s: %r", name, e)
+            self.later(self.name_not_copied, name, ref)
+        else:
+            self.later(self.announce, f"{ref} · copied {name}, the name for an agent on it", self.NOTICE_S)
+
+    def name_not_copied(self, name: str, ref: str) -> None:
+        text = f"{ref} · {name} was not copied: the clipboard could not be reached"
+        self.name_asked = None                             # c may be pressed again at once
+        self.say(text, INK)                                # kept in the setup's log: the notice passes
+        self.announce(text, self.NOTICE_FAILED_S)
+
     def action_update(self) -> None:
         if self.in_dialog():
             return
@@ -2104,9 +2181,22 @@ class Frolic(App):
         out.append("\n   agents    ", style=MUTED)
         said = f"{agents} reported" + (f" · {here} on the pull requests shown here" if agents else "")
         out.append(said, style=INK2)
-        how = "   by the ticket and number in their names: proj-86-pr-98"
+        how = "   by the repository and number in their names: acme-web-pr-98"
         if agents and len(said) + len(how) <= room + 2:       # said when there is room: the line keeps its row
             out.append(how, style=MUTED)
+        # The agents whose names tried to say a pull request and are on none, each with why: a
+        # name mistyped would otherwise simply be missing. The ones the board's notice is
+        # about come first. Each has one row, and the last row says how many more there are.
+        lost = sorted(self.agents_told()[1], key=lambda one: not one.tie)
+        for i, one in enumerate(lost[:self.ASTRAY_SHOWN]):
+            out.append("\n   not shown " if i == 0 else "\n             ", style=MUTED)
+            if i == self.ASTRAY_SHOWN - 1 and len(lost) > self.ASTRAY_SHOWN:
+                out.append(f"and {len(lost) - i} more", style=MUTED)
+                break
+            who, why = f"{one.one.owner} › ", f"   {one.why}"
+            name = cut(one.one.name, max(16, room + 2 - len(who) - cell_len(why)))
+            out.append(who, style=MUTED).append(name, style=INK)
+            out.append(cut(why, max(0, room + 2 - len(who) - cell_len(name))), style=INK if one.tie else INK2)
         return out
 
     def log_text(self) -> Text:

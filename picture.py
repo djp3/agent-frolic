@@ -9,10 +9,11 @@ request. Nothing here touches the screen or the network, so all of it is tested 
     agent runs under one human, its operator, and is always drawn beneath that human.
   • WHERE AN AGENT IS, `placed()`. The agent-grange on this Mac reports the team's agents
     (grange.py), each as three words: who runs it, its name, and what it is doing. Which
-    pull request it is on is in its name alone: a ticket and the pull request's number,
-    "proj-86-pr-98". Every repository has its own pull request 98, so the number is not
-    enough: the agent is on the one whose branch or title carries the same ticket. An
-    agent that names no pull request on the board is on none of them, and is not drawn.
+    pull request it is on is in its name alone: the repository and the pull request's
+    number, "acme-web-pr-98" for pull request 98 of acme/web (`said`). What the pull
+    request's branch and title say plays no part. An agent that names no pull request on
+    the board is on none of them, and is not drawn; nor is one whose name fits two, which
+    are not guessed between. `astray` says why, for a name that tried.
   • WHAT AN AGENT IS DOING is the farm's word, turned into one of four (`Agent.state`). An
     idle one is "at its prompt" when its pull request waits on the human who runs it, and
     "waiting" when it waits on someone else: the farm cannot tell those apart, and only
@@ -50,9 +51,8 @@ import itertools
 import math
 import re
 from dataclasses import dataclass, field
-from functools import lru_cache
 from datetime import datetime, timezone
-from typing import Iterable, Mapping, Protocol
+from typing import Iterable, Mapping, NamedTuple, Protocol
 
 from canvas import Segments, cell_len, cut, seg_len
 from pulls import PullRequest, RepoPulls, Review, Step, is_team, known_as, reviews_at_once, team_slug
@@ -149,11 +149,12 @@ class Report(Protocol):
     stale: bool                   # its farm has gone quiet: that word is its last, some time ago
 
 
-# "proj-86-pr-98" anywhere in a name, in either case: the ticket, and the pull request's
-# number, which may be padded ("pr-0098"). The first one in a name is the one that counts.
-# A ticket's key may have an underscore in it ("data_eng-7"), so a ticket begins where no
-# letter, digit or underscore comes before it: "proj-86" is not found in "x_proj-86".
-_NAMED = re.compile(r"(?<![a-z0-9_])([a-z][a-z0-9_]*-[0-9]+)-pr-0*([0-9]+)(?![0-9])", re.IGNORECASE)
+# An agent's name says which pull request it is on: "<owner>-<repo>-pr-<number>", the
+# repository as GitHub names it with its "/" written "-", in either case, and the number
+# padded or not ("acme-web-pr-0098"). It is a word of the name, or the start of one: the
+# name's first, or one that follows a space. See `said`.
+_WORD = re.compile(r"\S+")
+_NUMBERED = re.compile(r"-pr-0*([0-9]+)(?![0-9])", re.IGNORECASE)
 # The farm's words for what an agent is doing. One that is not here is "unknown": the farm
 # may have new words before this app does.
 AT_WORK = frozenset({"busy"})
@@ -163,59 +164,92 @@ IDLE = frozenset({"idle", "shell"})   # done for now, or waiting on a command it
 GONE = frozenset({"dead"})        # the session has ended: it is on no pull request any more
 
 
-def named(name: str) -> tuple[str, int] | None:
-    """The ticket and the pull request's number an agent's name carries, if it does."""
-    found = _NAMED.search(name)
-    return (found[1], int(found[2])) if found else None
+class Said(NamedTuple):
+    """One way to read an agent's name as "<owner>-<repo>-pr-<number>"."""
+    repo: str                     # the repository as the name writes it, in lower case: "acme-web"
+    number: int                   # the pull request's
+    end: int                      # where in the name the reading ends: what follows is the human's own words
 
 
-def words(name: str) -> str:
-    """What a name goes on to say after its ticket and number: its human's own words for
-    what the agent is at ("fix tests"). "" when there is nothing more, or only a number."""
-    found = _NAMED.search(name)
-    rest = name[found.end():].strip(" -_:·") if found else ""
+def said(name: str) -> tuple[Said, ...]:
+    """Every way an agent's name reads as "<owner>-<repo>-pr-<number>": none, for a name
+    that does not try to say a pull request.
+
+    The first word of the name that has "-pr-<number>" in it, after something, is the one
+    that counts, and all that comes before "-pr-" in that word is the repository. Nothing
+    here knows which repositories there are: "acme-web-pr-98" reads as pull request 98 of
+    "acme-web", and whether that is acme/web is for `fits` to say. A word has more than
+    one reading only when "-pr-<number>" is in it more than once, as it is for a
+    repository named "acme/notes-pr-2024": "acme-notes-pr-2024-pr-7"."""
+    for word in _WORD.finditer(name):
+        read = tuple(Said(word[0][:found.start()].lower(), int(found[1]), word.start() + found.end())
+                     for found in _NUMBERED.finditer(word[0]) if found.start())
+        if read:
+            return read
+    return ()
+
+
+def written(repo: str) -> str:
+    """A repository as an agent's name writes it: "acme/web" is "acme-web". Two
+    repositories may be written alike ("acme/web-api" and "acme-web/api"): see `fits`."""
+    return repo.replace("/", "-")
+
+
+def agent_name(pull: PullRequest) -> str:
+    """The name that puts an agent on this pull request: "acme-web-pr-98". It may go on
+    to say more, after a space."""
+    return f"{written(pull.repo)}-pr-{pull.number}"
+
+
+Named = dict[tuple[str, int], list[PullRequest]]    # pull requests by how a name says them (`by_name`)
+
+
+def by_name(pulls: Iterable[PullRequest]) -> Named:
+    """These pull requests by what a name must say to mean each: the repository as a name
+    writes it, in lower case, and the number. Two under one key are two a name cannot
+    tell apart."""
+    out: Named = {}
+    for pull in pulls:
+        out.setdefault((written(pull.repo).lower(), pull.number), []).append(pull)
+    return out
+
+
+def fits(name: str, named: Named) -> list[PullRequest]:
+    """Every one of these pull requests an agent's name could mean. One is the pull
+    request it is on. More than one cannot be told apart by the name, and none is guessed."""
+    return [pull for read in said(name) for pull in named.get((read.repo, read.number), [])]
+
+
+def words(name: str, pull: PullRequest | None = None) -> str:
+    """What a name goes on to say after the pull request it names: its human's own words
+    for what the agent is at ("fix tests"). "" when there is nothing more, or only a
+    number. Given the pull request the agent is on, it is what follows the reading that
+    led there; without one, what follows the first."""
+    read = [one for one in said(name)
+            if pull is None or (one.repo, one.number) == (written(pull.repo).lower(), pull.number)]
+    rest = name[read[0].end:].strip(" -_:·") if read else ""
     return "" if rest.isdigit() else rest
-
-
-def carries(pull: PullRequest, ticket: str) -> bool:
-    """Whether a pull request's branch or title has this ticket in it: "proj-86", and not
-    as the start of "proj-860" or the end of "xproj-86" or "x_proj-86", which are other
-    tickets."""
-    there = _carrying(ticket)
-    return bool(there.search(pull.head) or there.search(pull.title))
-
-
-@lru_cache(maxsize=4096)
-def _carrying(ticket: str) -> re.Pattern:
-    """The search for one ticket, made once: it is asked of every pull request that has the
-    number, for every agent that names it, each time a picture is built or the setup counts."""
-    return re.compile(rf"(?<![a-z0-9_]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
 
 
 def located(reported: Iterable[Report], pulls: Iterable[PullRequest],
             known: Iterable[PullRequest] = ()) -> list[tuple[Report, PullRequest]]:
     """Each reported agent that is on one of these pull requests, with the one it is on, in
-    the order reported. On it means: its name has the pull request's number and a ticket,
-    and that pull request, alone among those with the number, carries the ticket. An agent
-    whose session has ended is on nothing.
+    the order reported. On it means: its name says the pull request's repository and its
+    number (`said`), and no other pull request that has been read is said the same way.
+    What the pull request's branch and title say plays no part. An agent whose session
+    has ended is on nothing.
 
     `known` is whatever else has been read: the pull requests of repositories now hidden.
     No agent is put on one of those, but they count when asking whether a pull request is
-    alone: two that carry the ticket are a tie, and hiding one of them does not say which
-    was meant. (A hidden repository is not read again, so its side of a tie is as it was
+    alone: two a name fits are a tie, and hiding one of them does not say which was
+    meant. (A hidden repository is not read again, so its side of a tie is as it was
     when it was last shown: that errs toward drawing no agent, never toward a wrong one.)"""
     pulls = list(pulls)
     shown = {id(pull) for pull in pulls}
-    numbered: dict[int, list[PullRequest]] = {}
-    for pull in pulls + [pull for pull in known if id(pull) not in shown]:
-        numbered.setdefault(pull.number, []).append(pull)
+    named = by_name(pulls + [pull for pull in known if id(pull) not in shown])
     out = []
     for one in reported:
-        said = named(one.name)
-        if said is None or one.state in GONE:
-            continue
-        ticket, number = said
-        there = [pull for pull in numbered.get(number, []) if carries(pull, ticket)]
+        there = [] if one.state in GONE else fits(one.name, named)
         if len(there) == 1 and id(there[0]) in shown:
             out.append((one, there[0]))
     return out
@@ -228,6 +262,58 @@ def located_in(reported: Iterable[Report], names: Iterable[str],
     place that says which pull requests count, for the picture and for the setup's tally."""
     shown = [pull for name in names if name.lower() in pulls for pull in pulls[name.lower()].pulls]
     return located(reported, shown, [pull for got in pulls.values() for pull in got.pulls])
+
+
+class Astray(NamedTuple):
+    """A reported agent whose name tries to say a pull request, and that is on none."""
+    one: Report
+    why: str                      # in plain words, to follow the agent's name
+    tie: bool = False             # its name fits more than one pull request, and none is guessed
+
+
+def astray(reported: Iterable[Report], names: Iterable[str], pulls: Mapping[str, RepoPulls],
+           listed: Iterable[str] = ()) -> list[Astray]:
+    """Each reported agent whose name has "-pr-<number>" in it and that is on no pull
+    request, with why, in the order reported: what the setup lists, so that a name that
+    was mistyped does not simply go missing. It goes by `said` and `fits`, as `located`
+    does. `names` are the repositories shown, `pulls` what has been read, and `listed`
+    every repository on the user's list, shown or hidden.
+
+    Not here: an agent whose session has ended, one on a pull request of a hidden
+    repository (it is hidden with it), and one that names a repository not read yet,
+    which may have that pull request for all that is known."""
+    names = list(names)
+    shown = {name.lower() for name in names}
+    named = by_name(pull for got in pulls.values() for pull in got.pulls)
+    every: dict[str, str] = {}                               # every repository known, by its name in lower case
+    for name in [*listed, *names, *(got.repo for got in pulls.values())]:
+        every.setdefault(name.lower(), name)
+    whole: dict[str, list[str]] = {}                         # by how a name writes it: "acme-web"
+    bare: dict[str, list[str]] = {}                          # and by its name without its owner: "web"
+    for low, name in every.items():
+        whole.setdefault(written(low), []).append(name)
+        bare.setdefault(low.rpartition("/")[2], []).append(name)
+    out = []
+    for one in reported:
+        read = () if one.state in GONE else said(one.name)
+        if not read:
+            continue
+        there = fits(one.name, named)
+        if len(there) > 1 and any(pull.repo.lower() in shown for pull in there):
+            out.append(Astray(one, "fits " + " and ".join(f"{pull.repo} #{pull.number}" for pull in there), True))
+        if there:                                            # a tie, or one it is on, shown or hidden
+            continue
+        meant = [(name, r.number) for r in read for name in whole.get(r.repo, [])]
+        if meant:                                            # a repository on the list, with no such pull request
+            gone = [f"{name} has no open pull request {number}" for name, number in meant
+                    if name.lower() in shown and name.lower() in pulls]
+            if len(gone) == len(meant):                      # each of them is shown and has been read
+                out.append(Astray(one, " · ".join(gone)))
+            continue
+        whose = [f"{written(name)}-pr-{r.number}" for r in read for name in bare.get(r.repo, [])]
+        out.append(Astray(one, "say whose repository: " + " or ".join(whose) if whose
+                          else "names no repository on your list"))
+    return out
 
 
 Numbers = dict[tuple[Key, str], dict[str, int]]    # (pull request, its human in lower case) -> the number
@@ -276,7 +362,7 @@ def placed(picture: "Picture", reported: Iterable[Report], numbers: Numbers | No
         for ident, (one, pull) in zip(idents, crew):
             role = "author" if one.owner.lower() == pull.author.lower() else "review"
             out.setdefault(key, []).append(Agent(one.owner, f"{given[ident]:02d}", pull.repo, pull.number, role,
-                                                 doing(picture, one, pull, role), words(one.name), ident))
+                                                 doing(picture, one, pull, role), words(one.name, pull), ident))
     if numbers is not None:
         for gone in [crew for crew in numbers if crew not in crews]:
             del numbers[gone]

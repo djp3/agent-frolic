@@ -24,6 +24,7 @@ import keychain
 import main
 from githubapi import GitHubError, Team
 from main import open_page as real_open_page       # conftest swaps main.open_page for a stand-in
+from main import copy_text as real_copy_text       # and main.copy_text: no test touches the real clipboard
 from picture import counts
 from repos import RepoStore
 from standins import (AUTHTOKEN, TOKEN, FakeGitHub, FakePulls, FakeTunnel, age, drive, fill, screen, settle,
@@ -1728,6 +1729,25 @@ def test_an_address_that_only_reads_as_github_is_refused(opener):
     real_open_page("https://github.com/acme/web-console/pull/143#discussion_r1")
     assert [argv for argv, _ in opener.started] == [
         ["/usr/bin/open", "https://github.com/acme/web-console/pull/143#discussion_r1"]]
+
+
+def test_what_is_copied_is_handed_to_pbcopy_by_its_path_and_not_through_a_shell(monkeypatch):
+    ran = []
+    monkeypatch.setattr(main, "ON_MAC", True)
+    monkeypatch.setattr(main.subprocess, "run", lambda *argv, **how: ran.append((argv, how)))
+    real_copy_text("acme-web-pr-98")
+    (argv, how), = ran
+    assert argv == (["/usr/bin/pbcopy"],)                     # the program by its full path, and no argument
+    assert how["input"] == b"acme-web-pr-98" and "shell" not in how           # the text is its input, never a command
+    assert how["check"] is True and how["timeout"] == main.COPY_WAIT_S        # one that fails or hangs is an error
+    assert how["stdout"] == how["stderr"] == subprocess.DEVNULL
+
+
+def test_off_a_mac_nothing_is_run_and_the_copy_fails_plainly(monkeypatch):
+    monkeypatch.setattr(main, "ON_MAC", False)
+    monkeypatch.setattr(main.subprocess, "run", lambda *argv, **how: pytest.fail("nothing is to be run"))
+    with pytest.raises(OSError):
+        real_copy_text("acme-web-pr-98")
 
 
 # ---- the teams the viewer is on -----------------------------------------------------------
